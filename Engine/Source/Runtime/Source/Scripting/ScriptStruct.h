@@ -24,7 +24,6 @@ namespace Lumina
 
 namespace Lumina::Scripting
 {
-    class FScriptStructRegistry;
 
     // One element of a script-minted container: how big it is, and -- through Inner -- how to bring one up,
     // tear it down and copy it. There is deliberately no per-kind switch here: every one of those three
@@ -269,10 +268,6 @@ namespace Lumina::Scripting
      */
     RUNTIME_API void ResetSkipHotReloadProperties(CObject* Object);
 
-    /** A string identifying what a schema lays out. Equal strings mean an identical layout; metadata-only
-     *  edits (a tooltip, a Min/Max) deliberately do not change it. */
-    RUNTIME_API FString DescribeScriptSchemaLayout(const FScriptExportSchema& Schema);
-
     /**
      * What differs between the block Target currently carries and Schema.
      *
@@ -293,23 +288,7 @@ namespace Lumina::Scripting
     // Identity of one exported type's shape, so a type used by many fields is minted once.
     RUNTIME_API FString DescribeScriptTypeSignature(const FScriptExportType& Type);
 
-    // Opens a reload's generation, freeing the layouts an earlier one superseded. Call once per reload.
-    RUNTIME_API void AdvanceScriptTypeGeneration();
-
     /** True when Target's appended block already matches Schema, so a hot reload needs no rebuild. */
     RUNTIME_API bool ScriptClassLayoutMatches(const CScriptClass* Target, const FScriptExportSchema& Schema);
 
-
-    // Per-ScriptClass cache of minted script structs, owned by the .NET host and cleared on reload.
-    class FScriptStructRegistry
-    {
-    public:
-
-        RUNTIME_API const CScriptStruct* GetOrBuild(FStringView ScriptClass);
-        RUNTIME_API void Clear();
-
-    private:
-
-        THashMap<FName, TObjectPtr<CScriptStruct>> Entries;
-    };
 }

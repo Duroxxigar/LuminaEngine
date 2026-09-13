@@ -38,12 +38,24 @@ namespace Lumina::Scripting
         };
 
         // Last: it rebuilds the renderers that were torn down before the load, so it must not run until
-        // every type those renderers can reach exists again.
+        // every type those renderers can reach exists again. Registered last also puts its PreUnload first,
+        // which is the order the teardown needs: the proxies must go before the types they were built from.
         class FRenderSceneStage final : public IManagedTypeCompiler
         {
         public:
 
             const char* GetName() const override { return "RenderScenes"; }
+
+            void PreUnload() override
+            {
+                DotNet::ManagedRenderScenes::PreScriptUnload();
+            }
+
+            // A failed compile keeps the previous generation, so only the renderers need putting back.
+            void UnloadAborted() override
+            {
+                DotNet::ManagedRenderScenes::PostScriptLoad();
+            }
 
             void Compile(TSpan<const FManagedTypeDefinition>) override
             {

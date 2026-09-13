@@ -17,7 +17,6 @@ namespace Lumina::Scripting
 {
     namespace
     {
-        FScriptPropertyValue ReadValue(FProperty* Property, const void* ValuePtr);
         void WriteValue(FProperty* Property, void* ValuePtr, const FScriptPropertyValue& Value);
 
         bool NameEqualsIgnoreCase(const FName& A, const FName& B)
@@ -74,17 +73,6 @@ namespace Lumina::Scripting
             return nullptr;
         }
 
-        void ReadStruct(const CStruct* Struct, const void* Buffer, TVector<FScriptPropertyEntry>& Out)
-        {
-            for (FProperty* Property : Struct->GetProperties())
-            {
-                FScriptPropertyEntry Entry;
-                Entry.Name = Property->GetPropertyName();
-                Entry.Value = ReadValue(Property, static_cast<const uint8*>(Buffer) + Property->Offset);
-                Out.push_back(std::move(Entry));
-            }
-        }
-
         void WriteStruct(const CStruct* Struct, void* Buffer, const TVector<FScriptPropertyEntry>& Values)
         {
             for (FProperty* Property : Struct->GetProperties())
@@ -94,114 +82,6 @@ namespace Lumina::Scripting
                     WriteValue(Property, static_cast<uint8*>(Buffer) + Property->Offset, Entry->Value);
                 }
             }
-        }
-
-        FScriptPropertyValue ReadValue(FProperty* Property, const void* ValuePtr)
-        {
-            FScriptPropertyValue Value;
-            switch (Property->GetType())
-            {
-            case EPropertyTypeFlags::Bool:
-                Value.Kind = EScriptValueKind::Bool;
-                Value.AsBool = static_cast<FNumericProperty*>(Property)->GetSignedIntPropertyValue(ValuePtr) != 0;
-                break;
-            case EPropertyTypeFlags::Int8:
-            case EPropertyTypeFlags::Int16:
-            case EPropertyTypeFlags::Int32:
-            case EPropertyTypeFlags::Int64:
-                Value.Kind = EScriptValueKind::Int;
-                Value.AsInt = static_cast<FNumericProperty*>(Property)->GetSignedIntPropertyValue(ValuePtr);
-                break;
-            case EPropertyTypeFlags::UInt8:
-            case EPropertyTypeFlags::UInt16:
-            case EPropertyTypeFlags::UInt32:
-            case EPropertyTypeFlags::UInt64:
-                Value.Kind = EScriptValueKind::Int;
-                Value.AsInt = (int64)static_cast<FNumericProperty*>(Property)->GetUnsignedIntPropertyValue(ValuePtr);
-                break;
-            case EPropertyTypeFlags::Float:
-                Value.Kind = EScriptValueKind::Double;
-                Value.AsDouble = *static_cast<const float*>(ValuePtr);
-                break;
-            case EPropertyTypeFlags::Double:
-                Value.Kind = EScriptValueKind::Double;
-                Value.AsDouble = *static_cast<const double*>(ValuePtr);
-                break;
-            // Through the inner numeric property, whose width is the C# underlying type's, not always 8.
-            case EPropertyTypeFlags::Enum:
-            {
-                Value.Kind = EScriptValueKind::Int;
-                const FNumericProperty* Inner = static_cast<FEnumProperty*>(Property)->GetInnerProperty();
-                Value.AsInt = Inner != nullptr ? Inner->GetSignedIntPropertyValue(ValuePtr) : 0;
-                break;
-            }
-            case EPropertyTypeFlags::String:
-                Value.Kind = EScriptValueKind::String;
-                Value.AsString = *static_cast<const FString*>(ValuePtr);
-                break;
-            case EPropertyTypeFlags::SoftObject:
-            {
-                Value.Kind = EScriptValueKind::String;
-                const FStringView Path = static_cast<const FSoftObjectPath*>(ValuePtr)->GetPath();
-                Value.AsString.assign(Path.data(), Path.size());
-                break;
-            }
-            case EPropertyTypeFlags::Struct:
-                Value.Kind = EScriptValueKind::Nested;
-                ReadStruct(static_cast<FStructProperty*>(Property)->GetStruct(), ValuePtr, Value.StructFields);
-                break;
-            case EPropertyTypeFlags::InstancedStruct:
-            {
-                Value.Kind = EScriptValueKind::Instance;
-                const FInstancedStruct* Instance = static_cast<const FInstancedStruct*>(ValuePtr);
-                if (CStruct* Chosen = Instance->GetScriptStruct())
-                {
-                    if (const FString* TypeName = Chosen->Metadata.TryGetMetadata("ScriptTypeName"))
-                    {
-                        Value.AsString = *TypeName;
-                    }
-                    else
-                    {
-                        Value.AsString.assign(Chosen->GetName().c_str());
-                    }
-                    ReadStruct(Chosen, Instance->GetMemory(), Value.StructFields);
-                }
-                break;
-            }
-            case EPropertyTypeFlags::Vector:
-            {
-                Value.Kind = EScriptValueKind::Array;
-                FArrayProperty* Array = static_cast<FArrayProperty*>(Property);
-                FProperty* Inner = Array->GetInternalProperty();
-                const SIZE_T Count = Array->GetNum(ValuePtr);
-                Value.Items.reserve(Count);
-                for (SIZE_T Index = 0; Index < Count; ++Index)
-                {
-                    Value.Items.push_back(ReadValue(Inner, Array->GetAt(const_cast<void*>(ValuePtr), Index)));
-                }
-                break;
-            }
-            case EPropertyTypeFlags::Map:
-            {
-                Value.Kind = EScriptValueKind::Map;
-                FMapProperty* Map = static_cast<FMapProperty*>(Property);
-                FProperty* KeyProp = Map->GetKeyProperty();
-                FProperty* ValueProp = Map->GetValueProperty();
-                if (KeyProp != nullptr && ValueProp != nullptr)
-                {
-                    Value.Items.reserve(Map->GetNum(ValuePtr) * 2);
-                    Map->ForEach(ValuePtr, [&](const void* KeyPtr, void* PairValuePtr)
-                    {
-                        Value.Items.push_back(ReadValue(KeyProp, KeyPtr));
-                        Value.Items.push_back(ReadValue(ValueProp, PairValuePtr));
-                    });
-                }
-                break;
-            }
-            default:
-                break;
-            }
-            return Value;
         }
 
         void WriteValue(FProperty* Property, void* ValuePtr, const FScriptPropertyValue& Value)
@@ -303,15 +183,6 @@ namespace Lumina::Scripting
             default:
                 break;
             }
-        }
-    }
-
-    void ReadStructToValues(const CStruct* Layout, const void* Buffer, TVector<FScriptPropertyEntry>& OutValues)
-    {
-        OutValues.clear();
-        if (Layout != nullptr && Buffer != nullptr)
-        {
-            ReadStruct(Layout, Buffer, OutValues);
         }
     }
 

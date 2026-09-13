@@ -1364,60 +1364,8 @@ namespace Lumina::Scripting
         }
     }
 
-    const CScriptStruct* FScriptStructRegistry::GetOrBuild(FStringView ScriptClass)
-    {
-        if (ScriptClass.empty())
-        {
-            return nullptr;
-        }
-        const FName Key(ScriptClass);
-        if (auto It = Entries.find(Key); It != Entries.end())
-        {
-            return It->second.Get();
-        }
-
-        FScriptExportSchema Schema;
-        TVector<FScriptPropertyEntry> Defaults;
-        if (!DotNet::GatherScriptSchema(ScriptClass, Schema, Defaults) || !Schema.IsValid())
-        {
-            return nullptr;
-        }
-
-        static TAtomic<uint64> Serial{ 0 };
-        FString Name = "Script_";
-        Name += Format("{}", Serial.fetch_add(1)).c_str();
-
-        FConstructCObjectParams Params(CScriptStruct::StaticClass());
-        Params.Name    = FName(Name);
-        Params.Flags   = OF_Transient;
-        Params.Package = CPackage::GetTransientPackage();
-        Params.Guid    = FGuid::New();
-
-        TObjectPtr<CScriptStruct> Struct = static_cast<CScriptStruct*>(StaticAllocateObject(Params));
-        CObjectForceRegistration(Struct.Get());
-        if (!Struct->BuildFromSchema(Schema, &Defaults))
-        {
-            return nullptr;
-        }
-
-        auto Inserted = Entries.insert(Lumina::Containers::MakePair(Key, std::move(Struct)));
-        return Inserted.first->second.Get();
-    }
-
-    void FScriptStructRegistry::Clear()
-    {
-        Entries.clear();
-    }
-
     namespace
     {
-        // Counts reloads, so a superseded layout can be freed once a whole one has passed.
-        uint64& GScriptTypeGeneration()
-        {
-            static uint64 Generation = 0;
-            return Generation;
-        }
-
         // Metadata and defaults are compared apart from shape, so each gets its own remedy on a reload.
         bool FieldMetadataMatches(const FScriptExportMeta& A, const FScriptExportMeta& B)
         {
@@ -1599,11 +1547,6 @@ namespace Lumina::Scripting
         }
     }
 
-    void AdvanceScriptTypeGeneration()
-    {
-        ++GScriptTypeGeneration();
-    }
-
     FString DescribeScriptTypeSignature(const FScriptExportType& Type)
     {
         FString Out;
@@ -1635,16 +1578,6 @@ namespace Lumina::Scripting
                 Property->CopyCompleteValue_InContainer(Object, Defaults);
             }
         }
-    }
-
-    FString DescribeScriptSchemaLayout(const FScriptExportSchema& Schema)
-    {
-        FString Signature;
-        for (const FScriptExportField& Field : Schema.Fields)
-        {
-            AppendFieldSignature(Field, Signature);
-        }
-        return Signature;
     }
 
     EScriptTypeDirty DiffScriptClassLayout(const CScriptClass* Target, const FScriptExportSchema& Schema)

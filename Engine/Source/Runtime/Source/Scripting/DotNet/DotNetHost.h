@@ -49,7 +49,18 @@ namespace Lumina::DotNet
     // Latches a reload for the next frame start, since a reload destroys objects the frame may be using.
     RUNTIME_API void RequestScriptReload();
 
-    // Services a latched request. Called from the engine's frame start, never from inside a draw.
+    /**
+     * Reports that a file under a watched source tree changed, and latches a reload if it was one of ours.
+     *
+     * Owns both halves of the policy a caller would otherwise hard-code: which extensions are script sources,
+     * and how long to wait for the burst to end. A single edit reaches an editor as several inotify events,
+     * and a tool that writes a tree produces a great many, so the request is held open for a quiet period
+     * rather than fired per event. Thread-safe: watcher threads call this directly.
+     */
+    RUNTIME_API void NotifyScriptSourceChanged(FStringView Path);
+
+    // Services a latched request once its quiet period has elapsed. Called from the engine's frame start,
+    // never from inside a draw.
     RUNTIME_API void ProcessPendingScriptReload();
 
     // Cooked-game variant of ReloadScripts: loads the prebuilt script DLLs the packager staged under
@@ -272,12 +283,6 @@ namespace Lumina::DotNet
 
     // Builds the [Property] schema + default values for a C# script type; false if the type isn't loaded.
     RUNTIME_API bool GatherScriptSchema(FStringView ScriptClass, Scripting::FScriptExportSchema& OutSchema, TVector<Scripting::FScriptPropertyEntry>& OutDefaults);
-
-    // The minted reflection layout for a C# script type, cached per script generation; null if not loaded.
-    RUNTIME_API const CScriptStruct* GetScriptStruct(FStringView ScriptClass);
-
-    // Resolves a script reference to its current full type name; empty if it resolves to no live type.
-    RUNTIME_API FString ResolveScriptClassName(FStringView ScriptClass);
 
     // Gathers the [Button] methods exposed on a C# script type (via managed reflection). Empty if the type
     // isn't loaded or declares no buttons.

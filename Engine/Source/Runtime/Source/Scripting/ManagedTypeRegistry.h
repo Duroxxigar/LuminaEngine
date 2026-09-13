@@ -56,6 +56,14 @@ namespace Lumina::Scripting
         /** Names the stage in logs and in the ordering test. */
         virtual const char* GetName() const = 0;
 
+        /** Tears down whatever this stage holds into the collectible load context, before it unloads. Runs in
+         *  REVERSE registration order, since a stage that builds on an earlier one must come down first. */
+        virtual void PreUnload() {}
+
+        /** The load failed and the previous generation is still live, so put back what PreUnload tore down.
+         *  Registration order, like Compile. */
+        virtual void UnloadAborted() {}
+
         /** Rebuilds this stage from the generation that just loaded. Definitions covers every kind; a stage
          *  takes the ones it owns and ignores the rest. */
         virtual void Compile(TSpan<const FManagedTypeDefinition> Definitions) = 0;
@@ -65,8 +73,8 @@ namespace Lumina::Scripting
     RUNTIME_API void RegisterBuiltInManagedTypeStages();
 
     /**
-     * The ordered set of stages. Registration order IS execution order, which is the ordering contract that
-     * used to live only in comments.
+     * The ordered set of stages. Registration order IS execution order for the load half and reverse order
+     * for the unload half, which is the ordering contract that used to live only in comments.
      */
     class RUNTIME_API FManagedTypeRegistry
     {
@@ -76,6 +84,12 @@ namespace Lumina::Scripting
 
         /** Appends a stage. Not owned: a stage is a process-lifetime singleton. */
         void Register(IManagedTypeCompiler* Compiler);
+
+        /** Runs every stage's PreUnload, in reverse order, before the load context goes away. */
+        void PreUnloadAll();
+
+        /** Runs every stage's UnloadAborted, in order, after a load that failed. */
+        void UnloadAbortedAll();
 
         /** Runs every stage, in order, over one generation's definitions. */
         void CompileAll(TSpan<const FManagedTypeDefinition> Definitions);

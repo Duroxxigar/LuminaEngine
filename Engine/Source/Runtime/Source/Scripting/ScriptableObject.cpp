@@ -2,6 +2,7 @@
 #include "ScriptFunctionMint.h"
 #include "ScriptableObject.h"
 
+#include "Core/Object/ObjectReferenceReplacer.h"
 #include "Core/Object/ObjectReinstancer.h"
 #include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 #include "ManagedTypeRegistry.h"
@@ -97,27 +98,11 @@ namespace Lumina
                 return false;
             }
 
-            // It serializes by name, so a re-added type re-resolves from config and saves untouched.
-            int32 Cleared = 0;
-            auto DropRetired = [&](CObject* Current) -> CObject*
-            {
-                if (Current != static_cast<CObject*>(Class))
-                {
-                    return Current;
-                }
-                ++Cleared;
-                return nullptr;
-            };
-
-            GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
-            {
-                if (Base == nullptr || Base == Class || Base->HasAnyFlag(OF_MarkedDestroy))
-                {
-                    return;
-                }
-                CObject* Object = static_cast<CObject*>(Base);
-                FObjectReferenceVisitor::VisitStruct(Object->GetClass(), Object, DropRetired);
-            });
+            // Through the same three sources the reinstancer uses, since a walk of the reflected graph alone
+            // cannot see an ECS storage, a config map or an editor tool holding this class. It serializes by
+            // name, so a re-added type re-resolves from config and saves untouched.
+            FObjectReferenceReplacer Replacer(Class, nullptr);
+            Replacer.ApplyToAllObjects();
 
             // The root set holds the only strong reference, so un-rooting reaches zero and frees inside it.
             if (CObject* DefaultObject = Class->GetDefaultObjectIfCreated())
@@ -319,9 +304,6 @@ namespace Lumina
 
     void FScriptableRegistry::RefreshMintedClasses(TSpan<const Scripting::FManagedTypeDefinition> Definitions)
     {
-        // Before any rebuild, so this reload's retirements are stamped with the generation it opens.
-        Scripting::AdvanceScriptTypeGeneration();
-
         TVector<const Scripting::FManagedTypeDefinition*> Descs;
         for (const Scripting::FManagedTypeDefinition& Definition : Definitions)
         {
@@ -331,9 +313,12 @@ namespace Lumina
             }
         }
 
-        // Read both to decide what to evacuate and to resolve a saved reference to the old name.
+        // Read both to decide what to evacuate and to resolve a saved reference to the old name. Rebuilt
+        // rather than added to, so deleting an [Alias] from the C# source actually stops the redirect
+        // instead of leaving this generation honouring a rename the source no longer declares.
         TVector<DotNet::FScriptableAlias> Aliases;
         DotNet::GatherScriptableAliases(Aliases);
+        GClassRedirects().clear();
         for (const DotNet::FScriptableAlias& Alias : Aliases)
         {
             RegisterClassRedirect(FName(Alias.OldName.c_str()), FName(Alias.NewName.c_str()));
@@ -475,6 +460,10 @@ namespace Lumina
         // nothing here knows what was pointing at the old classes.
         FObjectReinstancer Reinstancer;
 
+        // A [SkipHotReload] property is the one thing the value carry-over must not carry, and the
+        // reinstancer has no reason to know what that means.
+        Reinstancer.SetPostReplaceHook([](CObject*, CObject* New) { Scripting::ResetSkipHotReloadProperties(New); });
+
         for (const FPendingReplacement& Pending : Replacements)
         {
             const auto Found = GMintedClasses().find(Pending.Name);
@@ -503,11 +492,13 @@ namespace Lumina
             LOG_DISPLAY("Scriptable: reinstanced {} object(s), repointed {} reference(s) across {} object(s) "
                         "and {} provider(s).", Result.InstancesReplaced, Result.ReferencesPatched,
                         Result.ObjectsScanned, Result.ProvidersVisited);
+        }
 
-            for (const FPendingReplacement& Pending : Replacements)
-            {
-                TryRetireMintedClass(Pending.Old->GetName(), Pending.Old, "superseded by a reshaped replacement");
-            }
+        // Outside the commit: a replacement that failed to re-mint leaves the reinstancer empty, and the
+        // class renamed aside above would then stay rooted with its layout arena for the rest of the session.
+        for (const FPendingReplacement& Pending : Replacements)
+        {
+            TryRetireMintedClass(Pending.Old->GetName(), Pending.Old, "superseded by a reshaped replacement");
         }
     }
 }

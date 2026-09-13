@@ -21,6 +21,10 @@ namespace
 
         const char* GetName() const override { return Name; }
 
+        void PreUnload() override { Log->push_back(FString(Name) + "::PreUnload"); }
+
+        void UnloadAborted() override { Log->push_back(FString(Name) + "::UnloadAborted"); }
+
         void Compile(TSpan<const FManagedTypeDefinition> Definitions) override
         {
             Log->push_back(FString(Name));
@@ -137,4 +141,70 @@ TEST(ManagedTypeRegistry, TheBuiltInStagesAreRegisteredInTheOrderTheyMustRun)
     EXPECT_STREQ(Stages[0]->GetName(), "ScriptableClasses");
     EXPECT_STREQ(Stages[1]->GetName(), "DataStructs");
     EXPECT_STREQ(Stages[2]->GetName(), "RenderScenes");
+}
+
+// Reverse, because a stage built on an earlier one has to come down before the thing it was built from.
+TEST(ManagedTypeRegistry, PreUnloadRunsInReverseRegistrationOrder)
+{
+    const FScopedStages Scope;
+
+    TVector<FString> Log;
+    FRecordingStage First("First", Log);
+    FRecordingStage Second("Second", Log);
+    FRecordingStage Third("Third", Log);
+
+    FManagedTypeRegistry& Registry = FManagedTypeRegistry::Get();
+    Registry.Register(&First);
+    Registry.Register(&Second);
+    Registry.Register(&Third);
+
+    Registry.PreUnloadAll();
+
+    ASSERT_EQ(Log.size(), 3u);
+    EXPECT_EQ(Log[0], FString("Third::PreUnload"));
+    EXPECT_EQ(Log[1], FString("Second::PreUnload"));
+    EXPECT_EQ(Log[2], FString("First::PreUnload"));
+}
+
+// A failed compile keeps the previous generation alive, so the teardown has to be undone rather than
+// completed. This used to be one subsystem calling itself back from inside the host's error branch.
+TEST(ManagedTypeRegistry, AnAbortedUnloadPutsEveryStageBackInRegistrationOrder)
+{
+    const FScopedStages Scope;
+
+    TVector<FString> Log;
+    FRecordingStage First("First", Log);
+    FRecordingStage Second("Second", Log);
+
+    FManagedTypeRegistry& Registry = FManagedTypeRegistry::Get();
+    Registry.Register(&First);
+    Registry.Register(&Second);
+
+    Registry.PreUnloadAll();
+    Registry.UnloadAbortedAll();
+
+    ASSERT_EQ(Log.size(), 4u);
+    EXPECT_EQ(Log[0], FString("Second::PreUnload"));
+    EXPECT_EQ(Log[1], FString("First::PreUnload"));
+    EXPECT_EQ(Log[2], FString("First::UnloadAborted"));
+    EXPECT_EQ(Log[3], FString("Second::UnloadAborted"));
+}
+
+// Nothing in the unload half may run Compile, or a failed load would rebuild against types that never loaded.
+TEST(ManagedTypeRegistry, TheUnloadHalfNeverCompiles)
+{
+    const FScopedStages Scope;
+
+    TVector<FString> Log;
+    FRecordingStage Only("Only", Log);
+    FManagedTypeRegistry::Get().Register(&Only);
+
+    FManagedTypeRegistry::Get().PreUnloadAll();
+    FManagedTypeRegistry::Get().UnloadAbortedAll();
+
+    EXPECT_EQ(Only.SeenCount, 0u);
+    for (const FString& Entry : Log)
+    {
+        EXPECT_NE(Entry, FString("Only")) << "Compile logs the bare name, and it must not have run";
+    }
 }

@@ -19,6 +19,7 @@
 #include "Core/Delegates/ScriptDelegate.h"
 #include "Core/Engine/Engine.h"
 #include "Core/Object/ManagedInstance.h"
+#include "Core/Threading/Atomic.h"
 #include "Scripting/ScriptStruct.h"
 #include "Scripting/ScriptableObject.h"
 #include "Scripting/ScriptDataStruct.h"
@@ -28,6 +29,7 @@
 #include "Log/Log.h"
 #include "Paths/Paths.h"
 #include "Platform/Process/PlatformProcess.h"
+#include "Platform/Time/PlatformTime.h"
 #include "World/World.h"
 #include "World/Entity/EntityUtils.h"
 #include "World/Entity/Components/Component.h"
@@ -197,7 +199,6 @@ namespace Lumina::DotNet
         typedef void  (CORECLR_DELEGATE_CALLTYPE* OnNativeDelegateDestroyedFn)(void*);
         typedef void  (CORECLR_DELEGATE_CALLTYPE* GetScriptSchemaFn)(const char*, int32, void*, void*);
         typedef void  (CORECLR_DELEGATE_CALLTYPE* GetScriptButtonsFn)(const char*, int32, void*, void*);
-        typedef void  (CORECLR_DELEGATE_CALLTYPE* ResolveEntityScriptNameFn)(const char*, int32, void*, void*);
         typedef void  (CORECLR_DELEGATE_CALLTYPE* InvokeAssetCallbackFn)(void*, void*);
         typedef void  (CORECLR_DELEGATE_CALLTYPE* ManagedFreeHandleFn)(void*);
         typedef int32 (CORECLR_DELEGATE_CALLTYPE* InvokeScriptButtonFn)(void*, const char*, int32);
@@ -222,7 +223,6 @@ namespace Lumina::DotNet
             GetRuntimeDiagnosticsFn     GetRuntimeDiagnostics;
             GetScriptSchemaFn           GetScriptSchema;
             GetScriptButtonsFn          GetScriptButtons;
-            ResolveEntityScriptNameFn   ResolveEntityScriptName;
             InvokeAssetCallbackFn       InvokeAssetCallback;
             LoadScriptsFn               LoadScripts;
             SetScriptCompileOptimizationFn SetScriptCompileOptimization;
@@ -233,8 +233,15 @@ namespace Lumina::DotNet
 
         bool                                        bInitialized = false;
 
-        // Set by a UI trigger, serviced at frame start; see RequestScriptReload.
-        bool                                        GScriptReloadRequested = false;
+        // Set by a UI trigger or a source watcher, serviced at frame start; see RequestScriptReload.
+        TAtomic<bool>                               GScriptReloadRequested{ false };
+
+        // Monotonic seconds before which a latched reload must not run. Zero means "at the next frame start",
+        // which is what an explicit user request wants; a watched-file change pushes it out instead.
+        TAtomic<double>                             GScriptReloadEarliest{ 0.0 };
+
+        // Long enough to swallow the several events one save produces, short enough to feel immediate.
+        constexpr double                            kScriptReloadQuietSeconds = 0.25;
 
         // Signal listeners per world, since nothing else would destroy one the script never disposed.
         THashMap<CWorld*, TVector<void*>>           GSignalListeners;
@@ -246,7 +253,6 @@ namespace Lumina::DotNet
         FManagedExports                             GManaged{};
 
         // Reflection layouts for each C# script type, cleared on reload/shutdown.
-        Scripting::FScriptStructRegistry            GScriptStructs;
 
         // On native delegate destruction, ask the managed registry to free the matching GCHandles.
         void NotifyManagedDelegateDestroyed(void* DelegateAddress)
@@ -336,17 +342,6 @@ namespace Lumina::DotNet
             }
             Out->emplace_back(std::move(Desc));
         }
-
-        // Single-name sink for ResolveEntityScriptName; Ctx is the out FString.
-        void LmSingleNameSink(void* Ctx, const char* Name, int Len)
-        {
-            auto* Out = static_cast<FString*>(Ctx);
-            if (Out != nullptr && Name != nullptr && Len > 0)
-            {
-                Out->assign(Name, static_cast<size_t>(Len));
-            }
-        }
-
 
 
         // Keeps each source file's text alive while it's marshaled to managed.
@@ -1063,7 +1058,6 @@ namespace Lumina::DotNet
         LM_RESOLVE(GetRuntimeDiagnostics,  GetRuntimeDiagnosticsFn);
         LM_RESOLVE(GetScriptSchema,        GetScriptSchemaFn);
         LM_RESOLVE(GetScriptButtons,       GetScriptButtonsFn);
-        LM_RESOLVE(ResolveEntityScriptName, ResolveEntityScriptNameFn);
         LM_RESOLVE(InvokeAssetCallback,    InvokeAssetCallbackFn);
         LM_RESOLVE(LoadScripts,            LoadScriptsFn);
         LM_RESOLVE(SetScriptCompileOptimization, SetScriptCompileOptimizationFn);   // optional, packaging only
@@ -1110,7 +1104,6 @@ namespace Lumina::DotNet
         GOnScriptDelegateDestroyed = nullptr;
         GExports = FExporterTable{};
         GCachedGeneration = 0;
-        GScriptStructs.Clear();
         GManaged = FManagedExports{};   // clears the whole native->managed table in one go
         LOG_DISPLAY(".NET host shut down.");
     }
@@ -1238,8 +1231,9 @@ namespace Lumina::DotNet
         // A queued Task.Run body is user code holding a strong handle, so let it finish before the teardown.
         GTaskSystem->WaitForAll();
 
-        // Tears those worlds' renderers down first, so nothing dispatches into a dead load context.
-        ManagedRenderScenes::PreScriptUnload();
+        // Before the teardown, since the stages are what the teardown runs through.
+        Scripting::RegisterBuiltInManagedTypeStages();
+        Scripting::FManagedTypeRegistry::Get().PreUnloadAll();
 
         const int32 Result = GManaged.LoadScripts(Units.empty() ? nullptr : Units.data(), (int32)Units.size());
 
@@ -1252,8 +1246,7 @@ namespace Lumina::DotNet
                 ImGuiX::Notifications::NotifyError("Script compile failed ({} file(s)) -- see the Output Log.", TotalFiles);
             }
 
-            // A failed compile keeps the previous generation, so only the renderers need putting back.
-            ManagedRenderScenes::PostScriptLoad();
+            Scripting::FManagedTypeRegistry::Get().UnloadAbortedAll();
             return Result;
         }
 
@@ -1282,10 +1275,6 @@ namespace Lumina::DotNet
 
         // The handles are WEAK, so this exists to recycle slots rather than to make hot reload work.
         Lumina::ManagedInstances::ReleaseAll();
-
-        GScriptStructs.Clear();
-
-        Scripting::RegisterBuiltInManagedTypeStages();
 
         // Every stage reads this one gather rather than crossing the boundary for its own copy.
         TVector<Scripting::FManagedTypeDefinition> Definitions;
@@ -1372,17 +1361,36 @@ namespace Lumina::DotNet
 
     void RequestScriptReload()
     {
-        GScriptReloadRequested = true;
+        GScriptReloadRequested.store(true, Atomic::MemoryOrderRelease);
+        GScriptReloadEarliest.store(0.0, Atomic::MemoryOrderRelease);
     }
 
-    void ProcessPendingScriptReload()
+    void NotifyScriptSourceChanged(FStringView Path)
     {
-        if (!GScriptReloadRequested)
+        if (!VFS::HasExtension(Path, ".cs"))
         {
             return;
         }
 
-        GScriptReloadRequested = false;
+        // Pushed forward by each event rather than set once, so the reload lands after the burst settles
+        // instead of once per file and again for everything that arrives during the compile.
+        GScriptReloadEarliest.store(PlatformTime::Seconds() + kScriptReloadQuietSeconds, Atomic::MemoryOrderRelease);
+        GScriptReloadRequested.store(true, Atomic::MemoryOrderRelease);
+    }
+
+    void ProcessPendingScriptReload()
+    {
+        if (!GScriptReloadRequested.load(Atomic::MemoryOrderAcquire))
+        {
+            return;
+        }
+
+        if (PlatformTime::Seconds() < GScriptReloadEarliest.load(Atomic::MemoryOrderAcquire))
+        {
+            return;
+        }
+
+        GScriptReloadRequested.store(false, Atomic::MemoryOrderRelease);
         ReloadScripts();
     }
 
@@ -1652,23 +1660,6 @@ namespace Lumina::DotNet
 
         return Scripting::ParseSchemaBlob(Blob, OutSchema, OutDefaults);
     }
-
-    const CScriptStruct* GetScriptStruct(FStringView ScriptClass)
-    {
-        return GScriptStructs.GetOrBuild(ScriptClass);
-    }
-
-    FString ResolveScriptClassName(FStringView ScriptClass)
-    {
-        FString Result;
-        if (bInitialized && GManaged.ResolveEntityScriptName != nullptr && !ScriptClass.empty())
-        {
-            GManaged.ResolveEntityScriptName(ScriptClass.data(), (int32)ScriptClass.size(),
-                reinterpret_cast<void*>(&LmSingleNameSink), &Result);
-        }
-        return Result;
-    }
-
 
     void GatherScriptButtons(FStringView ScriptClass, TVector<Scripting::FScriptButton>& OutButtons)
     {

@@ -196,16 +196,6 @@ internal sealed class TypeLibrary
         return null;
     }
 
-    /// <summary>The canonical current full name for a script name, or null if it resolves to no live type.</summary>
-    public string? ResolveScriptName(string Name)
-    {
-        if (EntityScripts.ContainsKey(Name))
-        {
-            return Name;
-        }
-        return ScriptAliases.TryGetValue(Name, out string? Current) ? Current : null;
-    }
-
     /// <summary>Get-or-build the description for any type (used recursively for nested struct members).</summary>
     public TypeDescription Describe(Type Type)
     {

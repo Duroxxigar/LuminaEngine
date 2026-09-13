@@ -175,3 +175,78 @@ TEST(ObjectReinstancer, DoesNothingWithoutAMapping)
     EXPECT_EQ(Result.InstancesReplaced, 0);
     EXPECT_EQ(Result.ReferencesPatched, 0);
 }
+
+// The seam a language uses to say which of its properties must not survive the migration. Without it the
+// reinstancer would have to know what a script attribute means.
+TEST(ObjectReinstancer, ThePostReplaceHookSeesEveryReplacementBeforeAnythingPointsAtIt)
+{
+    Scripting::FScriptExportSchema Before;
+    Before.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
+    CScriptClass* Old = MintWithFields("Reinst_HookBefore", Before);
+    ASSERT_NE(Old, nullptr);
+
+    CObject* First  = NewObject(Old, nullptr, FName("HookOne"), FGuid::New(), OF_Transient);
+    CObject* Second = NewObject(Old, nullptr, FName("HookTwo"), FGuid::New(), OF_Transient);
+    ASSERT_NE(First, nullptr);
+    ASSERT_NE(Second, nullptr);
+    *FindInt(First, "Value")  = 11;
+    *FindInt(Second, "Value") = 22;
+
+    Scripting::FScriptExportSchema After;
+    After.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
+    After.Fields.push_back(MakeScalarField("Added", EPropertyTypeFlags::Int32));
+    CScriptClass* New = MintWithFields("Reinst_HookAfter", After);
+    ASSERT_NE(New, nullptr);
+
+    static int32 GHookCalls = 0;
+    GHookCalls = 0;
+
+    FObjectReinstancer Reinstancer;
+    Reinstancer.MapClass(Old, New);
+    Reinstancer.SetPostReplaceHook([](CObject*, CObject* Replacement)
+    {
+        ++GHookCalls;
+        // Zeroed here, so a value that did carry over proves the hook ran after the copy rather than before.
+        if (int32* Value = FindInt(Replacement, "Value"))
+        {
+            *Value = 0;
+        }
+    });
+
+    const FReinstanceResult Result = Reinstancer.Commit();
+
+    EXPECT_EQ(Result.InstancesReplaced, 2);
+    EXPECT_EQ(GHookCalls, 2) << "the hook runs once per replacement, not once per commit";
+
+    CObject* NewFirst = FindObject<CObject>(FName("HookOne"));
+    ASSERT_NE(NewFirst, nullptr);
+    EXPECT_EQ(NewFirst->GetClass(), New);
+    EXPECT_EQ(*FindInt(NewFirst, "Value"), 0) << "the hook must run after the values are carried over";
+}
+
+TEST(ObjectReinstancer, CommitWithNoHookIsUnaffected)
+{
+    Scripting::FScriptExportSchema Before;
+    Before.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
+    CScriptClass* Old = MintWithFields("Reinst_NoHookBefore", Before);
+    ASSERT_NE(Old, nullptr);
+
+    CObject* Instance = NewObject(Old, nullptr, FName("NoHookSubject"), FGuid::New(), OF_Transient);
+    ASSERT_NE(Instance, nullptr);
+    *FindInt(Instance, "Value") = 7;
+
+    Scripting::FScriptExportSchema After;
+    After.Fields.push_back(MakeScalarField("Value", EPropertyTypeFlags::Int32));
+    After.Fields.push_back(MakeScalarField("Added", EPropertyTypeFlags::Int32));
+    CScriptClass* New = MintWithFields("Reinst_NoHookAfter", After);
+    ASSERT_NE(New, nullptr);
+
+    FObjectReinstancer Reinstancer;
+    Reinstancer.MapClass(Old, New);
+    const FReinstanceResult Result = Reinstancer.Commit();
+
+    EXPECT_EQ(Result.InstancesReplaced, 1);
+    CObject* Moved = FindObject<CObject>(FName("NoHookSubject"));
+    ASSERT_NE(Moved, nullptr);
+    EXPECT_EQ(*FindInt(Moved, "Value"), 7);
+}

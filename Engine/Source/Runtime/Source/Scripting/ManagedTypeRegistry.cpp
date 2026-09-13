@@ -31,6 +31,26 @@ namespace Lumina::Scripting
         Stages.push_back(Compiler);
     }
 
+    void FManagedTypeRegistry::PreUnloadAll()
+    {
+        LUMINA_PROFILE_SCOPE();
+
+        for (size_t Index = Stages.size(); Index > 0; --Index)
+        {
+            Stages[Index - 1]->PreUnload();
+        }
+    }
+
+    void FManagedTypeRegistry::UnloadAbortedAll()
+    {
+        LUMINA_PROFILE_SCOPE();
+
+        for (IManagedTypeCompiler* Stage : Stages)
+        {
+            Stage->UnloadAborted();
+        }
+    }
+
     void FManagedTypeRegistry::CompileAll(TSpan<const FManagedTypeDefinition> Definitions)
     {
         LUMINA_PROFILE_SCOPE();

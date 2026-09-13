@@ -343,37 +343,6 @@ public static unsafe partial class Host
         }
     }
 
-    /// Resolves a script reference to its current full name and writes it to the native sink, writing nothing if unresolved.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void ResolveEntityScriptName(byte* ScriptClass, int ClassLength, IntPtr Sink, IntPtr Context)
-    {
-        try
-        {
-            string? Resolved = Scripts?.EntityScripts?.ResolveName(Interop.GetString(ScriptClass, ClassLength));
-            if (Resolved == null || Sink == IntPtr.Zero)
-            {
-                return;
-            }
-
-            var Add = (delegate* unmanaged[Stdcall]<IntPtr, byte*, int, void>)Sink;
-            Span<byte> Scratch = stackalloc byte[256];
-            Interop.FInteropString Encoded = new(Resolved, Scratch);
-            try
-            {
-                Add(Context, Encoded.Pointer, Encoded.Length);
-            }
-            finally
-            {
-                Encoded.Free();
-            }
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
     /// Reports every loaded EntityScript type's full name to a native sink (once per type), for the editor's script picker.
     [ManagedExport]
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]

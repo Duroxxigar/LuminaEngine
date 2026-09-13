@@ -4,6 +4,7 @@
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectCore.h"
+#include "Core/Object/ObjectReferenceProvider.h"
 #include "Core/Object/ObjectReferenceReplacer.h"
 #include "Core/Object/SoftObjectPtr.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
@@ -134,4 +135,67 @@ TEST(ObjectReferenceReplacer, ReachesAReferenceInsideAContainer)
 
     EXPECT_EQ(static_cast<TObjectPtr<CObject>*>(Array->GetAt(Container, 0))->Get(), Other)
         << "a reference inside a container must be repointed like any other";
+}
+
+namespace
+{
+    // A holder no walk of the reflected graph can reach, which is what an ECS storage or a config map is.
+    class FReplacerTestProvider final : public IObjectReferenceProvider
+    {
+    public:
+
+        CObject* Held = nullptr;
+
+        const char* GetReferenceProviderName() const override { return "replacer test"; }
+
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override { Held = Func(Held); }
+    };
+}
+
+// Retiring a minted class relies on this: it used to walk only the reflected graph, so a class still named by
+// a provider was freed with that provider left pointing at it.
+TEST(ObjectReferenceReplacer, ClearsAReferenceHeldOnlyByAProvider)
+{
+    Scripting::FScriptExportSchema Schema;
+    Schema.Fields.push_back(MakeScalarField("Unused", EPropertyTypeFlags::Int32));
+
+    CScriptClass* Holder = MintWith("Replacer_ProviderHolder", Schema);
+    ASSERT_NE(Holder, nullptr);
+
+    CObject* Target = NewObject(Holder, nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ASSERT_NE(Target, nullptr);
+
+    FReplacerTestProvider Provider;
+    Provider.Held = Target;
+    FObjectReferenceProviders::Register(&Provider);
+
+    {
+        FObjectReferenceReplacer Replacer(Target, nullptr);
+        EXPECT_GT(Replacer.ApplyToAllObjects(), 0u);
+    }
+
+    FObjectReferenceProviders::Unregister(&Provider);
+    EXPECT_EQ(Provider.Held, nullptr) << "a provider-held reference must be cleared like any other";
+}
+
+// The class object is a CObject too, so retiring one is the same replacement with a null target.
+TEST(ObjectReferenceReplacer, ClearsAClassReferenceHeldByAProvider)
+{
+    Scripting::FScriptExportSchema Schema;
+    Schema.Fields.push_back(MakeScalarField("Unused", EPropertyTypeFlags::Int32));
+
+    CScriptClass* Retiring = MintWith("Replacer_RetiringClass", Schema);
+    ASSERT_NE(Retiring, nullptr);
+
+    FReplacerTestProvider Provider;
+    Provider.Held = Retiring;
+    FObjectReferenceProviders::Register(&Provider);
+
+    {
+        FObjectReferenceReplacer Replacer(Retiring, nullptr);
+        Replacer.ApplyToAllObjects();
+    }
+
+    FObjectReferenceProviders::Unregister(&Provider);
+    EXPECT_EQ(Provider.Held, nullptr);
 }

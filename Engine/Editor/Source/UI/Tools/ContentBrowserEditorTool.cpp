@@ -803,7 +803,6 @@ namespace Lumina
             ImGui::TextColored(kMenuTextDim, "GUID: %s", Data->AssetGUID.ToString(false, true).c_str());
         }
 
-        std::atomic<bool> GScriptReloadQueued{ false };
     }
 
     // Scripts show lifecycle, assets show refs and GUID, files show size, folders show item counts.
@@ -2255,17 +2254,11 @@ namespace Lumina
                     RefreshContentBrowser();
                 }
 
-                // A .cs add or rename changes what compiles, so recompile and regenerate without a manual reload.
-                if (bIsCSharp && Event.Action != EFileAction::Modified)
+                // Which files are script sources and how long to wait for a burst to settle both belong to
+                // the scripting layer, so the browser reports the change and decides nothing.
+                if (Event.Action != EFileAction::Modified)
                 {
-                    if (!GScriptReloadQueued.exchange(true))
-                    {
-                        MainThread::Enqueue([]
-                        {
-                            GScriptReloadQueued.store(false);
-                            DotNet::RequestScriptReload();
-                        });
-                    }
+                    DotNet::NotifyScriptSourceChanged(Event.Path);
                 }
             });
 

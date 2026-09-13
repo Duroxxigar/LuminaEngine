@@ -758,7 +758,7 @@ namespace Lumina
             LaunchTracyProfiler();
         }
 
-        // The chord is rebindable in Editor Settings, General, Hotkeys, defaulting to Ctrl+Shift+R.
+        // The chord is rebindable in Editor Settings, General, Hotkeys.
         {
             // EKey holds GLFW keycodes, which run contiguously, so they map onto ImGuiKey ranges by offset.
             auto EKeyToImGuiKey = [](EKey Key) -> ImGuiKey
@@ -3379,7 +3379,9 @@ namespace Lumina
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", "Shift+F11"))
+        // Read from the binding rather than written out, so rebinding the chord relabels the menu with it.
+        const FString ReloadChord = GetDefault<CEditorSettings>()->ReloadScriptsHotkey.GetDisplayName();
+        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", ReloadChord.c_str()))
         {
             DotNet::RequestScriptReload();
         }

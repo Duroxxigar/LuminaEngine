@@ -37,6 +37,13 @@ namespace Lumina
         /** Every instance of Old becomes an instance of New. */
         void MapClass(CClass* Old, CClass* New);
 
+        using FPostReplaceFunc = void (*)(CObject* Old, CObject* New);
+
+        /** Runs on each replacement once its values are carried over, before anything is repointed at it.
+         *  The seam for a policy the reinstancer itself has no business knowing, such as which properties a
+         *  language wants reset to their new default rather than migrated. */
+        void SetPostReplaceHook(FPostReplaceFunc Func) { PostReplace = Func; }
+
         NODISCARD bool IsEmpty() const { return ClassMap.empty(); }
 
         /** Builds the replacements, repoints the graph, and retires the originals. */
@@ -48,5 +55,7 @@ namespace Lumina
 
         THashMap<CClass*, CClass*>   ClassMap;
         THashMap<CObject*, CObject*> ObjectMap;
+
+        FPostReplaceFunc PostReplace = nullptr;
     };
 }

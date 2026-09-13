@@ -68,6 +68,11 @@ namespace Lumina
             NewClass->SerializeTaggedProperties(Ar, New);
         }
 
+        if (PostReplace)
+        {
+            PostReplace(Old, New);
+        }
+
         return New;
     }
 
