@@ -240,7 +240,7 @@ namespace Lumina
         // Type-uniform, so it is one class-level byte rather than anything stored per script instance.
         EScriptUpdatePhase ScriptPhase(const CEntityScript* Script)
         {
-            const CClass* Class = Script != nullptr ? Script->GetClass() : nullptr;
+            const CScriptClass* Class = Script != nullptr ? ToScriptClass(Script->GetClass()) : nullptr;
             return Class != nullptr ? static_cast<EScriptUpdatePhase>(Class->ScriptUpdatePhase)
                                     : EScriptUpdatePhase::PrePhysics;
         }
@@ -270,48 +270,6 @@ namespace Lumina
         }
 
         // A loaded prefab owns a registry and is not a world, so the world sweep alone left its scripts.
-        struct FScriptRegistryRef
-        {
-            CObject*         Owner = nullptr;
-            ECS::FRegistry* Registry = nullptr;
-            bool             bVariantDelta = false;
-        };
-
-        void GatherScriptRegistries(TVector<FScriptRegistryRef>& Out)
-        {
-            if (GWorldManager != nullptr)
-            {
-                GWorldManager->ForEachWorld([&](CWorld& World)
-                {
-                    Out.push_back(FScriptRegistryRef{ &World, &ECS::GetWorldRegistry(World), false });
-                });
-            }
-
-            for (TObjectIterator<CPrefab> It; It; ++It)
-            {
-                CPrefab* Prefab = *It;
-                if (Prefab == nullptr || Prefab->HasAnyFlag(OF_MarkedDestroy) || Prefab->HasAnyFlag(OF_DefaultObject))
-                {
-                    continue;
-                }
-                Out.push_back(FScriptRegistryRef{ Prefab, &Prefab->Registry, false });
-                Out.push_back(FScriptRegistryRef{ Prefab, &Prefab->VariantDelta, true });
-            }
-        }
-
-        ECS::FRegistry* ResolveScriptRegistry(CObject* Owner, bool bVariantDelta)
-        {
-            if (CWorld* World = Cast<CWorld>(Owner))
-            {
-                return &ECS::GetWorldRegistry(*World);
-            }
-            if (CPrefab* Prefab = Cast<CPrefab>(Owner))
-            {
-                return bVariantDelta ? &Prefab->VariantDelta : &Prefab->Registry;
-            }
-            return nullptr;
-        }
-
         // A script attached to a new entity during the pass readies on the next tick like any other.
         void SnapshotScriptedEntities(ECS::FRegistry& Registry, TVector<ECS::FEntity>& Out)
         {
@@ -593,99 +551,6 @@ namespace Lumina
             }
         }
 
-
-        int32 Evacuate(const THashSet<CClass*>& Classes, TVector<FEvacuatedScripts>& Out)
-        {
-            if (Classes.empty())
-            {
-                return 0;
-            }
-
-            TVector<FScriptRegistryRef> Registries;
-            GatherScriptRegistries(Registries);
-
-            int32 Evacuated = 0;
-            for (const FScriptRegistryRef& Ref : Registries)
-            {
-                ECS::FRegistry& Registry = *Ref.Registry;
-
-                // Serialize does not touch the registry, but clearing Scripts destroys user-reachable objects.
-                TVector<ECS::FEntity> Affected;
-                auto View = Registry.View<SEntityScriptComponent>();
-                for (ECS::FEntity Entity : View)
-                {
-                    const SEntityScriptComponent& Component = View.Get<SEntityScriptComponent>(Entity);
-                    for (const TObjectPtr<CEntityScript>& Held : Component.Scripts)
-                    {
-                        CEntityScript* Script = Held.Get();
-                        if (Script != nullptr && Classes.find(Script->GetClass()) != Classes.end())
-                        {
-                            Affected.push_back(Entity);
-                            break;
-                        }
-                    }
-                }
-
-                for (ECS::FEntity Entity : Affected)
-                {
-                    SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
-                    if (Component == nullptr)
-                    {
-                        continue;
-                    }
-
-                    FEvacuatedScripts Saved;
-                    Saved.Owner         = Ref.Owner;
-                    Saved.Entity        = Entity;
-                    Saved.bVariantDelta = Ref.bVariantDelta;
-                    {
-                        FMemoryWriter Writer(Saved.Bytes);
-                        FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
-                        Component->Serialize(Ar);
-                    }
-                    
-                    Component->Scripts.clear();
-
-                    Out.push_back(std::move(Saved));
-                    ++Evacuated;
-                }
-            }
-
-            return Evacuated;
-        }
-
-        int32 Restore(const TVector<FEvacuatedScripts>& Saved)
-        {
-            int32 Restored = 0;
-            for (const FEvacuatedScripts& Entry : Saved)
-            {
-                ECS::FRegistry* RegistryPtr = ResolveScriptRegistry(Entry.Owner.Get(), Entry.bVariantDelta);
-                if (RegistryPtr == nullptr)
-                {
-                    continue;   // the world or prefab went away mid-reload
-                }
-                ECS::FRegistry& Registry = *RegistryPtr;
-                if (!Registry.IsValid(Entry.Entity))
-                {
-                    continue;   // so did the entity
-                }
-
-                SEntityScriptComponent& Component = Registry.GetOrEmplace<SEntityScriptComponent>(Entry.Entity);
-                {
-                    FMemoryReader Reader(const_cast<TVector<uint8>&>(Entry.Bytes));
-                    FObjectProxyArchiver Ar(Reader, /*bLoadIfFindFails*/ true);
-                    Component.Serialize(Ar);
-                }
-
-                // Fields marked to skip hot reload asked for the opposite, so they return to their class default.
-                for (const TObjectPtr<CEntityScript>& Held : Component.Scripts)
-                {
-                    Scripting::ResetSkipHotReloadProperties(Held.Get());
-                }
-                ++Restored;
-            }
-            return Restored;
-        }
 
         void DetachAll(ECS::FRegistry& Registry, ECS::FEntity Entity)
         {

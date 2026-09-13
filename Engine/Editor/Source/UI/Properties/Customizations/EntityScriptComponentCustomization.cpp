@@ -3,7 +3,9 @@
 #include "imgui.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectIterator.h"
+#include "Scripting/DotNet/DotNetHost.h"
 #include "Scripting/EntityScript.h"
+#include "Scripting/ScriptableObject.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "UI/Properties/PropertyTable.h"
 
@@ -101,12 +103,32 @@ namespace Lumina
                     });
                     View.ValueTable->SetFinishEditCallback([this](const FPropertyChangedEvent&) { NestedChangeOp = EPropertyChangeOp::Finished; });
 
+                    DotNet::GatherScriptButtons(Script->GetClass()->GetName().ToString(), View.Buttons);
+
                     View.BoundScript = Script;
                     View.BoundClass = Script->GetClass();
                 }
                 if (View.ValueTable)
                 {
                     View.ValueTable->DrawTree();
+                }
+
+                // The instance is created on demand, so a script that has never been dispatched to still has
+                // something to invoke against.
+                for (const Scripting::FScriptButton& Button : View.Buttons)
+                {
+                    const FString& Text = Button.Label.empty() ? Button.Method : Button.Label;
+                    if (ImGui::Button(Text.c_str()))
+                    {
+                        if (void* Instance = Scriptable::GetOrCreateInstance(Script))
+                        {
+                            DotNet::InvokeScriptButton(Instance, Button.Method);
+                        }
+                    }
+                    if (!Button.Tooltip.empty() && ImGui::IsItemHovered())
+                    {
+                        ImGui::SetTooltip("%s", Button.Tooltip.c_str());
+                    }
                 }
             }
 

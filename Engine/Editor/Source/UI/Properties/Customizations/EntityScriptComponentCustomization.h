@@ -4,6 +4,7 @@
 #include "Containers/Vector.h"
 #include "Containers/Function.h"
 #include "Memory/SmartPtr.h"
+#include "Scripting/ScriptExports.h"
 
 namespace Lumina
 {
@@ -19,6 +20,8 @@ namespace Lumina
      *    with no separate path;
      *  - a script's properties are real FPropertys on its (minted) class, so each one is drawn by a stock
      *    nested FPropertyTable instead of a bespoke drawer over a value blob.
+     *
+     * A [Button] method is drawn under those properties and invoked by name on the live managed instance.
      */
     class FEntityScriptComponentCustomization : public IPropertyTypeCustomization
     {
@@ -39,6 +42,9 @@ namespace Lumina
             CEntityScript*             BoundScript = nullptr;
             const CClass*              BoundClass = nullptr;   // guards an object replaced at the same address
             TUniquePtr<FPropertyTable> ValueTable;
+
+            // Gathered with the table rather than per frame: it is a marshalled crossing per script type.
+            TVector<Scripting::FScriptButton> Buttons;
         };
 
         // What the nested tables reported this frame, translated into this customization's own return value so

@@ -4,6 +4,7 @@
 
 
 #include "Renderer/ShaderHandle.h"
+#include "SceneBuffer.h"
 #include "Core/Delegates/Delegate.h"
 #include "Memory/Allocators/Allocator.h"
 #include "Memory/SmartPtr.h"
@@ -36,6 +37,7 @@ namespace Lumina
     struct SSpotLightComponent;
     struct SPointLightComponent;
     struct SExponentialHeightFogComponent;
+    struct SEnvironmentComponent;
     class CWorld;
     struct SStaticMeshComponent;
     struct SDynamicMeshComponent;
@@ -595,8 +597,11 @@ namespace Lumina
         /** (base, count) per (visible instance, view): the one place the per-view meshlet range is
             decided. CullInstances writes it when it reserves; BuildMeshletBlocks reads it to append. */
         RHI::FGPUAllocation GetInstanceViewRanges() const { return InstanceViewRangeRing[CurrentFrameSlot]; }
-        RHI::FGPUAllocation GetSpdCounter()       const { return SpdCounterRing[CurrentFrameSlot]; }
-        RHI::FGPUAllocation GetLuminanceHistogram() const { return LuminanceHistogramRing[CurrentFrameSlot]; }
+        // Every counter a pass accumulates into this frame lives in one scratch block, zeroed once in RenderView.
+        RHI::FGPURange GetCullCounters()      const { return FrameScratchRange(kScratchCullCountersOffset, sizeof(uint32) * 4); }
+        RHI::FGPURange GetSpdCounter(uint32 Index) const { return FrameScratchRange(kScratchSpdCountersOffset + Index * sizeof(uint32), sizeof(uint32)); }
+        RHI::FGPURange GetLuminanceHistogram() const { return FrameScratchRange(kScratchHistogramOffset, sizeof(uint32) * kLuminanceHistogramBins); }
+        RHI::FGPURange GetGrassCursor(uint32 Index) const { return FrameScratchRange(kScratchGrassCursorsOffset + Index * sizeof(uint32), sizeof(uint32)); }
 
         /** Per-material counts, starts, scatter cursors, dispatch args and the frame pixel total. */
         RHI::FGPUAllocation GetMaterialClassify()  const { return MaterialClassifyRing[CurrentFrameSlot]; }
@@ -604,6 +609,7 @@ namespace Lumina
         RHI::FGPUAllocation GetMaterialPixelList() const { return MaterialPixelListRing[CurrentFrameSlot]; }
 
         uint32 GetDisplayResourceID() const override;
+        bool HasCompositedFrame() const override { return FramesComposited > 0; }
 
         RUNTIME_API void SettleResolveWork(int32 MaxIterations = 8);
 
@@ -632,6 +638,9 @@ namespace Lumina
         // Shared body of SwapchainResized / SetPrimaryViewSize. Unconditional: callers decide whether the
         // new size is worth the WaitDeviceIdle this costs.
         RUNTIME_API void ResizePrimaryView(const FUIntVector2& NewSize);
+
+        // Applies a deferred SetPrimaryViewSize. Called from Extract, which only runs for a ticking world.
+        void ApplyPendingPrimarySize();
 
         /** Cleared the first time something sizes the primary view explicitly (an editor tool panel). */
         bool bPrimaryTracksSwapchain = true;
@@ -684,28 +693,28 @@ namespace Lumina
         void TexturePaintPass(RHI::FCmdListH CL);
         void DepthPyramidPass(RHI::FCmdListH CL);
         void CascadePyramidPass(RHI::FCmdListH CL);
-        void BuildDepthPyramid(RHI::FCmdListH CL, const FSceneImage& Source, const FSceneImage& Pyramid, bool bReduceMax);
+        void BuildDepthPyramid(RHI::FCmdListH CL, const FSceneImage& Source, const FSceneImage& Pyramid, bool bReduceMax,
+                               uint32 SpdCounterIndex);
+
+        // Sizes and zeroes this frame's scratch counters, the one fill and barrier the counters share.
+        void BeginFrameScratch(RHI::FCmdListH CL, const FFrameData& Frame);
+        RHI::FGPURange FrameScratchRange(uint64 Offset, uint64 Size) const
+        {
+            return { FrameScratchRing[CurrentFrameSlot].Gpu + Offset, Size };
+        }
         void ClusterBuildPass(RHI::FCmdListH CL);
         void LightCullPass(RHI::FCmdListH CL);
         void PointShadowPass(RHI::FCmdListH CL);
         void SpotShadowPass(RHI::FCmdListH CL);
         void CascadedShowPass(RHI::FCmdListH CL, uint32 CascadeViewBase);
         void DecalPass(RHI::FCmdListH CL);
-        /** Classic two-phase: Early replays the set that was visible last frame, with no Hi-Z, to build
-            the pyramid; Late tests every instance against that pyramid and draws the ones Early did not.
-            A view without ECullViewFlags::MeshletHiZ is single-phase and drawn entirely by Early. */
         void VisBufferPass(RHI::FCmdListH CL, uint32 ViewIndex, bool bClear,
                            ECullPhase::Type Phase = ECullPhase::Early);
-        /** Count pixels per material, prefix-sum the counts, scatter every pixel's position into its
-            material's run of the list, and build the indirect args the two passes below dispatch on. */
         void VisBufferClassifyPass(RHI::FCmdListH CL);
-        /** One indirect compute dispatch per material over its own pixel run; writes the GBuffer. */
         void MaterialGBufferPass(RHI::FCmdListH CL);
-        /** One indirect compute dispatch over every classified pixel; writes lit HDR. */
         void DeferredLightingPass(RHI::FCmdListH CL);
         #if USING(WITH_EDITOR)
         void PickerResolvePass(RHI::FCmdListH CL);
-        // Edge-detects the Picker RT, so billboards, widgets and world text outline as well as meshes.
         void SelectionOutlinePass(RHI::FCmdListH CL);
         #endif
         #if !defined(LE_SHIPPING)
@@ -795,6 +804,28 @@ namespace Lumina
 
         // Extract-phase half: ECS reads + parallel Process* tasks + cull/shadow setup.
         void CompileDrawCommands_Extract();
+
+        void PrepareGatherScratch(FFrameData& Frame);
+        void ScheduleSkinnedGather(FTaskGraph& Graph);
+        void ScheduleLineBatching(FTaskGraph& EmitGraph, ECS::FRegistry& Registry);
+
+        // One emit task per primitive family, all joined before the serial tail below runs.
+        void ExtractBatchedTriangles(ECS::FRegistry& Registry);
+        void ExtractWidgets(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractText(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractSprites(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractBillboards(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractSelection(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractTerrain(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractParticles(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractDecals(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractWater(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractDebugText(FFrameData& Frame);
+
+        // Serial after the light tasks; the skylight reads the sun the directional pass resolved.
+        const SEnvironmentComponent* ExtractEnvironment(ECS::FRegistry& Registry, FFrameData& Frame);
+        void ExtractSkyLight(ECS::FRegistry& Registry, FFrameData& Frame, const SEnvironmentComponent* ActiveEnv);
+        void ExtractFog(ECS::FRegistry& Registry, FFrameData& Frame);
 
         // Render-phase half: buffer resize + upload commands; reads extract-phase state.
         void CompileDrawCommands_Render(RHI::FCmdListH CL);
@@ -981,6 +1012,20 @@ namespace Lumina
             return 0;
         }
 
+        template<typename T>
+        void DispatchCompute(RHI::FCmdListH CL, FShaderH Shader, const T& PassData, uint32 GroupsX, uint32 GroupsY = 1u, uint32 GroupsZ = 1u)
+        {
+            RHI::CmdSetPipeline(CL, GetOrCreateComputePipeline(Shader));
+            RHI::CmdDispatch(CL, MakeArgs(PassData), GroupsX, GroupsY, GroupsZ);
+        }
+
+        template<typename T>
+        void DispatchComputeIndirect(RHI::FCmdListH CL, FShaderH Shader, const T& PassData, RHI::FGPURange Arguments)
+        {
+            RHI::CmdSetPipeline(CL, GetOrCreateComputePipeline(Shader));
+            RHI::CmdDispatchIndirect(CL, MakeArgs(PassData), Arguments);
+        }
+
         // Sets the full-extent viewport + scissor for the current render area.
         static void SetViewportScissor(RHI::FCmdListH CL, const FUIntVector2& Extent);
 
@@ -998,17 +1043,8 @@ namespace Lumina
         /** What a freshly (re)allocated scene buffer holds. Undefined is the honest description of what
          *  RHI::Malloc returns -- a recycling pool hands back the previous tenant's bytes. Only pick it for
          *  a buffer that is provably rewritten in full before anything reads it. */
-        enum class EBufferInit : uint8
-        {
-            Undefined,
-            Zeroed,
-        };
-
-        // DebugName rides every reallocation, so a fault in one of these resolves to a name in the
-        // device-lost report rather than a bare address. Nothing else reads it.
-        void ResizeBufferIfNeeded(RHI::FCmdListH CL, RHI::FGPUAllocation& Buffer, uint64 NeededSize, float SlackFactor,
-                                  uint32& LowUsageCounter, bool bAllowShrink = true,
-                                  EBufferInit Init = EBufferInit::Zeroed, const char* DebugName = nullptr);
+        // Grows to the buffer's policy, and shrinks only while both the policy and the caller allow it.
+        void ReserveBuffer(RHI::FCmdListH CL, FSceneBuffer& Buffer, uint64 NeededBytes, bool bAllowShrink = true);
 
         // Freed when this slot's previous GPU work has completed.
         void DeferFree(const RHI::FGPUAllocation& Allocation);
@@ -1043,24 +1079,15 @@ namespace Lumina
         };
         FFrozenCull FrozenCull;
         
-        RHI::FGPUAllocation                                        PreSkinnedVerticesBuffer;
-        uint32                                              PreSkinnedVerticesLowUsage = 0;
+        FSceneBuffer PreSkinnedVerticesBuffer { "Cull.PreSkinnedVertices", 1.2f };
 
-        TArray<uint32,       RHI::kFramesInFlight>          InstanceBufferLowUsage = {};
-        TArray<uint64,       RHI::kFramesInFlight>          InstanceBufferSerial = {};
-        TArray<uint32, RHI::kFramesInFlight>                RenderBucketRingLowUsage = {};
-        TArray<uint32, RHI::kFramesInFlight>                MeshletDrawListRingLowUsage = {};
-        TArray<uint32, RHI::kFramesInFlight>                MeshDrawArgsRingLowUsage = {};
-        TArray<uint32, RHI::kFramesInFlight>                InstanceViewRangeRingLowUsage = {};
-        TArray<uint32, RHI::kFramesInFlight>                MeshletBlockRingLowUsage = {};
         // Sharing one buffer would clear the flags the late dispatch still needs to read.
-        TArray<RHI::FGPUAllocation, 2>                            InstanceVisibilityBuffers = {};
-        TArray<uint32, 2>                                  InstanceVisibilityLowUsage = {};
+        TArray<FSceneBuffer, 2> InstanceVisibilityBuffers = MakeSceneRing<2>("Retained.InstanceVisibility", 1.5f, EBufferInit::Zeroed);
         uint32                                             InstanceVisibilityCapacity = 0;
         uint8                                              InstanceVisibilityWriteIndex = 0;
+        // Stamped by the late cull; starts past zero so a never-written slot can never read as visible.
+        uint32                                             InstanceVisibilityTag = 1;
         uint32                                             LastStaleValidationGeneration = 0;
-        TArray<uint32, RHI::kFramesInFlight>                MaterialClassifyRingLowUsage = {};
-        TArray<uint32, RHI::kFramesInFlight>                MaterialPixelListRingLowUsage = {};
         TArray<FSceneImage, (int)ENamedImage::Num>          NamedImages = {};
 
         /** Reconcile cached sample count with the world setting; reallocates every view's MS images when it changes. */
@@ -1109,6 +1136,14 @@ namespace Lumina
         uint32                                  ProbeBakeViewSize  = 0;
         TAtomic<uint32>                         CompletedProbeBakes{0};
         bool                                    bCapturingProbe       = false;
+
+        // The first shadow pass to open each atlas this frame clears it through LoadOp; the rest load.
+        bool                                    bLocalAtlasClearedThisFrame = false;
+        bool                                    bCascadeClearedThisFrame    = false;
+
+        // Clear on the first call per frame, Load after; ResetPass_Render rearms both.
+        RHI::ELoadOp TakeLocalAtlasLoadOp();
+        RHI::ELoadOp TakeCascadeLoadOp();
 
         TVector<FGPUReflectionProbe>            LastExtractedProbes;
         TVector<FReflectionProbeCapture>        LastExtractedCaptures;
@@ -1178,67 +1213,55 @@ namespace Lumina
         uint32                                              NumLiveShadows = 0;
         uint64                                              StreamingFeedbackFrame = 0;
         
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          RenderBucketRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          MeshletDrawListRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          MeshDrawArgsRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          SpdCounterRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          LuminanceHistogramRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          MeshletBlockRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          BlockDispatchArgsRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          SkinWorkBaseRing = {};
-        TArray<uint32,       RHI::kFramesInFlight>                          SkinWorkBaseLowUsage = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          SkinDispatchArgsRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          MeshletCullDispatchArgsRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          InstanceViewRangeRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          TotalsRing = {};
+        TArray<FSceneBuffer, RHI::kFramesInFlight> RenderBucketRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.RenderBuckets", 1.5f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> MeshletDrawListRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.MeshletDrawList", kSceneBufferGrowth);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> MeshDrawArgsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.MeshDrawArgs", 1.2f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> FrameScratchRing = MakeSceneRing<RHI::kFramesInFlight>("Frame.Scratch", 1.5f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> MeshletBlockRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.MeshletBlocks", 1.2f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> BlockDispatchArgsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.BlockDispatchArgs", 1.0f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> SkinWorkBaseRing = MakeSceneRing<RHI::kFramesInFlight>("Skinning.WorkBase", 1.5f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> SkinDispatchArgsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.SkinDispatchArgs", 1.0f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> MeshletCullDispatchArgsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.MeshletCullDispatchArgs", 1.0f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> InstanceViewRangeRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.InstanceViewRanges", 1.25f);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> TotalsRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.Totals", 1.0f);
         TArray<bool, RHI::kFramesInFlight>                                  TotalsZeroed = {};
 
         RHI::FGPUAllocation GetTotals() const { return TotalsRing[CurrentFrameSlot]; }
 
-        RHI::FGPUAllocation                                        RetainedCullEntryBuffer;
-        RHI::FGPUAllocation                                        RetainedTransformBuffer;
-        RHI::FGPUAllocation                                        RetainedStaticBuffer;
-        RHI::FGPUAllocation                                        SurfaceDescBuffer;
-        RHI::FGPUAllocation                                        BoneArenaBuffer;
-        uint32                                              BoneArenaLowUsage = 0;
+        FSceneBuffer RetainedCullEntryBuffer { "Retained.CullEntries", 1.5f, EBufferInit::Zeroed };
+        FSceneBuffer RetainedTransformBuffer { "Retained.Transforms", 1.5f, EBufferInit::Zeroed };
+        FSceneBuffer RetainedStaticBuffer { "Retained.Static", 1.5f, EBufferInit::Zeroed };
+        FSceneBuffer SurfaceDescBuffer { "Retained.SurfaceDescs", 1.5f, EBufferInit::Zeroed };
+        FSceneBuffer BoneArenaBuffer { "Skinning.BoneArena", 1.5f };
         // Snapshots taken before each frame's incremental uploads land, so motion vectors have a past.
         RHI::FGPUAllocation                                        PrevBoneArenaBuffer;
         RHI::FGPUAllocation                                        PrevRetainedTransformBuffer;
         bool                                                bPrevMotionStateValid = false;
         void SnapshotMotionState(RHI::FCmdListH CL);
-        RHI::FGPUAllocation                                        SkinnedFrameDataBuffer;
-        uint32                                              SkinnedFrameDataLowUsage = 0;
-        RHI::FGPUAllocation                                        SkinnedSlotListBuffer;
-        uint32                                              SkinnedSlotListLowUsage = 0;
+        FSceneBuffer SkinnedFrameDataBuffer { "Skinning.FrameData", 1.25f };
+        FSceneBuffer SkinnedSlotListBuffer { "Skinning.SlotList", 1.5f };
         TVector<uint32>                                     SkinnedUploadScratch;
         TVector<FUIntVector2>                               SkinnedRunScratch;
         uint32                                              CurrentSkinnedFrameTag = 0;
         // Per-frame posed meshlet spheres, so the cull can reject skinned geometry per meshlet.
-        RHI::FGPUAllocation                                        SkinnedMeshletBoundsBuffer;
-        uint32                                              SkinnedMeshletBoundsLowUsage = 0;
+        FSceneBuffer SkinnedMeshletBoundsBuffer { "Skinning.MeshletBounds", 1.25f };
         // Same index space and same base as the bounds arena, so the two are sized together.
-        RHI::FGPUAllocation                                        SkinnedMeshletConeBuffer;
-        uint32                                              SkinnedMeshletConeLowUsage = 0;
+        FSceneBuffer SkinnedMeshletConeBuffer { "Skinning.MeshletCones", 1.25f };
         uint32                                              SkinnedMeshletBoundsCapacity = 0;
         // Longest per-slot meshlet range, which is the x extent of the bounds dispatch.
         uint32                                              SkinnedBoundsMaxRange = 0;
         // Slots the retained static buffer actually holds, which bounds the header lookup in that pass.
         uint32                                              RetainedStaticCapacity = 0;
-        uint32                                              RetainedCullEntryLowUsage = 0;
-        uint32                                              RetainedTransformLowUsage = 0;
-        uint32                                              RetainedStaticLowUsage = 0;
-        uint32                                              SurfaceDescLowUsage = 0;
         uint32                                              UploadedSurfaceDescs = 0;
 
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>          VisibleInstanceRing = {};
-        TArray<uint32,       RHI::kFramesInFlight>          VisibleInstanceLowUsage = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>          CullCounterRing = {};
+        TArray<FSceneBuffer, RHI::kFramesInFlight> VisibleInstanceRing = MakeSceneRing<RHI::kFramesInFlight>("Cull.VisibleInstances", kSceneBufferGrowth);
+
 
         // (base, count) per (skinned instance, view) for the CPU-fed head of the visible buffer, which
         // CullInstances never claims and therefore never writes a range for.
 
         RHI::FGPUAllocation GetVisibleInstances()  const { return VisibleInstanceRing[CurrentFrameSlot]; }
-        RHI::FGPUAllocation GetCullCounters()      const { return CullCounterRing[CurrentFrameSlot]; }
+
 
         // Sends only the arena slices this frame's gather wrote, coalesced. Must run before anything reads
         // Bones() -- the skinning dispatch and the in-draw skinning fallback both do.
@@ -1269,6 +1292,13 @@ namespace Lumina
 
         // Must match HISTOGRAM_BINS in LuminanceHistogram.slang and its TILE_DIM^2 thread count.
         static constexpr uint32                             kLuminanceHistogramBins = 256;
+
+        // Frame scratch layout, in bytes. Grass cursors are last because their count is per frame.
+        static constexpr uint64                             kScratchCullCountersOffset = 0;
+        static constexpr uint64                             kScratchSpdCountersOffset  = 16;
+        static constexpr uint32                             kScratchSpdCounterCount    = 2;
+        static constexpr uint64                             kScratchHistogramOffset    = 32;
+        static constexpr uint64                             kScratchGrassCursorsOffset = 32 + sizeof(uint32) * 256;
 
         static constexpr uint32                             kAerialLUTSize   = 32;
         static constexpr uint32                             kAerialLUTSlices = 32;
@@ -1320,8 +1350,8 @@ namespace Lumina
         uint32                                              MeshletDrawTagCounter = 0;
         uint32                                              FrameVisibleInstanceCapacity = 0;
         void   UpdateMeshletBoundFeedback(uint8 Slot);
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          MaterialClassifyRing = {};
-        TArray<RHI::FGPUAllocation, RHI::kFramesInFlight>                          MaterialPixelListRing = {};
+        TArray<FSceneBuffer, RHI::kFramesInFlight> MaterialClassifyRing = MakeSceneRing<RHI::kFramesInFlight>("Material.ClassifyBlock", 1.0f, EBufferInit::Undefined, /*bAllowShrink*/ false);
+        TArray<FSceneBuffer, RHI::kFramesInFlight> MaterialPixelListRing = MakeSceneRing<RHI::kFramesInFlight>("Material.PixelList", 1.2f);
         
         uint8                                                           CurrentFrameSlot = 0;
 
@@ -1332,6 +1362,17 @@ namespace Lumina
         // One scatter target per (terrain, species slot). Keyed by entity; the vector is indexed by the
         // species' position in the extract, which is stable for a given compiled material.
         THashMap<ECS::FEntity, TVector<FGrassGPUState>> GrassGPUStates;
+
+        // One per species scattered this frame, drained by the batched retire that follows the scatters.
+        struct FGrassRetireItem
+        {
+            uint32              SlotBase = 0;
+            uint32              Capacity = 0;
+            RHI::FGPURange      Cursor;
+            RHI::FGPUAllocation PrevCursor;
+        };
+        TVector<FGrassRetireItem>                       GrassRetireScratch;
+        uint32                                          GrassCursorCursor = 0;
         
         THashMap<ECS::FEntity, TVector<FParticleGPUState>> ParticleGPUStates;
 
@@ -1436,6 +1477,15 @@ namespace Lumina
         };
         mutable TArray<FPickerReadbackSlot,     PickerReadbackRingSize> PickerReadbackRing;
         uint64                                  PickerReadbackFrame = 0;
+
+        // Frames that reached Submit in RenderView, so Output holds a real image rather than undefined memory.
+        uint64                                  FramesComposited = 0;
+        bool                                    bWarnedNoComposite = false;
+        bool                                    bWarnedFallbackMaterial = false;
+
+        // A resize destroys Output, and only a ticking world can repaint it. Held until Extract runs.
+        FUIntVector2                            PendingPrimarySize = FUIntVector2(0);
+        bool                                    bHasPendingPrimarySize = false;
         uint32                                  PickerReadbackWriteIndex = 0;
 
         TAtomic<uint64>                         PickerCursorPacked = 0;

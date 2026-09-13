@@ -32,12 +32,6 @@ internal sealed class EntityScriptRuntime
 
     public IReadOnlyCollection<string> TypeNames => Library.EntityScriptTypeNames;
 
-    /// <summary>The canonical current full name for a script reference, or null if it resolves to no live type.</summary>
-    public string? ResolveName(string Name)
-    {
-        return Library.ResolveScriptName(Name);
-    }
-
     /// <summary>Applies this frame's action states to a script's input bindings, raising their events. One
     /// crossing per script per frame, and only for scripts that declare a binding (callback flag) whose
     /// entity is receiving input.</summary>

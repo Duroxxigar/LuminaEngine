@@ -1,10 +1,14 @@
 ﻿#include "RuntimePCH.h"
+#include "ScriptFunctionMint.h"
 #include "ScriptStruct.h"
 #include "Memory/Construct.h"
 
 #include "Core/Math/Math.h"
 #include "Core/Object/ConstructObjectParams.h"
 #include "Core/Object/Field.h"
+#include "Core/Object/ObjectIterator.h"
+#include "Core/Object/ScriptEnum.h"
+#include "Core/Reflection/Type/PropertyRegistry.h"
 #include "Core/Object/InstancedStruct.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
@@ -93,20 +97,6 @@ namespace Lumina
             return Key;
         }
 
-        FFieldOwner OwnerOf(CStruct* Owner)
-        {
-            FFieldOwner FieldOwner;
-            FieldOwner.Emplace<CStruct*>(Owner);
-            return FieldOwner;
-        }
-
-        FFieldOwner OwnerOf(FField* Owner)
-        {
-            FFieldOwner FieldOwner;
-            FieldOwner.Emplace<FField*>(Owner);
-            return FieldOwner;
-        }
-
         void FillBaseParams(FPropertyParams& Params, EPropertyTypeFlags TypeFlags, uint32 Offset, const char* Name)
         {
             Params.Name          = Name;
@@ -123,20 +113,38 @@ namespace Lumina
             const char* Value = "";
         };
 
-        void ApplyMeta(FProperty* Property, const FScriptExportMeta* Meta, const FKindTag& Extra)
+        // Built in the arena that owns the property, since a script's keys and values are not static strings.
+        void ApplyMeta(FPropertyArena& Arena, FProperty* Property, const FScriptExportMeta* Meta, const FKindTag& Extra)
         {
+            const size_t NumFromMeta = Meta != nullptr ? Meta->Entries.size() : 0;
+            const size_t Total = NumFromMeta + (Extra.Key != nullptr ? 1 : 0);
+            if (Total == 0)
+            {
+                return;
+            }
+
+            FMetaDataPairParam* Entries = static_cast<FMetaDataPairParam*>(
+                Arena.AllocateBytes(Total * sizeof(FMetaDataPairParam), alignof(FMetaDataPairParam)));
+
+            size_t Index = 0;
             if (Meta != nullptr)
             {
                 for (const FScriptExportMetaArg& Arg : Meta->Entries)
                 {
-                    Property->Metadata.AddValue(Arg.Key.c_str(), Arg.Value.c_str());
+                    Entries[Index].NameUTF8  = Arena.CopyString(Arg.Key.ToString());
+                    Entries[Index].ValueUTF8 = Arena.CopyString(Arg.Value);
+                    ++Index;
                 }
             }
             if (Extra.Key != nullptr)
             {
-                Property->Metadata.AddValue(Extra.Key, Extra.Value);
+                Entries[Index].NameUTF8  = Extra.Key;
+                Entries[Index].ValueUTF8 = Extra.Value;
+                ++Index;
             }
-            Property->OnMetadataFinalized();
+
+            Property->SetMetadata(Entries, (uint16)Total);
+            Property->OnMetadataFinalized(Arena);
         }
 
         // Serialization only gates on NoSerialize, so dropping Editable saves the value and draws nothing.
@@ -145,6 +153,16 @@ namespace Lumina
             if (Meta.Has("ScriptHidden"))
             {
                 EnumRemoveFlags(Property->Flags, EPropertyFlags::Editable);
+            }
+        }
+
+        // The author's [Property(Flags = ...)] set. OR'd on rather than assigned, so the Editable a
+        // [Property] implies survives, and so does anything the property's own kind decided about itself.
+        void ApplyDeclaredFlags(FProperty* Property, uint32 Flags)
+        {
+            if (Flags != 0)
+            {
+                EnumAddFlags(Property->Flags, (EPropertyFlags)Flags);
             }
         }
 
@@ -162,35 +180,28 @@ namespace Lumina
             return FKindTag{};
         }
 
-        template<typename TPropertyType, EPropertyTypeFlags TypeFlags>
-        FProperty* MakeSimple(const FFieldOwner& Owner, const FName& Name, uint32 Offset)
+        // Every kind whose params add nothing beyond the base, which is what a schema can build with no
+        // kind-specific data of its own: the arithmetic kinds, plus strings and names.
+        FProperty* MakeBasic(EPropertyTypeFlags Kind, const FPropertyOwner& Owner, const FName& Name, uint32 Offset)
         {
+            const FPropertyKindOps& Ops = GetPropertyKindOps(Kind);
+            if (!Ops.IsValid() || !Ops.bBaseParamsOnly)
+            {
+                return nullptr;
+            }
+
             const FString NameStr = Name.ToString();
             FPropertyParams Params{};
-            FillBaseParams(Params, TypeFlags, Offset, NameStr.c_str());
-            return Memory::New<TPropertyType>(Owner, &Params);
+            FillBaseParams(Params, Kind, Offset, NameStr.c_str());
+            return Ops.Construct(Owner, &Params);
         }
 
-        FProperty* MakeScalar(EPropertyTypeFlags Kind, const FFieldOwner& Owner, const FName& Name, uint32 Offset)
+        FProperty* MakeScalar(EPropertyTypeFlags Kind, const FPropertyOwner& Owner, const FName& Name, uint32 Offset)
         {
-            switch (Kind)
-            {
-            case EPropertyTypeFlags::Bool:   return MakeSimple<FBoolProperty,   EPropertyTypeFlags::Bool>  (Owner, Name, Offset);
-            case EPropertyTypeFlags::Int8:   return MakeSimple<FInt8Property,   EPropertyTypeFlags::Int8>  (Owner, Name, Offset);
-            case EPropertyTypeFlags::Int16:  return MakeSimple<FInt16Property,  EPropertyTypeFlags::Int16> (Owner, Name, Offset);
-            case EPropertyTypeFlags::Int32:  return MakeSimple<FInt32Property,  EPropertyTypeFlags::Int32> (Owner, Name, Offset);
-            case EPropertyTypeFlags::Int64:  return MakeSimple<FInt64Property,  EPropertyTypeFlags::Int64> (Owner, Name, Offset);
-            case EPropertyTypeFlags::UInt8:  return MakeSimple<FUInt8Property,  EPropertyTypeFlags::UInt8> (Owner, Name, Offset);
-            case EPropertyTypeFlags::UInt16: return MakeSimple<FUInt16Property, EPropertyTypeFlags::UInt16>(Owner, Name, Offset);
-            case EPropertyTypeFlags::UInt32: return MakeSimple<FUInt32Property, EPropertyTypeFlags::UInt32>(Owner, Name, Offset);
-            case EPropertyTypeFlags::UInt64: return MakeSimple<FUInt64Property, EPropertyTypeFlags::UInt64>(Owner, Name, Offset);
-            case EPropertyTypeFlags::Float:  return MakeSimple<FFloatProperty,  EPropertyTypeFlags::Float> (Owner, Name, Offset);
-            case EPropertyTypeFlags::Double: return MakeSimple<FDoubleProperty, EPropertyTypeFlags::Double>(Owner, Name, Offset);
-            default: return nullptr;
-            }
+            return GetPropertyKindOps(Kind).bArithmetic ? MakeBasic(Kind, Owner, Name, Offset) : nullptr;
         }
 
-        FProperty* MakeStruct(const FFieldOwner& Owner, const FName& Name, uint32 Offset, CStruct* Resolved)
+        FProperty* MakeStruct(const FPropertyOwner& Owner, const FName& Name, uint32 Offset, CStruct* Resolved)
         {
             const TPendingValue<CStruct*> Pending(Resolved);
             const FString NameStr = Name.ToString();
@@ -199,10 +210,10 @@ namespace Lumina
             Params.StructFunc    = +[]() -> CStruct* { return TPendingValue<CStruct*>::Get(); };
             Params.NumMetaData   = 0;
             Params.MetaDataArray = nullptr;
-            return Memory::New<FStructProperty>(Owner, &Params);
+            return Owner.Build<FStructProperty>(&Params);
         }
 
-        FProperty* MakeInstanced(const FFieldOwner& Owner, const FName& Name, uint32 Offset, CStruct* MetaBase)
+        FProperty* MakeInstanced(const FPropertyOwner& Owner, const FName& Name, uint32 Offset, CStruct* MetaBase)
         {
             const TPendingValue<CStruct*> Pending(MetaBase);
             const FString NameStr = Name.ToString();
@@ -211,10 +222,10 @@ namespace Lumina
             Params.StructFunc    = +[]() -> CStruct* { return TPendingValue<CStruct*>::Get(); };
             Params.NumMetaData   = 0;
             Params.MetaDataArray = nullptr;
-            return Memory::New<FInstancedStructProperty>(Owner, &Params);
+            return Owner.Build<FInstancedStructProperty>(&Params);
         }
 
-        FProperty* MakeObject(const FFieldOwner& Owner, const FName& Name, uint32 Offset, CClass* TargetClass)
+        FProperty* MakeObject(const FPropertyOwner& Owner, const FName& Name, uint32 Offset, CClass* TargetClass)
         {
             const TPendingValue<CClass*> Pending(TargetClass != nullptr ? TargetClass : CObject::StaticClass());
             const FString NameStr = Name.ToString();
@@ -223,10 +234,10 @@ namespace Lumina
             Params.ClassFunc     = +[]() -> CClass* { return TPendingValue<CClass*>::Get(); };
             Params.NumMetaData   = 0;
             Params.MetaDataArray = nullptr;
-            return Memory::New<FObjectProperty>(Owner, &Params);
+            return Owner.Build<FObjectProperty>(&Params);
         }
 
-        FProperty* MakeSoftObject(const FFieldOwner& Owner, const FName& Name, uint32 Offset, CClass* TargetClass)
+        FProperty* MakeSoftObject(const FPropertyOwner& Owner, const FName& Name, uint32 Offset, CClass* TargetClass)
         {
             const TPendingValue<CClass*> Pending(TargetClass != nullptr ? TargetClass : CObject::StaticClass());
             const FString NameStr = Name.ToString();
@@ -235,13 +246,13 @@ namespace Lumina
             Params.ClassFunc     = +[]() -> CClass* { return TPendingValue<CClass*>::Get(); };
             Params.NumMetaData   = 0;
             Params.MetaDataArray = nullptr;
-            return Memory::New<FSoftObjectProperty>(Owner, &Params);
+            return Owner.Build<FSoftObjectProperty>(&Params);
         }
 
         bool ScalarSizeAlign(EPropertyTypeFlags Kind, uint32& Size, uint32& Align);
 
         // The slot is the C# underlying type's width, so a script enum lines up with the managed value.
-        FProperty* MakeEnum(const FFieldOwner& Owner, const FName& Name, uint32 Offset, CEnum* Resolved,
+        FProperty* MakeEnum(const FPropertyOwner& Owner, const FName& Name, uint32 Offset, CEnum* Resolved,
             EPropertyTypeFlags Underlying)
         {
             FEnumProperty* Property = nullptr;
@@ -253,7 +264,7 @@ namespace Lumina
                 Params.EnumFunc      = +[]() -> CEnum* { return TPendingValue<CEnum*>::Get(); };
                 Params.NumMetaData   = 0;
                 Params.MetaDataArray = nullptr;
-                Property = Memory::New<FEnumProperty>(Owner, &Params);
+                Property = Owner.Build<FEnumProperty>(&Params);
             }
 
             uint32 InnerSize = 0;
@@ -265,11 +276,11 @@ namespace Lumina
             }
 
             Property->SetElementSize(InnerSize);
-            (void)MakeScalar(Underlying, OwnerOf(static_cast<FField*>(Property)), Name, Offset);
+            (void)MakeScalar(Underlying, Owner.Inner(Property), Name, Offset);
             return Property;
         }
 
-        FProperty* MakeArray(const FFieldOwner& Owner, const FName& Name, uint32 Offset, const FVectorOps* Ops)
+        FProperty* MakeArray(const FPropertyOwner& Owner, const FName& Name, uint32 Offset, const FVectorOps* Ops)
         {
             const TPendingValue<const FVectorOps*> Pending(Ops);
             const FString NameStr = Name.ToString();
@@ -278,26 +289,13 @@ namespace Lumina
             Params.GetOpsFn      = +[]() -> const FVectorOps* { return TPendingValue<const FVectorOps*>::Get(); };
             Params.NumMetaData   = 0;
             Params.MetaDataArray = nullptr;
-            return Memory::New<FArrayProperty>(Owner, &Params);
+            return Owner.Build<FArrayProperty>(&Params);
         }
 
         bool ScalarSizeAlign(EPropertyTypeFlags Kind, uint32& Size, uint32& Align)
         {
-            switch (Kind)
-            {
-            case EPropertyTypeFlags::Bool:   Size = sizeof(bool);   Align = alignof(bool);   return true;
-            case EPropertyTypeFlags::Int8:   Size = sizeof(int8);   Align = alignof(int8);   return true;
-            case EPropertyTypeFlags::Int16:  Size = sizeof(int16);  Align = alignof(int16);  return true;
-            case EPropertyTypeFlags::Int32:  Size = sizeof(int32);  Align = alignof(int32);  return true;
-            case EPropertyTypeFlags::Int64:  Size = sizeof(int64);  Align = alignof(int64);  return true;
-            case EPropertyTypeFlags::UInt8:  Size = sizeof(uint8);  Align = alignof(uint8);  return true;
-            case EPropertyTypeFlags::UInt16: Size = sizeof(uint16); Align = alignof(uint16); return true;
-            case EPropertyTypeFlags::UInt32: Size = sizeof(uint32); Align = alignof(uint32); return true;
-            case EPropertyTypeFlags::UInt64: Size = sizeof(uint64); Align = alignof(uint64); return true;
-            case EPropertyTypeFlags::Float:  Size = sizeof(float);  Align = alignof(float);  return true;
-            case EPropertyTypeFlags::Double: Size = sizeof(double); Align = alignof(double); return true;
-            default: return false;
-            }
+            const FPropertyKindOps& Ops = GetPropertyKindOps(Kind);
+            return Ops.bArithmetic && Ops.GetFixedLayout(Size, Align);
         }
 
         SIZE_T ArraySize(const void* Vector)
@@ -427,7 +425,7 @@ namespace Lumina
 
         // ---- Script dynamic map (type-erased pairs, linear find via the key property's Identical) ----
 
-        FProperty* MakeMap(const FFieldOwner& Owner, const FName& Name, uint32 Offset, const FMapOps* Ops)
+        FProperty* MakeMap(const FPropertyOwner& Owner, const FName& Name, uint32 Offset, const FMapOps* Ops)
         {
             const TPendingValue<const FMapOps*> Pending(Ops);
             const FString NameStr = Name.ToString();
@@ -436,7 +434,7 @@ namespace Lumina
             Params.GetOpsFn      = +[]() -> const FMapOps* { return TPendingValue<const FMapOps*>::Get(); };
             Params.NumMetaData   = 0;
             Params.MetaDataArray = nullptr;
-            return Memory::New<FMapProperty>(Owner, &Params);
+            return Owner.Build<FMapProperty>(&Params);
         }
 
         SIZE_T MapSize(const void* InMap)
@@ -599,7 +597,7 @@ namespace Lumina
         }
     }
 
-    CEnum* CScriptStruct::MintEnum(const FScriptExportType& Type)
+    CScriptEnum* CScriptStruct::MintEnum(const FScriptExportType& Type)
     {
         static TAtomic<uint64> Serial{ 0 };
 
@@ -616,25 +614,31 @@ namespace Lumina
             Name.erase(0, Dot + 1);
         }
 
+        // A collision renames the engine-side enum, which is why the C# name is recorded on the type below
+        // rather than inferred back from this one.
         if (Name.empty() || FindObject<CEnum>(FName(Name.c_str())) != nullptr)
         {
             Name = "ScriptEnum_";
             Name += Format("{}", Serial.fetch_add(1)).c_str();
         }
 
-        FConstructCObjectParams Params(CEnum::StaticClass());
+        FConstructCObjectParams Params(CScriptEnum::StaticClass());
         Params.Name    = FName(Name);
         Params.Flags   = OF_Transient;
         Params.Package = CPackage::GetTransientPackage();
         Params.Guid    = FGuid::New();
 
-        TObjectPtr<CEnum> Enum = static_cast<CEnum*>(StaticAllocateObject(Params));
+        TObjectPtr<CScriptEnum> Enum = static_cast<CScriptEnum*>(StaticAllocateObject(Params));
         CObjectForceRegistration(Enum.Get());
+
+        Enum->ScriptTypeName  = Type.EnumName;
+        Enum->UnderlyingType  = Type.EnumUnderlying;
+
         for (const FScriptEnumEntry& Entry : Type.EnumEntries)
         {
             Enum->AddEnum(Entry.Name, (uint64)Entry.Value);
         }
-        CEnum* Raw = Enum.Get();
+        CScriptEnum* Raw = Enum.Get();
         MintedEnums.push_back(std::move(Enum));
         EnumsByKey[Key] = Raw;
         return Raw;
@@ -794,134 +798,167 @@ namespace Lumina
     }
 
     // See the declaration for why this exists rather than one chain per caller.
-    struct CScriptStruct::FKindLayout
+    // Per-kind resolve/create, registered rather than branched. The construction table in Core answers "how
+    // is this kind built"; this answers the question a SCHEMA asks first, which Core cannot: what does this
+    // node refer to, and does that need minting before a property can point at it.
+    struct CScriptStruct::FKindResolver
     {
-        uint32         Size   = 0;
-        uint32         Align  = 1;
-        CStruct*       Native = nullptr;   // a Struct naming a native type
-        CScriptStruct* Script = nullptr;   // a minted sub-struct, or an InstancedStruct's candidate base
+        bool (*ResolveLayout)(CScriptStruct&, const FScriptExportType&, const FName&, FKindLayout&) = nullptr;
+        FProperty* (*Create)(CScriptStruct&, const FPropertyOwner&, const FName&, uint32,
+                             const FScriptExportType&, CStruct*) = nullptr;
     };
 
-    bool CScriptStruct::ResolveKindLayout(const FScriptExportType& Type, const FName& DiagName, FKindLayout& Out)
+    // Nested, so a resolver reaches the minting the enclosing type keeps private without widening it.
+    struct CScriptStruct::FKindResolvers
     {
-        // A statement about SIZE only, since MakeForKind still builds a real enum property.
-        uint32 ScalarSize = 0;
-        uint32 ScalarAlign = 0;
+        using FKindLayout = CScriptStruct::FKindLayout;
 
         // An enum occupies its underlying type's width, which is what the managed value is.
-        if (Type.Kind == EPropertyTypeFlags::Enum)
+        static bool ResolveEnumLayout(CScriptStruct&, const FScriptExportType& Type, const FName&, FKindLayout& Out)
         {
-            if (!ScalarSizeAlign(Type.EnumUnderlying, ScalarSize, ScalarAlign))
+            if (!ScalarSizeAlign(Type.EnumUnderlying, Out.Size, Out.Align))
             {
-                ScalarSize = sizeof(int64);
-                ScalarAlign = alignof(int64);
+                Out.Size  = sizeof(int64);
+                Out.Align = alignof(int64);
             }
-            Out.Size = ScalarSize;
-            Out.Align = ScalarAlign;
             return true;
         }
 
-        if (ScalarSizeAlign(Type.Kind, ScalarSize, ScalarAlign))
+        // Every kind whose footprint is a fact the construction table already states.
+        static bool ResolveFixedLayout(CScriptStruct&, const FScriptExportType& Type, const FName&, FKindLayout& Out)
         {
-            Out.Size = ScalarSize;
-            Out.Align = ScalarAlign;
-            return true;
+            return GetPropertyKindOps(Type.Kind).GetFixedLayout(Out.Size, Out.Align);
         }
 
-        switch (Type.Kind)
+        static bool ResolveStructLayout(CScriptStruct& Owner, const FScriptExportType& Type, const FName& DiagName, FKindLayout& Out)
         {
-        case EPropertyTypeFlags::String:
-            Out.Size = sizeof(FString);             Out.Align = alignof(FString);             return true;
-        case EPropertyTypeFlags::Name:
-            Out.Size = sizeof(FName);               Out.Align = alignof(FName);               return true;
-        case EPropertyTypeFlags::SoftObject:
-            Out.Size = sizeof(FSoftObjectPath);     Out.Align = alignof(FSoftObjectPath);     return true;
-        case EPropertyTypeFlags::Object:
-            Out.Size = sizeof(TObjectPtr<CObject>); Out.Align = alignof(TObjectPtr<CObject>); return true;
-        default:
-            break;
-        }
-
-        if (Type.Kind == EPropertyTypeFlags::Struct && !Type.NativeName.IsNone())
-        {
-            Out.Native = FindObject<CStruct>(Type.NativeName);
-            if (Out.Native == nullptr)
+            if (!Type.NativeName.IsNone())
             {
-                LOG_WARN("Script property '{}' dropped: native struct '{}' not found.",
-                    DiagName.ToString(), Type.NativeName.ToString());
-                return false;
+                Out.Native = FindObject<CStruct>(Type.NativeName);
+                if (Out.Native == nullptr)
+                {
+                    LOG_WARN("Script property '{}' dropped: native struct '{}' not found.",
+                        DiagName.ToString(), Type.NativeName.ToString());
+                    return false;
+                }
+                Out.Size  = Out.Native->GetAlignedSize();
+                Out.Align = Out.Native->GetAlignment();
+                return true;
             }
-            Out.Size = Out.Native->GetAlignedSize();
-            Out.Align = Out.Native->GetAlignment();
-            return true;
-        }
-        if (Type.Kind == EPropertyTypeFlags::Struct)
-        {
-            Out.Script = MintSubStruct(Type);
+
+            Out.Script = Owner.MintSubStruct(Type);
             if (Out.Script == nullptr)
             {
                 return false;
             }
-            Out.Size = Out.Script->GetAlignedSize();
+            Out.Size  = Out.Script->GetAlignedSize();
             Out.Align = Out.Script->GetAlignment();
             return true;
         }
-        if (Type.Kind == EPropertyTypeFlags::InstancedStruct)
+
+        static bool ResolveInstancedLayout(CScriptStruct& Owner, const FScriptExportType& Type, const FName&, FKindLayout& Out)
         {
             // The base is what the instanced-struct property takes as its meta-base, hence carrying it out.
-            CScriptStruct* Base = MintInstanceBase(Type.BaseName);
+            CScriptStruct* Base = Owner.MintInstanceBase(Type.BaseName);
             if (Base == nullptr)
             {
                 return false;
             }
             for (const FScriptExportInstanceCandidate& Candidate : Type.Candidates)
             {
-                MintInstanceCandidate(Candidate, Base);
+                Owner.MintInstanceCandidate(Candidate, Base);
             }
             Out.Script = Base;
-            Out.Size = sizeof(FInstancedStruct);
-            Out.Align = alignof(FInstancedStruct);
+            Out.Size   = sizeof(FInstancedStruct);
+            Out.Align  = alignof(FInstancedStruct);
             return true;
         }
 
-        // A container reaching here was asked for as an ELEMENT, which native has no property for.
-        return false;
+        static FProperty* CreateBasicProperty(CScriptStruct&, const FPropertyOwner& Owner, const FName& Name,
+            uint32 Offset, const FScriptExportType& Type, CStruct*)
+        {
+            return MakeBasic(Type.Kind, Owner, Name, Offset);
+        }
+
+        static FProperty* CreateEnumProperty(CScriptStruct& Self, const FPropertyOwner& Owner, const FName& Name,
+            uint32 Offset, const FScriptExportType& Type, CStruct*)
+        {
+            // An enum property wraps a numeric inner rather than being the bare scalar its size suggests.
+            return MakeEnum(Owner, Name, Offset, Self.MintEnum(Type), Type.EnumUnderlying);
+        }
+
+        static FProperty* CreateObjectProperty(CScriptStruct&, const FPropertyOwner& Owner, const FName& Name,
+            uint32 Offset, const FScriptExportType& Type, CStruct*)
+        {
+            return MakeObject(Owner, Name, Offset, FindObject<CClass>(Type.TargetClass));
+        }
+
+        static FProperty* CreateSoftObjectProperty(CScriptStruct&, const FPropertyOwner& Owner, const FName& Name,
+            uint32 Offset, const FScriptExportType& Type, CStruct*)
+        {
+            return MakeSoftObject(Owner, Name, Offset, FindObject<CClass>(Type.TargetClass));
+        }
+
+        static FProperty* CreateStructProperty(CScriptStruct&, const FPropertyOwner& Owner, const FName& Name,
+            uint32 Offset, const FScriptExportType&, CStruct* Resolved)
+        {
+            return Resolved != nullptr ? MakeStruct(Owner, Name, Offset, Resolved) : nullptr;
+        }
+
+        static FProperty* CreateInstancedProperty(CScriptStruct&, const FPropertyOwner& Owner, const FName& Name,
+            uint32 Offset, const FScriptExportType&, CStruct* Resolved)
+        {
+            return MakeInstanced(Owner, Name, Offset, Resolved);
+        }
+    };
+
+    const CScriptStruct::FKindResolver* CScriptStruct::FindKindResolver(EPropertyTypeFlags Kind)
+    {
+        static const auto Table = []
+        {
+            TVector<FKindResolver> Entries((size_t)EPropertyTypeFlags::Count);
+
+            for (size_t Index = 0; Index < Entries.size(); ++Index)
+            {
+                if (GetPropertyKindOps((EPropertyTypeFlags)Index).bArithmetic)
+                {
+                    Entries[Index] = { &FKindResolvers::ResolveFixedLayout, &FKindResolvers::CreateBasicProperty };
+                }
+            }
+
+            Entries[(size_t)EPropertyTypeFlags::String]     = { &FKindResolvers::ResolveFixedLayout, &FKindResolvers::CreateBasicProperty };
+            Entries[(size_t)EPropertyTypeFlags::Name]       = { &FKindResolvers::ResolveFixedLayout, &FKindResolvers::CreateBasicProperty };
+            Entries[(size_t)EPropertyTypeFlags::Object]     = { &FKindResolvers::ResolveFixedLayout, &FKindResolvers::CreateObjectProperty };
+            Entries[(size_t)EPropertyTypeFlags::SoftObject] = { &FKindResolvers::ResolveFixedLayout, &FKindResolvers::CreateSoftObjectProperty };
+            Entries[(size_t)EPropertyTypeFlags::Enum]       = { &FKindResolvers::ResolveEnumLayout, &FKindResolvers::CreateEnumProperty };
+            Entries[(size_t)EPropertyTypeFlags::Struct]     = { &FKindResolvers::ResolveStructLayout, &FKindResolvers::CreateStructProperty };
+            Entries[(size_t)EPropertyTypeFlags::InstancedStruct] = { &FKindResolvers::ResolveInstancedLayout, &FKindResolvers::CreateInstancedProperty };
+
+            // A container is only ever a field, never an element, so it registers no resolver at all: the
+            // absence is what refuses one as a container element.
+            return Entries;
+        }();
+
+        const size_t Index = (size_t)Kind;
+        if (Index >= Table.size() || Table[Index].ResolveLayout == nullptr)
+        {
+            return nullptr;
+        }
+        return &Table[Index];
     }
 
-    FProperty* CScriptStruct::MakeForKind(const FFieldOwner& Owner, const FName& FieldName, uint32 Offset,
+    bool CScriptStruct::ResolveKindLayout(const FScriptExportType& Type, const FName& DiagName, FKindLayout& Out)
+    {
+        // No resolver means the kind cannot be a value here, which is how a container element is refused.
+        const FKindResolver* Resolver = FindKindResolver(Type.Kind);
+        return Resolver != nullptr && Resolver->ResolveLayout(*this, Type, DiagName, Out);
+    }
+
+    FProperty* CScriptStruct::MakeForKind(const FPropertyOwner& Owner, const FName& FieldName, uint32 Offset,
         const FScriptExportType& Type, CStruct* Resolved)
     {
-        // An enum property wraps a numeric inner rather than being the bare scalar its size suggests.
-        if (Type.Kind == EPropertyTypeFlags::Enum)
-        {
-            return MakeEnum(Owner, FieldName, Offset, MintEnum(Type), Type.EnumUnderlying);
-        }
-
-        uint32 ScalarSize = 0;
-        uint32 ScalarAlign = 0;
-        if (ScalarSizeAlign(Type.Kind, ScalarSize, ScalarAlign))
-        {
-            return MakeScalar(Type.Kind, Owner, FieldName, Offset);
-        }
-
-        switch (Type.Kind)
-        {
-        case EPropertyTypeFlags::String:
-            return MakeSimple<FStringProperty, EPropertyTypeFlags::String>(Owner, FieldName, Offset);
-        case EPropertyTypeFlags::Name:
-            return MakeSimple<FNameProperty, EPropertyTypeFlags::Name>(Owner, FieldName, Offset);
-        case EPropertyTypeFlags::SoftObject:
-            return MakeSoftObject(Owner, FieldName, Offset, FindObject<CClass>(Type.TargetClass));
-        case EPropertyTypeFlags::Object:
-            return MakeObject(Owner, FieldName, Offset, FindObject<CClass>(Type.TargetClass));
-        case EPropertyTypeFlags::InstancedStruct:
-            return MakeInstanced(Owner, FieldName, Offset, Resolved);
-        default:
-            break;
-        }
-
-        // Whatever is left is a struct, native or minted, and ResolveKindLayout already found which.
-        return Resolved != nullptr ? MakeStruct(Owner, FieldName, Offset, Resolved) : nullptr;
+        const FKindResolver* Resolver = FindKindResolver(Type.Kind);
+        return Resolver != nullptr ? Resolver->Create(*this, Owner, FieldName, Offset, Type, Resolved) : nullptr;
     }
 
     bool CScriptStruct::ResolveElement(const FScriptExportType& Type, const FName& DiagName, FScriptArrayElementDesc& Out)
@@ -940,7 +977,7 @@ namespace Lumina
 
     FProperty* CScriptStruct::CreateElement(void* ArrayOwner, const FScriptExportType& Type, FScriptArrayElementDesc& Desc)
     {
-        FFieldOwner Owner = OwnerOf(static_cast<FField*>(static_cast<FProperty*>(ArrayOwner)));
+        const FPropertyOwner Owner = FPropertyOwner{ &GetPropertyArena() }.Inner(static_cast<FProperty*>(ArrayOwner));
         CStruct* Resolved = Desc.NativeStruct != nullptr ? Desc.NativeStruct
             : const_cast<CScriptStruct*>(Desc.ScriptStruct);
 
@@ -954,8 +991,7 @@ namespace Lumina
         const FKindTag Tag = KindTag(Type);
         if (Tag.Key != nullptr)
         {
-            Property->Metadata.AddValue(Tag.Key, Tag.Value);
-            Property->OnMetadataFinalized();
+            ApplyMeta(GetPropertyArena(), Property, nullptr, Tag);
         }
         return Property;
     }
@@ -1018,18 +1054,21 @@ namespace Lumina
         return true;
     }
 
-    FProperty* CScriptStruct::CreateProperty(CStruct* Target, const FFieldPlan& Plan, uint32 Offset)
+    FProperty* CScriptStruct::CreateProperty(CStruct* Target, const FFieldPlan& Plan, uint32 Offset, TVector<FProperty*>* Collector)
     {
         const FScriptExportField& Field = *Plan.Field;
         const FScriptExportType& Type = *Field.Type;
-        FFieldOwner Owner = OwnerOf(Target);
+
+        // Either the target owns the property as a member or the collector takes it as a parameter, never both.
+        const FPropertyOwner Owner{ &GetPropertyArena(), Collector != nullptr ? nullptr : Target, nullptr, Collector };
 
         if (Plan.bArray)
         {
             FProperty* Array = MakeArray(Owner, Field.Name, Offset, &Plan.ArrayDesc->Ops);
             FProperty* Inner = CreateElement(Array, *Type.ElementType, *Plan.ArrayDesc);
             Plan.ArrayDesc->Inner = Inner;
-            ApplyMeta(Array, &Field.Meta, FKindTag{});
+            ApplyMeta(GetPropertyArena(), Array, &Field.Meta, FKindTag{});
+            ApplyDeclaredFlags(Array, Field.Flags);
             ApplyHidden(Array, Field.Meta);
             return Array;
         }
@@ -1041,7 +1080,8 @@ namespace Lumina
             FProperty* ValueInner = CreateElement(Map, *Type.ValueType, Plan.MapDesc->Value);
             Plan.MapDesc->Key.Inner   = KeyInner;
             Plan.MapDesc->Value.Inner = ValueInner;
-            ApplyMeta(Map, &Field.Meta, FKindTag{});
+            ApplyMeta(GetPropertyArena(), Map, &Field.Meta, FKindTag{});
+            ApplyDeclaredFlags(Map, Field.Flags);
             ApplyHidden(Map, Field.Meta);
             return Map;
         }
@@ -1055,12 +1095,13 @@ namespace Lumina
         }
 
         // The tag is what makes the editor draw a picker instead of the raw value.
-        ApplyMeta(Property, &Field.Meta, KindTag(Type));
+        ApplyMeta(GetPropertyArena(), Property, &Field.Meta, KindTag(Type));
+            ApplyDeclaredFlags(Property, Field.Flags);
         ApplyHidden(Property, Field.Meta);
         return Property;
     }
 
-    CScriptStruct::FEmittedLayout CScriptStruct::EmitLayoutInto(CStruct* Target, uint32 BaseOffset, const FScriptExportSchema& Schema)
+    CScriptStruct::FEmittedLayout CScriptStruct::EmitLayoutInto(CStruct* Target, uint32 BaseOffset, const FScriptExportSchema& Schema, TVector<FProperty*>* Collector)
     {
         FEmittedLayout Result;
         Result.EndOffset = BaseOffset;
@@ -1070,6 +1111,9 @@ namespace Lumina
         {
             return Result;
         }
+
+        // Fields plus their container inners, so a schema's whole property set lands in one block.
+        GetPropertyArena().Reserve(Schema.Fields.size() * 3 * 192);
 
         TVector<FFieldPlan> Plans;
         Plans.reserve(Schema.Fields.size());
@@ -1095,7 +1139,7 @@ namespace Lumina
                 break;
             }
 
-            FProperty* Property = CreateProperty(Target, Plan, Offset);
+            FProperty* Property = CreateProperty(Target, Plan, Offset, Collector);
             if (Property == nullptr)
             {
                 continue;
@@ -1150,7 +1194,7 @@ namespace Lumina
             return;
         }
         Memory::Memzero(Buffer, Size);
-        for (FProperty* Property = LinkedProperty; Property != nullptr; Property = static_cast<FProperty*>(Property->Next))
+        for (FProperty* Property : GetProperties())
         {
             if (Property->OwnsStorage())
             {
@@ -1165,7 +1209,7 @@ namespace Lumina
         {
             return;
         }
-        for (FProperty* Property = LinkedProperty; Property != nullptr; Property = static_cast<FProperty*>(Property->Next))
+        for (FProperty* Property : GetProperties())
         {
             if (Property->OwnsStorage())
             {
@@ -1180,13 +1224,11 @@ namespace Lumina
         {
             return;
         }
-        FProperty* Property = LinkedProperty;
-        while (Property != nullptr)
+        for (FProperty* Property : GetProperties())
         {
             Property->CopyCompleteValue(
                 static_cast<uint8*>(Dst) + Property->Offset,
                 static_cast<const uint8*>(Src) + Property->Offset);
-            Property = static_cast<FProperty*>(Property->Next);
         }
     }
 
@@ -1196,7 +1238,7 @@ namespace Lumina
         {
             return;
         }
-        for (FProperty* Property = LinkedProperty; Property != nullptr; Property = static_cast<FProperty*>(Property->Next))
+        for (FProperty* Property : GetProperties())
         {
             if (Property->HasMetadata("SkipHotReload"))
             {
@@ -1222,14 +1264,9 @@ namespace Lumina
             Defaults = nullptr;
         }
 
-        FProperty* Property = LinkedProperty;
-        while (Property != nullptr)
-        {
-            FProperty* Next = static_cast<FProperty*>(Property->Next);
-            Memory::Delete(Property);
-            Property = Next;
-        }
-        LinkedProperty = nullptr;
+        // Every property this record emitted lives in its arena, whichever type they were attached to.
+        GetPropertyArena().Reset();
+        Unlink();
 
         for (FScriptArrayElementDesc* Desc : ElementDescs)
         {
@@ -1327,110 +1364,74 @@ namespace Lumina::Scripting
         }
     }
 
-    const CScriptStruct* FScriptStructRegistry::GetOrBuild(FStringView ScriptClass)
-    {
-        if (ScriptClass.empty())
-        {
-            return nullptr;
-        }
-        const FName Key(ScriptClass);
-        if (auto It = Entries.find(Key); It != Entries.end())
-        {
-            return It->second.Get();
-        }
-
-        FScriptExportSchema Schema;
-        TVector<FScriptPropertyEntry> Defaults;
-        if (!DotNet::GatherScriptSchema(ScriptClass, Schema, Defaults) || !Schema.IsValid())
-        {
-            return nullptr;
-        }
-
-        static TAtomic<uint64> Serial{ 0 };
-        FString Name = "Script_";
-        Name += Format("{}", Serial.fetch_add(1)).c_str();
-
-        FConstructCObjectParams Params(CScriptStruct::StaticClass());
-        Params.Name    = FName(Name);
-        Params.Flags   = OF_Transient;
-        Params.Package = CPackage::GetTransientPackage();
-        Params.Guid    = FGuid::New();
-
-        TObjectPtr<CScriptStruct> Struct = static_cast<CScriptStruct*>(StaticAllocateObject(Params));
-        CObjectForceRegistration(Struct.Get());
-        if (!Struct->BuildFromSchema(Schema, &Defaults))
-        {
-            return nullptr;
-        }
-
-        auto Inserted = Entries.insert(Lumina::Containers::MakePair(Key, std::move(Struct)));
-        return Inserted.first->second.Get();
-    }
-
-    void FScriptStructRegistry::Clear()
-    {
-        Entries.clear();
-    }
-
     namespace
     {
-        // A minted class is reused by name across reloads, so this must outlive its live instances.
-        struct FScriptClassLayout
+        // Metadata and defaults are compared apart from shape, so each gets its own remedy on a reload.
+        bool FieldMetadataMatches(const FScriptExportMeta& A, const FScriptExportMeta& B)
         {
-            TObjectPtr<CScriptStruct> Record;
-            TVector<FProperty*>       Properties;     ///< the appended block, owned alongside the record
-            uint32                    ShimSize  = 0;   ///< Target->Size before the block was appended
-            uint32                    ShimAlign = 1;
-            FString                   Signature;      ///< what the block was built from; see ScriptClassLayoutMatches
-            uint64                    RetiredIn = 0;   ///< generation this was superseded in; 0 while live
-        };
-
-        THashMap<CClass*, FScriptClassLayout>& GClassLayouts()
-        {
-            static THashMap<CClass*, FScriptClassLayout> Map;
-            return Map;
-        }
-
-        // Counts reloads, so a superseded layout can be freed once a whole one has passed.
-        uint64& GScriptTypeGeneration()
-        {
-            static uint64 Generation = 0;
-            return Generation;
-        }
-
-        // One superseded layout per class, so a pointer that outlived the rebuild reads stale rather than freed.
-        THashMap<CClass*, FScriptClassLayout>& GRetiredLayouts()
-        {
-            static THashMap<CClass*, FScriptClassLayout> Map;
-            return Map;
-        }
-
-        // The properties point into the record's element descriptions, so the pair has to die together.
-        void FreeScriptClassLayout(FScriptClassLayout& Layout)
-        {
-            for (FProperty* Property : Layout.Properties)
+            if (A.Entries.size() != B.Entries.size())
             {
-                // Container inners are held by the outer property, so deleting it takes them with it.
-                Memory::Delete(Property);
+                return false;
             }
-            Layout.Properties.clear();
-            Layout.Record = nullptr;
+            for (const FScriptExportMetaArg& Entry : A.Entries)
+            {
+                const FString* Other = B.Find(Entry.Key);
+                if (Other == nullptr || *Other != Entry.Value)
+                {
+                    return false;
+                }
+            }
+            return true;
         }
 
-        // Target is only ever a key here, since a caller may already have destroyed the class.
-        void DiscardRetiredLayout(CClass* Target)
+        bool ValuesMatch(const FScriptPropertyValue& A, const FScriptPropertyValue& B)
         {
-            if (auto It = GRetiredLayouts().find(Target); It != GRetiredLayouts().end())
+            if (A.Kind != B.Kind)
             {
-                FreeScriptClassLayout(It->second);
-                GRetiredLayouts().erase(It);
+                return false;
             }
+            if (A.AsBool != B.AsBool || A.AsInt != B.AsInt || A.AsString != B.AsString)
+            {
+                return false;
+            }
+            // Bit-identical rather than near, since the question is "did the author retype it".
+            if (memcmp(&A.AsDouble, &B.AsDouble, sizeof(double)) != 0)
+            {
+                return false;
+            }
+            if (A.Items.size() != B.Items.size() || A.StructFields.size() != B.StructFields.size())
+            {
+                return false;
+            }
+            for (size_t Index = 0; Index < A.Items.size(); ++Index)
+            {
+                if (!ValuesMatch(A.Items[Index], B.Items[Index]))
+                {
+                    return false;
+                }
+            }
+            for (size_t Index = 0; Index < A.StructFields.size(); ++Index)
+            {
+                if (A.StructFields[Index].Name != B.StructFields[Index].Name
+                    || !ValuesMatch(A.StructFields[Index].Value, B.StructFields[Index].Value))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        CScriptStruct* GetLayoutRecord(const CScriptClass* Target)
+        {
+            return Target != nullptr ? Cast<CScriptStruct>(Target->LayoutRecord.Get()) : nullptr;
         }
     }
 
-    uint32 AppendScriptPropertiesToClass(CClass* Target, const FScriptExportSchema& Schema)
+    uint32 AppendScriptPropertiesToClass(CScriptClass* Target, const FScriptExportSchema& Schema)
     {
-        if (Target == nullptr || !Schema.IsValid())
+        // Functions count as well as fields: a script class can be behaviour only, and IsValid asks about
+        // fields alone, which would have left such a type with no record and so no functions either.
+        if (Target == nullptr || (Schema.Fields.empty() && Schema.Functions.empty()))
         {
             return 0;
         }
@@ -1451,27 +1452,43 @@ namespace Lumina::Scripting
         const uint32 ShimSize  = Target->GetSize();
         const uint32 ShimAlign = Target->GetAlignment();
         const CScriptStruct::FEmittedLayout Layout = Record->EmitLayoutInto(Target, ShimSize, Schema);
-        if (Layout.Properties.empty())
-        {
-            return 0;
-        }
 
-        Target->ScriptProperties = Layout.Properties;
-        for (FProperty* Property : Layout.Properties)
+        // A behaviour-only type has no block to append, and still wants its record and its functions.
+        if (!Layout.Properties.empty())
         {
-            // Asking the property means a type that learns to construct is picked up with no change here.
-            if (Property->OwnsStorage())
+            Target->ScriptProperties = Layout.Properties;
+            for (FProperty* Property : Layout.Properties)
             {
-                Target->ScriptLifecycleProperties.push_back(Property);
+                // Asking the property means a type that learns to construct is picked up with no change here.
+                if (Property->OwnsStorage())
+                {
+                    Target->ScriptLifecycleProperties.push_back(Property);
+                }
             }
+
+            // Must happen before the CDO exists, since creating it allocates from the class size.
+            Target->Size      = Align(Layout.EndOffset, Math::Max(Layout.Alignment, Target->GetAlignment()));
+            Target->Alignment = Math::Max(Layout.Alignment, Target->GetAlignment());
         }
 
-        // Must happen before the CDO exists, since creating it allocates from the class size.
-        Target->Size      = Align(Layout.EndOffset, Math::Max(Layout.Alignment, Target->GetAlignment()));
-        Target->Alignment = Math::Max(Layout.Alignment, Target->GetAlignment());
+        // The record's arena owns the properties, so anchoring it on the class is what keeps them alive.
+        Record->SetAppliedSchema(Schema);
+        Target->LayoutRecord = static_cast<CStruct*>(Record.Get());
 
-        GClassLayouts()[Target] = FScriptClassLayout{ std::move(Record), Layout.Properties, ShimSize, ShimAlign,
-                                                      DescribeScriptSchemaLayout(Schema) };
+        // After the block, since a function's frame is laid out in the same record's arena, and before the
+        // caller links: AddFunction only reaches the flattened list when Link runs after it.
+        for (const FScriptExportFunction& Declared : Schema.Functions)
+        {
+            FScriptExportSchema ParamSchema;
+            ParamSchema.Fields = Declared.Params;
+
+            MintScriptFunction(*Target, *Record, Declared.Name, ParamSchema, Declared.ReturnIndex,
+                &ScriptFunctionThunk);
+        }
+        Target->ShimSize = ShimSize;
+        Target->ShimAlign = ShimAlign;
+        Target->bHasAppendedBlock = !Layout.Properties.empty();
+
         return (uint32)Layout.Properties.size();
     }
 
@@ -1530,25 +1547,6 @@ namespace Lumina::Scripting
         }
     }
 
-    void AdvanceScriptTypeGeneration()
-    {
-        const uint64 Generation = ++GScriptTypeGeneration();
-
-        // Outliving a whole reload means every consumer that could have cached its properties was rebuilt.
-        TVector<CClass*> Expired;
-        for (auto& [Target, Layout] : GRetiredLayouts())
-        {
-            if (Layout.RetiredIn < Generation)
-            {
-                Expired.push_back(Target);
-            }
-        }
-        for (CClass* Target : Expired)
-        {
-            DiscardRetiredLayout(Target);
-        }
-    }
-
     FString DescribeScriptTypeSignature(const FScriptExportType& Type)
     {
         FString Out;
@@ -1562,18 +1560,18 @@ namespace Lumina::Scripting
         {
             return;
         }
-        CClass* Class = Object->GetClass();
-        if (Class == nullptr)
+        CScriptClass* ScriptClass = ToScriptClass(Object->GetClass());
+        if (ScriptClass == nullptr)
         {
             return;
         }
-        CObject* Defaults = Class->GetDefaultObjectIfCreated();
+        CObject* Defaults = ScriptClass->GetDefaultObjectIfCreated();
         if (Defaults == nullptr)
         {
             return;
         }
         // Only the C#-declared block can carry the attribute, and a native shim member is unaffected.
-        for (FProperty* Property : Class->ScriptProperties)
+        for (FProperty* Property : ScriptClass->ScriptProperties)
         {
             if (Property != nullptr && Property->HasMetadata("SkipHotReload"))
             {
@@ -1582,126 +1580,84 @@ namespace Lumina::Scripting
         }
     }
 
-    FString DescribeScriptSchemaLayout(const FScriptExportSchema& Schema)
+    EScriptTypeDirty DiffScriptClassLayout(const CScriptClass* Target, const FScriptExportSchema& Schema)
     {
-        FString Signature;
-        for (const FScriptExportField& Field : Schema.Fields)
+        const CScriptStruct* Record = GetLayoutRecord(Target);
+        if (Target == nullptr || Record == nullptr)
         {
-            AppendFieldSignature(Field, Signature);
+            // Nothing appended yet, so anything the schema asks for is a layout change.
+            const bool bWantsNothing = !Schema.IsValid() || Schema.Fields.empty();
+            return bWantsNothing ? EScriptTypeDirty::None : EScriptTypeDirty::Layout;
         }
-        return Signature;
+
+        const FScriptExportSchema& Applied = Record->GetAppliedSchema();
+        if (Applied.Fields.size() != Schema.Fields.size())
+        {
+            return EScriptTypeDirty::Layout;
+        }
+
+        EScriptTypeDirty Dirty = EScriptTypeDirty::None;
+        for (size_t Index = 0; Index < Schema.Fields.size(); ++Index)
+        {
+            const FScriptExportField& Old = Applied.Fields[Index];
+            const FScriptExportField& New = Schema.Fields[Index];
+
+            // Name and shape decide the layout, and one differing field makes the rest moot.
+            FString OldShape;
+            FString NewShape;
+            AppendFieldSignature(Old, OldShape);
+            AppendFieldSignature(New, NewShape);
+            if (OldShape != NewShape)
+            {
+                return EScriptTypeDirty::Layout;
+            }
+
+            if (!FieldMetadataMatches(Old.Meta, New.Meta))
+            {
+                EnumAddFlags(Dirty, EScriptTypeDirty::Metadata);
+            }
+            if (!ValuesMatch(Old.Default, New.Default))
+            {
+                EnumAddFlags(Dirty, EScriptTypeDirty::Defaults);
+            }
+        }
+        return Dirty;
     }
 
-    bool ScriptClassLayoutMatches(CClass* Target, const FScriptExportSchema& Schema)
+    void RefreshScriptPropertyMetadata(CScriptClass* Target, const FScriptExportSchema& Schema)
     {
-        auto It = GClassLayouts().find(Target);
-        if (It == GClassLayouts().end())
+        CScriptStruct* Record = GetLayoutRecord(Target);
+        if (Record == nullptr || Target->ScriptProperties.size() != Schema.Fields.size())
         {
-            // Nothing appended yet, so "matches" only if the new schema wants nothing either.
-            return !Schema.IsValid() || Schema.Fields.empty();
+            return;
         }
-        return It->second.Signature == DescribeScriptSchemaLayout(Schema);
+
+        // Positional, which is exactly what the caller has already proven by finding no Layout change.
+        for (size_t Index = 0; Index < Schema.Fields.size(); ++Index)
+        {
+            ApplyMeta(Record->GetPropertyArena(), Target->ScriptProperties[Index],
+                &Schema.Fields[Index].Meta, KindTag(*Schema.Fields[Index].Type));
+        }
+        Record->SetAppliedSchema(Schema);
     }
 
-    bool MigrateMintedClassLayout(CClass* Target, const FScriptExportSchema& Schema)
+    bool ScriptClassLayoutMatches(const CScriptClass* Target, const FScriptExportSchema& Schema)
+    {
+        return !EnumHasAnyFlags(DiffScriptClassLayout(Target, Schema), EScriptTypeDirty::Layout);
+    }
+
+    void ForgetScriptClassLayout(CScriptClass* Target)
     {
         if (Target == nullptr)
         {
-            return false;
+            return;
         }
 
-        auto It = GClassLayouts().find(Target);
-        if (It == GClassLayouts().end())
-        {
-            return false;   // never had an appended block; the caller wants AppendScriptPropertiesToClass
-        }
-
-        // The caller evacuates first and repopulates after, so refusing here keeps the failure loud.
-        int32   LiveInstances = 0;
-        FString Blockers;
-        GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
-        {
-            if (Base == nullptr || Base->GetClass() != Target
-                || Base->HasAnyFlag(OF_MarkedDestroy) || Base->HasAnyFlag(OF_DefaultObject))
-            {
-                return;
-            }
-
-            ++LiveInstances;
-
-            // Named, because evacuation covers the known holders and only a stray strong reference is left.
-            if (LiveInstances <= 4)
-            {
-                if (!Blockers.empty())
-                {
-                    Blockers += ", ";
-                }
-                Blockers += Base->GetName().c_str();
-            }
-        });
-
-        if (LiveInstances > 0)
-        {
-            if (LiveInstances > 4)
-            {
-                Blockers += Format(", and {} more", LiveInstances - 4);
-            }
-
-            LOG_WARN("Scriptable: '{}' changed its property set but {} live instance(s) remain ({}); the layout "
-                     "was NOT rebuilt, so this edit has not taken. Something outside the world, prefab and game "
-                     "instance holders still holds a strong reference.",
-                     Target->GetName().c_str(), LiveInstances, Blockers.c_str());
-            return false;
-        }
-
-        const uint32 ShimSize  = It->second.ShimSize;
-        const uint32 ShimAlign = It->second.ShimAlign;
-
-        // The layout this one supersedes has already survived a full rebuild, so nothing can still reach it.
-        DiscardRetiredLayout(Target);
-        It->second.RetiredIn = GScriptTypeGeneration();
-        GRetiredLayouts()[Target] = std::move(It->second);
-        GClassLayouts().erase(Target);
-
-        // The CDO is the old size and carries the old property set, so it cannot survive the rebuild.
-        Target->DiscardDefaultObject();
-
+        // The type is gone with no live instances left, so its current block goes too. Releasing the record
+        // frees the arena the properties live in.
         Target->ScriptProperties.clear();
         Target->ScriptLifecycleProperties.clear();
-
-        // Drops the appended list AND the super chain Link spliced onto its tail; the super keeps its own.
-        Target->Unlink();
-        Target->Size      = ShimSize;
-        Target->Alignment = ShimAlign;
-
-        if (!Schema.IsValid() || Schema.Fields.empty())
-        {
-            // The type dropped every property, which is a valid outcome, so rebuild at the shim size.
-            Target->GetDefaultObject();
-            LOG_DISPLAY("Scriptable '{}': script properties removed; the class is back to its shim layout.",
-                Target->GetName().c_str());
-            return true;
-        }
-
-        const uint32 Count = AppendScriptPropertiesToClass(Target, Schema);
-
-        // Creating the default object allocates from the class size and calls Link, so both come after.
-        Target->GetDefaultObject();
-
-        LOG_DISPLAY("Scriptable '{}': rebuilt the script property block ({} propert{}) after a schema change.",
-            Target->GetName().c_str(), Count, Count == 1 ? "y" : "ies");
-        return true;
-    }
-
-    void ForgetScriptClassLayout(CClass* Target)
-    {
-        DiscardRetiredLayout(Target);
-
-        // The type is gone with no live instances left, so its current block goes too.
-        if (auto It = GClassLayouts().find(Target); It != GClassLayouts().end())
-        {
-            FreeScriptClassLayout(It->second);
-            GClassLayouts().erase(It);
-        }
+        Target->LayoutRecord = nullptr;
+        Target->bHasAppendedBlock = false;
     }
 }

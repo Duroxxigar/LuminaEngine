@@ -5,6 +5,7 @@
 
 #include "Core/Math/Math.h"
 #include "Core/Delegates/CoreDelegates.h"
+#include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectArray.h"
 #include "Core/Object/ObjectCore.h"
@@ -415,4 +416,41 @@ namespace Lumina
         return const_cast<FConfig*>(this)->NavigateToNode(Key, false);
     }
 
+}
+
+namespace Lumina
+{
+    void FConfig::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+    {
+        // Keyed by class, so a repointed key means a rebuilt table rather than an in-place write: the old
+        // key would keep the bucket its old hash chose and the entry would never be found again.
+        THashMap<CClass*, CObject*> RebuiltDefaults;
+        RebuiltDefaults.reserve(SettingsDefaults.size());
+        for (const auto& [Class, Snapshot] : SettingsDefaults)
+        {
+            auto* const NewClass = Cast<CClass>(Func(Class));
+            CObject* const NewSnapshot = Func(Snapshot);
+            if (NewClass != nullptr)
+            {
+                RebuiltDefaults.insert_or_assign(NewClass, NewSnapshot);
+            }
+        }
+        SettingsDefaults = Move(RebuiltDefaults);
+
+        for (CClass*& Class : DiscoveredSettings)
+        {
+            Class = Cast<CClass>(Func(Class));
+        }
+
+        THashSet<CClass*> RebuiltLoaded;
+        RebuiltLoaded.reserve(SettingsFileLoaded.size());
+        for (CClass* Class : SettingsFileLoaded)
+        {
+            if (auto* const Replacement = Cast<CClass>(Func(Class)))
+            {
+                RebuiltLoaded.insert(Replacement);
+            }
+        }
+        SettingsFileLoaded = Move(RebuiltLoaded);
+    }
 }

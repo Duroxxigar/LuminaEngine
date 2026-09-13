@@ -249,6 +249,47 @@ namespace Lumina
         QuarantineCursor = (QuarantineCursor + 1) % QuarantineCapacity;
     }
 
+    void FCObjectArray::AddReinstanceRedirect(const FObjectHandle& From, const FObjectHandle& To)
+    {
+        if (!From.IsValid() || !To.IsValid() || From == To)
+        {
+            return;
+        }
+
+        TScopeLock<FRecursiveMutex> Lock(Mutex);
+        ReinstanceRedirects.insert_or_assign(From, To);
+    }
+
+    CObjectBase* FCObjectArray::ResolveRedirect(const FObjectHandle& Handle) const
+    {
+        if (ReinstanceRedirects.empty())
+        {
+            return nullptr;
+        }
+
+        // An object reinstanced twice leaves a chain, and the bound keeps a cycle from hanging the resolve.
+        FObjectHandle Current = Handle;
+        for (int32 Hops = 0; Hops < 8; ++Hops)
+        {
+            const auto Found = ReinstanceRedirects.find(Current);
+            if (Found == ReinstanceRedirects.end())
+            {
+                return nullptr;
+            }
+
+            Current = Found->second;
+
+            const FCObjectEntry* Item = ChunkedArray.GetItem(Current.Index);
+            if (Item != nullptr && Item->GetGeneration() == Current.Generation)
+            {
+                CObjectBase* Object = Item->GetObj();
+                return (Object != nullptr && !Object->HasAnyFlag(OF_MarkedDestroy)) ? Object : nullptr;
+            }
+        }
+
+        return nullptr;
+    }
+
     CObjectBase* FCObjectArray::ResolveHandle(const FObjectHandle& Handle) const
     {
         if (!Handle.IsValid())
@@ -265,7 +306,7 @@ namespace Lumina
         const int32 Generation = Item->GetGeneration();
         if (Generation != Handle.Generation)
         {
-            return nullptr;
+            return ResolveRedirect(Handle);
         }
 
         // An object already marked for destruction reads as gone, matching FindObject.

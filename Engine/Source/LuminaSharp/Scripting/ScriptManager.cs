@@ -437,6 +437,8 @@ internal sealed class ScriptManager
         UIDataModel.DisposeAll();             // MVVM bindings (user ViewModel + native data model)
         Asset.PurgePending();                 // in-flight async asset-load callbacks
         PropertyAccessor.ClearScriptCaches(); // cached get/set delegates over user property types
+        ScriptFunctionDispatch.Reset();        // [ScriptFunction] bindings, which root user MethodInfos
+        NativeObjectMarshal.ClearTypeCache();  // wrapper instantiations keyed by user parameter types
 
         // Every strong handle has to go before the unload, or it roots the generation the ALC is dropping.
         EntityScripts?.FreeAll();  // detaches only; the table drain below owns the script handles

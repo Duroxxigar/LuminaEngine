@@ -1,6 +1,8 @@
 ﻿#pragma once
 
 #include "World/ECS/Registry.h"
+#include "Core/Object/Cast.h"
+#include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 
 
 #include "imgui.h"
@@ -220,6 +222,16 @@ namespace Lumina
         /** Per-frame update; overrides should call base (or TickEditorCamera) so look/orbit input works. */
         virtual void Update(const FUpdateContext& UpdateContext);
 
+        /**
+         * Objects this tool holds outside the reflected graph. A tool is not a CObject, so nothing else
+         * reaches them; override to add your own and call the base, which covers the world and the undo stack.
+         */
+        virtual void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+        {
+            World = Cast<CWorld>(Func(World.Get()));
+            TransactionManager.VisitObjectReferences(Func);
+        }
+
         /** Called once at the end of frame */
         virtual void EndFrame() { }
         
@@ -383,7 +395,8 @@ namespace Lumina
         NODISCARD virtual bool IsUnsavedDocument() { return false; }
 
         /** @TODO Cache and compare */
-        NODISCARD uint64 GetID() const { return GetToolName().GetID(); }
+        // The CONTENT hash, not the name index: an ImGui dock class has to mean the same thing next session.
+        NODISCARD uint64 GetID() const { return GetToolName().GetStableHash(); }
         
         FORCEINLINE ImGuiID GetCurrDockID() const        { return CurrDockID; }
         FORCEINLINE ImGuiID GetDesiredDockID() const     { return DesiredDockID; }

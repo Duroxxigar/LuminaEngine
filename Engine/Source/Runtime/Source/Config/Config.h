@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/Math/Math.h"
+#include "Core/Object/ObjectReferenceProvider.h"
 #include "Containers/HashTable.h"
 #include "Containers/Vector.h"
 #include "Containers/Function.h"
@@ -16,9 +17,17 @@ namespace Lumina
 
     RUNTIME_API extern class FConfig* GConfig;
 
-    class RUNTIME_API FConfig
+    class RUNTIME_API FConfig : public IObjectReferenceProvider
     {
     public:
+
+        //~ IObjectReferenceProvider: the developer-settings snapshots are a plain map, so nothing else
+        //~ reaches the classes and default objects they hold.
+
+        const char* GetReferenceProviderName() const override { return "config settings defaults"; }
+
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override;
+
 
         // ---- Developer settings (reflection-driven CDeveloperSettings objects) ----
 

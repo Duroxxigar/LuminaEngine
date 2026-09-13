@@ -445,6 +445,9 @@ namespace Lumina
 
     void FEditorUI::Initialize(const FUpdateContext& UpdateContext)
     {
+        // Before any tool exists, so a reinstance during startup still finds this holder.
+        FObjectReferenceProviders::Register(this);
+
         ImGuiContext* Context = Render().GetImGuiRenderer()->GetImGuiContext();
         ImPlotContext* PlotContext = Render().GetImGuiRenderer()->GetImPlotContext();
         ImGui::SetCurrentContext(Context);
@@ -614,6 +617,8 @@ namespace Lumina
 
     void FEditorUI::Deinitialize(const FUpdateContext& UpdateContext)
     {
+        FObjectReferenceProviders::Unregister(this);
+
         if (AssetDataChangedHandle.IsValid())
         {
             AssetEvents::OnAssetDataChanged().Remove(AssetDataChangedHandle);
@@ -753,7 +758,7 @@ namespace Lumina
             LaunchTracyProfiler();
         }
 
-        // The chord is rebindable in Editor Settings, General, Hotkeys, defaulting to Ctrl+Shift+R.
+        // The chord is rebindable in Editor Settings, General, Hotkeys.
         {
             // EKey holds GLFW keycodes, which run contiguously, so they map onto ImGuiKey ranges by offset.
             auto EKeyToImGuiKey = [](EKey Key) -> ImGuiKey
@@ -2492,15 +2497,20 @@ namespace Lumina
                         {
                             ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 
+                            // Null once ReclaimIdleRenderer has freed it out from under a still-drawn tool.
                             IRenderScene* SceneRenderer = Tool->GetWorld()->GetRenderer();
 
-                            // ImGui works in physical pixels here, so the content region is already the right unit.
-                            const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
-                            SceneRenderer->SetPrimaryViewSize(FUIntVector2(
-                                (uint32)Math::Max(ViewportAvail.x, 64.0f),
-                                (uint32)Math::Max(ViewportAvail.y, 64.0f)));
+                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(~0u);
+                            if (SceneRenderer != nullptr)
+                            {
+                                // ImGui works in physical pixels here, so the content region is already the right unit.
+                                const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
+                                SceneRenderer->SetPrimaryViewSize(FUIntVector2(
+                                    (uint32)Math::Max(ViewportAvail.x, 64.0f),
+                                    (uint32)Math::Max(ViewportAvail.y, 64.0f)));
 
-                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                                ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                            }
 
                             Tool->bViewportFocused = ImGui::IsWindowFocused();
                             Tool->bViewportHovered = ImGui::IsWindowHovered();
@@ -2520,15 +2530,20 @@ namespace Lumina
 
                         if (DrawViewportWindow)
                         {
+                            // Null once ReclaimIdleRenderer has freed it out from under a still-drawn tool.
                             IRenderScene* SceneRenderer = Tool->GetWorld()->GetRenderer();
 
-                            // ImGui works in physical pixels here, so the content region is already the right unit.
-                            const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
-                            SceneRenderer->SetPrimaryViewSize(FUIntVector2(
-                                (uint32)Math::Max(ViewportAvail.x, 64.0f),
-                                (uint32)Math::Max(ViewportAvail.y, 64.0f)));
+                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(~0u);
+                            if (SceneRenderer != nullptr)
+                            {
+                                // ImGui works in physical pixels here, so the content region is already the right unit.
+                                const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
+                                SceneRenderer->SetPrimaryViewSize(FUIntVector2(
+                                    (uint32)Math::Max(ViewportAvail.x, 64.0f),
+                                    (uint32)Math::Max(ViewportAvail.y, 64.0f)));
 
-                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                                ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                            }
 
                             Tool->bViewportFocused = ImGui::IsWindowFocused();
                             Tool->bViewportHovered = ImGui::IsWindowHovered();
@@ -3364,7 +3379,9 @@ namespace Lumina
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", "Shift+F11"))
+        // Read from the binding rather than written out, so rebinding the chord relabels the menu with it.
+        const FString ReloadChord = GetDefault<CEditorSettings>()->ReloadScriptsHotkey.GetDisplayName();
+        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", ReloadChord.c_str()))
         {
             DotNet::RequestScriptReload();
         }
@@ -4068,6 +4085,30 @@ namespace Lumina
         }
 
         return false;
+    }
+
+    void FEditorUI::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+    {
+        for (FEditorTool* Tool : EditorTools)
+        {
+            if (Tool != nullptr)
+            {
+                Tool->VisitObjectReferences(Func);
+            }
+        }
+
+        // Keyed by the asset, so a repointed key is a rebuilt table: written in place it would sit in the
+        // bucket its old hash chose and the tool would never be found for that asset again.
+        THashMap<CObject*, FEditorTool*> Rebuilt;
+        Rebuilt.reserve(ActiveAssetTools.size());
+        for (const auto& [Asset, Tool] : ActiveAssetTools)
+        {
+            if (CObject* const Replacement = Func(Asset))
+            {
+                Rebuilt.insert_or_assign(Replacement, Tool);
+            }
+        }
+        ActiveAssetTools = Move(Rebuilt);
     }
 
     void FEditorUI::OnProjectLoaded()

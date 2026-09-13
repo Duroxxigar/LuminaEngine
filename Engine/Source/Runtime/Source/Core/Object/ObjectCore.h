@@ -5,6 +5,7 @@
 #include "Containers/Vector.h"
 #include "Containers/Function.h"
 #include "Core/LuminaMacros.h"
+#include "Core/Reflection/Type/Function.h"
 #include "Platform/GenericPlatform.h"
 
 
@@ -126,39 +127,33 @@ namespace Lumina
         return T::StaticClass()->template GetDefaultObject<T>();
     }
     
+    /** Single-sourced from EPropertyFlags.inl so the enum, its names and the C# mirror cannot drift. */
     enum class EPropertyFlags : uint32
     {
-        None                = 0,
-        Editable            = BIT(0),
-        ReadOnly            = BIT(1),
-        NoSerialize         = BIT(2),
-        Const               = BIT(3),
-        Private             = BIT(4),
-        Protected           = BIT(5),
-        SubField            = BIT(6),
-        Trivial             = BIT(7),
-        // Prefab instancing remaps these raw entity ids, and a flag survives where METADATA_PARAMS strips metadata.
-        EntityHandle        = BIT(8),
-        Builtin             = BIT(9),
-        BulkSerialize       = BIT(10),
-        // Property exists only for editor tooling. Stripped from cooked
-        // packages (see CStruct::SerializeTaggedProperties + FArchive::IsCooking).
-        EditorOnly          = BIT(11),
-        // Property participates in network replication (PROPERTY(Replicated)). Read by
-        // CStruct::NetSerializeProperties; a flag test, not a metadata lookup.
-        Replicated          = BIT(12),
-
-        //~ Script (C#) interop specifiers, independent of the editor flags above. Read by the Reflector's
-        //  C# binding emitter to shape the generated wrapper member, NOT the editor property grid.
-        ScriptReadOnly      = BIT(13), // C# wrapper emits a getter only (no setter), even if editor-editable.
-        ScriptWritable      = BIT(14), // C# wrapper emits a setter even if the property is editor ReadOnly/Const.
-        ScriptHidden        = BIT(15), // No C# wrapper member is emitted for this property at all.
-
-        // Duplication resets this property instead of copying it, and a flag survives where METADATA_PARAMS strips metadata.
-        DuplicateTransient  = BIT(16),
+        None = 0,
+#define LE_PROPERTY_FLAG(Name, Bit) Name = BIT(Bit),
+#include "EPropertyFlags.inl"
+#undef LE_PROPERTY_FLAG
     };
 
     ENUM_CLASS_FLAGS(EPropertyFlags);
+
+    //~ Parallel name/value tables, for the bootstrap check against LuminaSharp.EPropertyFlags.
+    inline constexpr const char* PropertyFlagNames[] =
+    {
+#define LE_PROPERTY_FLAG(Name, Bit) #Name,
+#include "EPropertyFlags.inl"
+#undef LE_PROPERTY_FLAG
+    };
+
+    inline constexpr uint32 PropertyFlagValues[] =
+    {
+#define LE_PROPERTY_FLAG(Name, Bit) (1u << (Bit)),
+#include "EPropertyFlags.inl"
+#undef LE_PROPERTY_FLAG
+    };
+
+    static_assert(std::size(PropertyFlagNames) == std::size(PropertyFlagValues));
 
     /** The reflected property-type taxonomy. Single-sourced from EPropertyTypeFlags.inl so the enum and its
      *  name tables can never drift. Also mirrored by LuminaSharp.EPropertyType (validated at bootstrap) and by
@@ -203,8 +198,15 @@ namespace Lumina
     
     RUNTIME_API EPropertyTypeFlags PropertyStringToType(FName String);
     
-    RUNTIME_API bool IsValueValidForType(double Value, const FName& TypeName);
-    RUNTIME_API bool IsPropertyNumeric(const FName& Type);
+    // the kind a name spells, for a file that stored types as text, None if it spells nothing
+    /** Builds Outer's reflected functions in its property arena, parameters included. */
+    RUNTIME_API void InitializeAndCreateFFunctions(CStruct* Outer, const FFunctionParams* const* FunctionArray, uint32 NumFunctions);
+
+    RUNTIME_API EPropertyTypeFlags PropertyTypeFromName(const FName& TypeName);
+
+    // whether Value survives a conversion into Type, which is what gates a numeric property's migration
+    RUNTIME_API bool IsValueValidForType(double Value, EPropertyTypeFlags Type);
+    RUNTIME_API bool IsPropertyNumeric(EPropertyTypeFlags Type);
     
     template <typename T>
     struct TRegistrationInfo
@@ -371,15 +373,39 @@ namespace Lumina
         const FMetaDataPairParam* MetaDataArray;
     };
     
+    /**
+     * One reflected function as the generated code declares it.
+     *
+     * Params are ordinary FPropertyParams whose Offset is an offsetof into the generated parameter struct,
+     * so the compiler lays the frame out and the same construction path builds them as builds a member.
+     */
+    struct FFunctionParams
+    {
+        const char*                     Name;
+        EFunctionFlags                  Flags;
+        const FPropertyParams* const*   Params;
+        /** Length of Params, container inners included, exactly as a type's property array counts them. */
+        uint16                          NumParamEntries;
+        /** Index among the TOP-LEVEL parameters of the return value, or -1 for a void function. */
+        int16                           ReturnIndex;
+        /** sizeof the generated parameter struct, which is the frame a call needs. */
+        uint16                          ParmsSize;
+        FFunction::FNativeFuncPtr       Thunk;
+    };
+
     struct FClassParams
     {
         CClass*                         (*RegisterFunc)();
 
         const FPropertyParams* const*   Params;
         uint32                          NumProperties;
-        
+
         uint16                          NumMetaData;
         const FMetaDataPairParam*       MetaDataArray;
+
+        // Last so a generated file that predates functions still initializes, leaving a type with none.
+        const FFunctionParams* const*   Functions = nullptr;
+        uint32                          NumFunctions = 0;
     };
 
     struct FStructParams
@@ -391,9 +417,12 @@ namespace Lumina
         uint32                          NumProperties;
         uint16                          SizeOf;
         uint16                          AlignOf;
-        
+
         uint16 NumMetaData;
         const FMetaDataPairParam* MetaDataArray;
+
+        const FFunctionParams* const*   Functions = nullptr;
+        uint32                          NumFunctions = 0;
     };
     
     struct FEnumeratorParam

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Containers/Vector.h"
+#include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 #include "Containers/Function.h"
 #include "Containers/Name.h"
 #include "Core/Templates/LuminaTemplate.h"   // Move / Forward
@@ -25,6 +26,9 @@ namespace Lumina
         virtual bool IsNoOp() const { return false; }
 
         virtual FName GetName() const { return FName(); }
+
+        /** Objects this command will act on when it is undone or redone, so they can be repointed. */
+        virtual void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) {}
     };
 
     // Escape hatch for bespoke domains (terrain, node-graph); closures must capture stable ids, not raw handles.
@@ -53,6 +57,17 @@ namespace Lumina
         TVector<TUniquePtr<IUndoableCommand>> Commands;
 
         bool IsEmpty() const { return Commands.empty(); }
+
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+        {
+            for (TUniquePtr<IUndoableCommand>& Command : Commands)
+            {
+                if (Command)
+                {
+                    Command->VisitObjectReferences(Func);
+                }
+            }
+        }
         void Undo() { for (auto It = Commands.rbegin(); It != Commands.rend(); ++It) { (*It)->Undo(); } }
         void Redo() { for (TUniquePtr<IUndoableCommand>& C : Commands) { C->Redo(); } }
     };
@@ -104,6 +119,10 @@ namespace Lumina
         FName PeekRedoName() const { return RedoStack.empty() ? FName() : RedoStack.back().Name; }
 
         void Clear();
+
+        // A stacked command outlives the edit that made it, so a reinstanced object has to reach it too or
+        // the next undo writes into an object that is no longer the one on screen.
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func);
 
         // Set by the owning tool to rebuild caches after any Undo/Redo (selection resync, outliner, etc.).
         TFunction<void()> OnPostApply;

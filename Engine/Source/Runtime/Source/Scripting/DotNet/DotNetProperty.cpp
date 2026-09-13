@@ -5,6 +5,9 @@
 #include "Containers/String.h"
 #include "Core/Delegates/ScriptDelegate.h"
 #include "Core/Object/Class.h"
+#include "Core/Reflection/Type/Function.h"
+#include "Core/Templates/IntegerCompare.h"
+#include "Core/Object/Package/Package.h"
 #include "Core/Reflection/Type/Properties/OptionalProperty.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/ObjectHandleTyped.h"
@@ -230,6 +233,83 @@ LUMINA_DOTNET_EXPORT(void*, FindClassByName)(const char* Name, int Len)
         return nullptr;
     }
     return FindObject<CClass>(FName(FStringView(Name, (size_t)Len)));
+}
+
+/**
+ * Constructs a CObject from script, the managed face of NewObject.
+ *
+ * Package null means the engine transient package, so an object a script makes is not accidentally part of
+ * anything that gets saved. Name empty means the class picks a unique one, exactly as native construction does.
+ *
+ * The object comes back with no strong reference held on its behalf, which is what native construction does
+ * too: the caller is expected to store it somewhere that owns it, a [Property] holding a TObjectPtr being the
+ * usual answer. Nothing collects it in the meantime, since lifetime here is refcounting rather than a GC.
+ */
+LUMINA_DOTNET_EXPORT(void*, NewObject)(void* Class, void* Package, const char* Name, int NameLen)
+{
+    CClass* ObjectClass = static_cast<CClass*>(Class);
+    if (ObjectClass == nullptr)
+    {
+        LOG_ERROR("NewObject from script was given no class");
+        return nullptr;
+    }
+
+    // Defensive: every generated class carries a factory, but a hand-written one may omit DEFINE_CLASS_FACTORY,
+    // and EmplaceInstance would assert on it rather than saying which class was at fault.
+    if (ObjectClass->FactoryFunction == nullptr)
+    {
+        LOG_ERROR("NewObject from script: '{}' cannot be instantiated, it has no factory", ObjectClass->GetName());
+        return nullptr;
+    }
+
+    CPackage* Outer = (Package != nullptr) ? static_cast<CPackage*>(Package) : CPackage::GetTransientPackage();
+
+    const FName ObjectName = (Name != nullptr && NameLen > 0)
+        ? FName(FStringView(Name, (size_t)NameLen))
+        : NAME_None;
+
+    return NewObject(ObjectClass, Outer, ObjectName, FGuid::New());
+}
+
+//~ Reflected functions. The managed dispatcher walks these to read a call frame, which it can do with the
+//  property accessors above because a frame is a container like any other.
+
+LUMINA_DOTNET_EXPORT(int32, FunctionParamCount)(const void* Function)
+{
+    return Function ? (int32)static_cast<const FFunction*>(Function)->GetArguments().size() : 0;
+}
+
+LUMINA_DOTNET_EXPORT(const void*, FunctionParamAt)(const void* Function, int32 Index)
+{
+    if (Function == nullptr || Index < 0)
+    {
+        return nullptr;
+    }
+    const TSpan<FProperty* const> Arguments = static_cast<const FFunction*>(Function)->GetArguments();
+    return Cmp::Less(Index, Arguments.size()) ? Arguments[Index] : nullptr;
+}
+
+LUMINA_DOTNET_EXPORT(const void*, FunctionReturnParam)(const void* Function)
+{
+    return Function ? static_cast<const FFunction*>(Function)->GetReturnParam() : nullptr;
+}
+
+LUMINA_DOTNET_EXPORT(int32, FunctionGetName)(const void* Function, char* Buf, int Cap)
+{
+    if (Function == nullptr)
+    {
+        return 0;
+    }
+    const FName& Name = static_cast<const FFunction*>(Function)->GetFunctionName();
+    const char* S = Name.c_str();
+    const int L = S ? (int)Name.length() : 0;
+    if (S && Buf && Cap > 0)
+    {
+        const int Copy = L < Cap ? L : Cap - 1;
+        Memory::Memcpy(Buf, (void*)S, (size_t)Copy);
+        Buf[Copy] = '\0';
+    }
+    return L;
 }
 
 LUMINA_DOTNET_EXPORT(int32, ClassGetName)(void* Class, char* Buf, int Cap)
