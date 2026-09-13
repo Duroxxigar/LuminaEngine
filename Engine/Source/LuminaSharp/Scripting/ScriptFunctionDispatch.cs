@@ -16,8 +16,9 @@ namespace LuminaSharp;
 /// </remarks>
 public static unsafe class ScriptFunctionDispatch
 {
-    // Keyed by the FFunction, which is minted once per class and lives as long as it does.
-    private static readonly Dictionary<IntPtr, FBound> BoundByFunction = new();
+    // Keyed by the function AND the type, because a re-mint frees the old FFunction and the arena can hand
+    // its address straight back to a new one; on the pointer alone that would silently dispatch the old method.
+    private static readonly Dictionary<(IntPtr Function, Type Type), FBound> BoundByFunction = new();
 
     private readonly struct FBound
     {
@@ -79,7 +80,8 @@ public static unsafe class ScriptFunctionDispatch
     // than read as whatever happened to be at the offset.
     private static bool TryBind(Type Type, IntPtr Function, out FBound Bound)
     {
-        if (BoundByFunction.TryGetValue(Function, out Bound))
+        var Key = (Function, Type);
+        if (BoundByFunction.TryGetValue(Key, out Bound))
         {
             return Bound.Method != null;
         }
@@ -93,7 +95,7 @@ public static unsafe class ScriptFunctionDispatch
         if (Method == null)
         {
             Debug.LogError($"Script function '{Name}' is reflected on {Type.Name} but the method is gone; the call is dropped.");
-            BoundByFunction[Function] = default;
+            BoundByFunction[Key] = default;
             return false;
         }
 
@@ -101,7 +103,7 @@ public static unsafe class ScriptFunctionDispatch
         if (Count != Method.GetParameters().Length)
         {
             Debug.LogError($"Script function '{Name}' on {Type.Name} takes {Method.GetParameters().Length} arguments but its frame describes {Count}; the call is dropped.");
-            BoundByFunction[Function] = default;
+            BoundByFunction[Key] = default;
             return false;
         }
 
@@ -112,11 +114,15 @@ public static unsafe class ScriptFunctionDispatch
         }
 
         Bound = new FBound(Method, Parameters, Native.FunctionReturnParam(Function));
-        BoundByFunction[Function] = Bound;
+        BoundByFunction[Key] = Bound;
         return true;
     }
 
-    /// Dropped on hot reload, since the methods a bound entry points at belong to the old assembly.
+    /// <summary>
+    /// Dropped on hot reload. A bound entry holds a MethodInfo from the generation being unloaded, which
+    /// roots its declaring type and so pins the collectible load context: left in place this does not just
+    /// go stale, it stops the generation unloading at all.
+    /// </summary>
     internal static void Reset()
     {
         BoundByFunction.Clear();

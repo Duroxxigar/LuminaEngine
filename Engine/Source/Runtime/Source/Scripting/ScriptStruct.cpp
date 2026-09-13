@@ -1481,7 +1481,9 @@ namespace Lumina::Scripting
 
     uint32 AppendScriptPropertiesToClass(CScriptClass* Target, const FScriptExportSchema& Schema)
     {
-        if (Target == nullptr || !Schema.IsValid())
+        // Functions count as well as fields: a script class can be behaviour only, and IsValid asks about
+        // fields alone, which would have left such a type with no record and so no functions either.
+        if (Target == nullptr || (Schema.Fields.empty() && Schema.Functions.empty()))
         {
             return 0;
         }
@@ -1502,24 +1504,24 @@ namespace Lumina::Scripting
         const uint32 ShimSize  = Target->GetSize();
         const uint32 ShimAlign = Target->GetAlignment();
         const CScriptStruct::FEmittedLayout Layout = Record->EmitLayoutInto(Target, ShimSize, Schema);
-        if (Layout.Properties.empty())
-        {
-            return 0;
-        }
 
-        Target->ScriptProperties = Layout.Properties;
-        for (FProperty* Property : Layout.Properties)
+        // A behaviour-only type has no block to append, and still wants its record and its functions.
+        if (!Layout.Properties.empty())
         {
-            // Asking the property means a type that learns to construct is picked up with no change here.
-            if (Property->OwnsStorage())
+            Target->ScriptProperties = Layout.Properties;
+            for (FProperty* Property : Layout.Properties)
             {
-                Target->ScriptLifecycleProperties.push_back(Property);
+                // Asking the property means a type that learns to construct is picked up with no change here.
+                if (Property->OwnsStorage())
+                {
+                    Target->ScriptLifecycleProperties.push_back(Property);
+                }
             }
-        }
 
-        // Must happen before the CDO exists, since creating it allocates from the class size.
-        Target->Size      = Align(Layout.EndOffset, Math::Max(Layout.Alignment, Target->GetAlignment()));
-        Target->Alignment = Math::Max(Layout.Alignment, Target->GetAlignment());
+            // Must happen before the CDO exists, since creating it allocates from the class size.
+            Target->Size      = Align(Layout.EndOffset, Math::Max(Layout.Alignment, Target->GetAlignment()));
+            Target->Alignment = Math::Max(Layout.Alignment, Target->GetAlignment());
+        }
 
         // The record's arena owns the properties, so anchoring it on the class is what keeps them alive.
         Record->SetAppliedSchema(Schema);
@@ -1537,7 +1539,7 @@ namespace Lumina::Scripting
         }
         Target->ShimSize = ShimSize;
         Target->ShimAlign = ShimAlign;
-        Target->bHasAppendedBlock = true;
+        Target->bHasAppendedBlock = !Layout.Properties.empty();
 
         return (uint32)Layout.Properties.size();
     }
@@ -1781,9 +1783,9 @@ namespace Lumina::Scripting
         Target->Size      = ShimSize;
         Target->Alignment = ShimAlign;
 
-        if (!Schema.IsValid() || Schema.Fields.empty())
+        if (Schema.Fields.empty() && Schema.Functions.empty())
         {
-            // The type dropped every property, which is a valid outcome, so rebuild at the shim size.
+            // The type dropped everything, which is a valid outcome, so rebuild at the shim size.
             Target->GetDefaultObject();
             LOG_DISPLAY("Scriptable '{}': script properties removed; the class is back to its shim layout.",
                 Target->GetName().c_str());

@@ -175,6 +175,31 @@ TEST(ScriptFunctionMint, CallingItReachesTheThunkThroughAFrame)
     EXPECT_EQ(Frame.Return<int32>(), 42);
 }
 
+// A script class can be behaviour only. The block append used to ask whether there were fields, so such a
+// type got no layout record and therefore no functions either.
+TEST(ScriptFunctionMint, ATypeWithFunctionsAndNoPropertiesStillGetsThem)
+{
+    static const bool bReflectionReady = [] { ProcessNewlyLoadedCObjects(); return true; }();
+    (void)bReflectionReady;
+
+    CScriptClass* Class = FScriptableRegistry::Mint("ScriptFn_BehaviourOnly", "CScriptableTest", 0);
+    ASSERT_NE(Class, nullptr);
+
+    Scripting::FScriptExportSchema Schema;
+    Schema.Functions.push_back({});
+    Schema.Functions[0].Name = FName("Tick");
+    Schema.Functions[0].ReturnIndex = -1;
+
+    EXPECT_EQ(Scripting::AppendScriptPropertiesToClass(Class, Schema), 0u) << "no properties were appended";
+
+    ASSERT_NE(Class->LayoutRecord.Get(), nullptr) << "but the record has to exist for the functions to live in";
+
+    Class->GetDefaultObject();
+
+    EXPECT_NE(Class->FindFunction("Tick"), nullptr);
+    EXPECT_EQ(Class->GetSize(), Class->ShimSize) << "and the class stays the shim's size";
+}
+
 TEST(ScriptFunctionMint, AFunctionWithNoParametersIsStillCallable)
 {
     Scripting::FScriptExportSchema Params;

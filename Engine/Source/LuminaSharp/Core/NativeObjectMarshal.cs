@@ -24,6 +24,18 @@ public static class NativeObjectMarshal
     // instantiation is cached, since resolving it per call would cost more than the call.
     private static readonly global::System.Collections.Generic.Dictionary<Type, global::System.Reflection.MethodInfo> FromHandleByType = new();
 
+    /// <summary>
+    /// Drops the cached instantiations on hot reload. A script function's parameter can be a user type, and
+    /// the key alone roots it, which pins the collectible load context the generation is trying to unload.
+    /// </summary>
+    internal static void ClearTypeCache()
+    {
+        lock (FromHandleByType)
+        {
+            FromHandleByType.Clear();
+        }
+    }
+
     /// <summary>The canonical wrapper, for a type resolved at runtime rather than named in source.</summary>
     public static NativeObject? FromHandleOfType(IntPtr Object, Type Wanted)
     {
