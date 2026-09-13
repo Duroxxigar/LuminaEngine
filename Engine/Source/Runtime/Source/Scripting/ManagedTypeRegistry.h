@@ -35,7 +35,7 @@ namespace Lumina::Scripting
 
         //~ ScriptableClass payload.
         FString             NativeBaseName;
-        uint64              OverrideFlags = 0;
+        TVector<FString>    OverriddenEvents;
         uint8               UpdatePhase = 0;
     };
 

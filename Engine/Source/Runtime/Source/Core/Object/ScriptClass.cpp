@@ -36,29 +36,6 @@ namespace Lumina
         return true;
     }
 
-    void CScriptClass::DiscardRetiredLayout()
-    {
-        RetiredProperties.clear();
-        // The record's arena owns the properties, so releasing it IS the free.
-        RetiredRecord = nullptr;
-        RetiredIn = 0;
-    }
-
-    void CScriptClass::RetireLayout(uint64 Generation)
-    {
-        // The previous retired generation has survived a whole reload, so nothing can still reach it.
-        DiscardRetiredLayout();
-
-        RetiredRecord = LayoutRecord;
-        RetiredProperties = ScriptProperties;
-        RetiredIn = Generation;
-
-        LayoutRecord = nullptr;
-        ScriptProperties.clear();
-        ScriptLifecycleProperties.clear();
-        bHasAppendedBlock = false;
-    }
-
     void CScriptClass::DestructScriptProperties(void* Object) const
     {
         if (Object == nullptr)
@@ -69,5 +46,13 @@ namespace Lumina
         {
             Property->DestructValue(static_cast<uint8*>(Object) + Property->Offset);
         }
+    }
+}
+namespace Lumina
+{
+    const FFunction* CScriptClass::FindScriptOverride(const FName& Name) const
+    {
+        const auto It = ScriptOverrideFunctions.find(Name);
+        return It != ScriptOverrideFunctions.end() ? It->second : nullptr;
     }
 }

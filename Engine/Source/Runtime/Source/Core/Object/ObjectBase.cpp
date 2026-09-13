@@ -209,6 +209,19 @@ namespace Lumina
         FObjectHashTables::Get().AddObject(this);
     }
 
+    void CObjectBase::HandleGUIDChange(const FGuid& NewGUID) noexcept
+    {
+        if (NewGUID == GUIDPrivate)
+        {
+            return;
+        }
+
+        // The hash is keyed on the GUID, so it has to come out before the value moves under it.
+        FObjectHashTables::Get().RemoveObject(this);
+        GUIDPrivate = NewGUID;
+        FObjectHashTables::Get().AddObject(this);
+    }
+
     void CObjectBase::AddToRoot()
     {
         FScopeLock Lock(RootMutex);

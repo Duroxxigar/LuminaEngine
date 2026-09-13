@@ -1601,17 +1601,7 @@ namespace Lumina::Scripting
 
     void AdvanceScriptTypeGeneration()
     {
-        const uint64 Generation = ++GScriptTypeGeneration();
-
-        // Outliving a whole reload means every consumer that could have cached its properties was rebuilt.
-        for (TObjectIterator<CScriptClass> It; It; ++It)
-        {
-            CScriptClass* Target = *It;
-            if (Target->RetiredRecord != nullptr && Target->RetiredIn < Generation)
-            {
-                Target->DiscardRetiredLayout();
-            }
-        }
+        ++GScriptTypeGeneration();
     }
 
     FString DescribeScriptTypeSignature(const FScriptExportType& Type)
@@ -1723,93 +1713,12 @@ namespace Lumina::Scripting
         return !EnumHasAnyFlags(DiffScriptClassLayout(Target, Schema), EScriptTypeDirty::Layout);
     }
 
-    bool MigrateMintedClassLayout(CScriptClass* Target, const FScriptExportSchema& Schema)
-    {
-        if (Target == nullptr || !Target->bHasAppendedBlock)
-        {
-            return false;   // never had an appended block; the caller wants AppendScriptPropertiesToClass
-        }
-
-        // The caller evacuates first and repopulates after, so refusing here keeps the failure loud.
-        int32   LiveInstances = 0;
-        FString Blockers;
-        GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
-        {
-            if (Base == nullptr || Base->GetClass() != Target
-                || Base->HasAnyFlag(OF_MarkedDestroy) || Base->HasAnyFlag(OF_DefaultObject))
-            {
-                return;
-            }
-
-            ++LiveInstances;
-
-            // Named, because evacuation covers the known holders and only a stray strong reference is left.
-            if (LiveInstances <= 4)
-            {
-                if (!Blockers.empty())
-                {
-                    Blockers += ", ";
-                }
-                Blockers += Base->GetName().c_str();
-            }
-        });
-
-        if (LiveInstances > 0)
-        {
-            if (LiveInstances > 4)
-            {
-                Blockers += Format(", and {} more", LiveInstances - 4);
-            }
-
-            LOG_WARN("Scriptable: '{}' changed its property set but {} live instance(s) remain ({}); the layout "
-                     "was NOT rebuilt, so this edit has not taken. Something outside the world, prefab and game "
-                     "instance holders still holds a strong reference.",
-                     Target->GetName().c_str(), LiveInstances, Blockers.c_str());
-            return false;
-        }
-
-        const uint32 ShimSize  = Target->ShimSize;
-        const uint32 ShimAlign = Target->ShimAlign;
-
-        // The CDO is the old size and carries the old property set, so it cannot survive the rebuild.
-        Target->DiscardDefaultObject();
-
-        // Moves the live block aside rather than freeing it, so a pointer that outlived the rebuild reads
-        // stale rather than freed. It is dropped a whole generation later.
-        Target->RetireLayout(GScriptTypeGeneration());
-
-        // Drops the appended list AND the super chain Link spliced onto its tail; the super keeps its own.
-        Target->Unlink();
-        Target->Size      = ShimSize;
-        Target->Alignment = ShimAlign;
-
-        if (Schema.Fields.empty() && Schema.Functions.empty())
-        {
-            // The type dropped everything, which is a valid outcome, so rebuild at the shim size.
-            Target->GetDefaultObject();
-            LOG_DISPLAY("Scriptable '{}': script properties removed; the class is back to its shim layout.",
-                Target->GetName().c_str());
-            return true;
-        }
-
-        const uint32 Count = AppendScriptPropertiesToClass(Target, Schema);
-
-        // Creating the default object allocates from the class size and calls Link, so both come after.
-        Target->GetDefaultObject();
-
-        LOG_DISPLAY("Scriptable '{}': rebuilt the script property block ({} propert{}) after a schema change.",
-            Target->GetName().c_str(), Count, Count == 1 ? "y" : "ies");
-        return true;
-    }
-
     void ForgetScriptClassLayout(CScriptClass* Target)
     {
         if (Target == nullptr)
         {
             return;
         }
-
-        Target->DiscardRetiredLayout();
 
         // The type is gone with no live instances left, so its current block goes too. Releasing the record
         // frees the arena the properties live in.

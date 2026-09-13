@@ -67,7 +67,7 @@ namespace
         static const bool bReflectionReady = [] { ProcessNewlyLoadedCObjects(); return true; }();
         (void)bReflectionReady;
 
-        Result.Class = FScriptableRegistry::Mint(ClassName, "CScriptableTest", 0);
+        Result.Class = FScriptableRegistry::Mint(ClassName, "CScriptableTest");
         if (Result.Class == nullptr)
         {
             return Result;
@@ -182,7 +182,7 @@ TEST(ScriptFunctionMint, ATypeWithFunctionsAndNoPropertiesStillGetsThem)
     static const bool bReflectionReady = [] { ProcessNewlyLoadedCObjects(); return true; }();
     (void)bReflectionReady;
 
-    CScriptClass* Class = FScriptableRegistry::Mint("ScriptFn_BehaviourOnly", "CScriptableTest", 0);
+    CScriptClass* Class = FScriptableRegistry::Mint("ScriptFn_BehaviourOnly", "CScriptableTest");
     ASSERT_NE(Class, nullptr);
 
     Scripting::FScriptExportSchema Schema;

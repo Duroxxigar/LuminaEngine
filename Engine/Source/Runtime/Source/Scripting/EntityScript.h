@@ -133,6 +133,9 @@ namespace Lumina
         SEntityScriptComponent(const SEntityScriptComponent& Other);
         SEntityScriptComponent& operator=(const SEntityScriptComponent& Other);
 
+        // Reflected so the object graph can be walked and repointed, NoSerialize because the component
+        // carries its own Serialize and a second, per-property path would fight it.
+        PROPERTY(NoSerialize)
         TVector<TObjectPtr<CEntityScript>> Scripts;
         
         bool Serialize(FArchive& Ar);
@@ -161,35 +164,6 @@ namespace Lumina
 
         // Walks a snapshot, so an OnDetach that adds or removes scripts cannot invalidate the pool underneath.
         RUNTIME_API void DetachAllInRegistry(ECS::FRegistry& Registry);
-
-        /**
-         * One entity's scripts, serialized
-         */
-        struct FEvacuatedScripts
-        {
-            // The CWorld or CPrefab owning the registry Entity lives in. A prefab asset holds script objects
-            // of its own, and one of those blocks a layout rebuild exactly as a world's does.
-            TWeakObjectPtr<CObject> Owner;
-            ECS::FEntity            Entity = ECS::NullEntity;
-            // CPrefab only: the variant delta registry rather than the resolved one.
-            bool                    bVariantDelta = false;
-            TVector<uint8>          Bytes;
-        };
-
-        /**
-         * Serializes and detaches every script whose class is in Classes, across every live world AND every
-         * loaded prefab asset.
-         *
-         * Returns the number of entities evacuated. OnDetach is deliberately NOT run: the scripts are coming
-         * straight back, and a detach/attach pair would fire lifecycle callbacks for what the author sees as
-         * an edit. They come back un-readied, so OnReady runs again on the next tick, which is the same thing
-         * a scene load does.
-         */
-        RUNTIME_API int32 Evacuate(const THashSet<CClass*>& Classes, TVector<FEvacuatedScripts>& Out);
-
-        /** Rebuilds the scripts Evacuate took out. Entities whose owner or entity died in between are
-         *  skipped. Returns the number of entities restored. */
-        RUNTIME_API int32 Restore(const TVector<FEvacuatedScripts>& Saved);
 
         //~ Lookup/mutation by class, backing the script-facing GetScript/AddScript/RemoveScript API. Class
         //~ rather than C# type: a C++ script is found by exactly the same call.

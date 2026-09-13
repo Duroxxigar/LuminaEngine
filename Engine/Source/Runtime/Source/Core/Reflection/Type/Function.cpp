@@ -115,8 +115,13 @@ namespace Lumina
             {
                 ParamArray[Index] = OrderedParams[Index];
 
-                // A parameter answers for the function's owner, so a walker can get back to the type.
-                ParamArray[Index]->OwnerStruct = Owner;
+                // A parameter answers for the function's owner, so a walker can get back to the type. Only
+                // when it has none: an override borrows its base's parameters, and claiming them would
+                // retarget the base's own function to whichever subclass was minted last.
+                if (ParamArray[Index]->OwnerStruct == nullptr)
+                {
+                    ParamArray[Index]->OwnerStruct = Owner;
+                }
             }
         }
 

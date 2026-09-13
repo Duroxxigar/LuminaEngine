@@ -51,6 +51,13 @@ internal static unsafe class FrameMarshal
             return Object == IntPtr.Zero ? null : NativeObjectMarshal.FromHandleOfType(Object, Wanted);
         }
 
+        // A struct wrapper is a view over native memory, so it is pointed straight at the frame's slot. The
+        // frame outlives the call, which is the whole window the view is valid for.
+        if (typeof(NativeStruct).IsAssignableFrom(Wanted))
+        {
+            return Activator.CreateInstance(Wanted, (IntPtr)Slot);
+        }
+
         Debug.LogError($"Script function argument of type {Wanted.Name} cannot be read from a call frame; it comes through as its default.");
         return Default(Wanted);
     }
@@ -92,6 +99,14 @@ internal static unsafe class FrameMarshal
         if (typeof(NativeObject).IsAssignableFrom(Declared))
         {
             Native.PropSetObject(Frame, Property, NativeObjectMarshal.ToHandle(Value as NativeObject));
+            return;
+        }
+
+        // Returning a struct by value would mean copying the wrapper's storage over the slot, which the
+        // property knows how to do and the wrapper does not; no ScriptEvent returns one today.
+        if (typeof(NativeStruct).IsAssignableFrom(Declared))
+        {
+            Debug.LogError($"Script function returning {Declared.Name} by value is not supported; the caller sees the default.");
             return;
         }
 

@@ -171,6 +171,11 @@ namespace Lumina
         TVector<int32>              FreeIndices;
         TVector<int32>              QuarantinedIndices;
         int32                       QuarantineCursor = 0;
+
+        // A reinstanced object did not die, it became another object, so a handle to the original resolves
+        // onward instead of reading as destroyed. Consulted only when the generation already failed to
+        // match, so a live handle never pays for it.
+        THashMap<FObjectHandle, FObjectHandle> ReinstanceRedirects;
         bool                        bInitialized = false;
         bool                        bShuttingDown = false;
     
@@ -193,6 +198,15 @@ namespace Lumina
         void DeallocateObject(int32 Index);
 
         RUNTIME_API CObjectBase* ResolveHandle(const FObjectHandle& Handle) const;
+
+        /** Points every future resolve of From at To, so weak references follow a reinstanced object. */
+        RUNTIME_API void AddReinstanceRedirect(const FObjectHandle& From, const FObjectHandle& To);
+
+    private:
+
+        CObjectBase* ResolveRedirect(const FObjectHandle& Handle) const;
+
+    public:
 
         RUNTIME_API CObjectBase* GetObjectByIndex(int32 Index) const;
 

@@ -6,7 +6,7 @@
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectIterator.h"
-#include "Core/Object/Archive/ObjectReferenceReplacerArchive.h"
+#include "Core/Object/ObjectReferenceReplacer.h"
 #include "Core/Profiler/Profile.h"
 #include "Memory/MemoryTracking.h"
 #include "Core/Serialization/Package/PackageLoader.h"
@@ -862,14 +862,8 @@ namespace Lumina
                     continue;
                 }
 
-                FObjectReferenceReplacerArchive Ar(ExportObject.Get(), nullptr);
-                for (TObjectIterator<CObject> Itr; Itr; ++Itr)
-                {
-                    if (CObject* Object = *Itr)
-                    {
-                        Object->Serialize(Ar);
-                    }
-                }
+                FObjectReferenceReplacer Replacer(ExportObject.Get(), nullptr);
+                Replacer.ApplyToAllObjects();
             }
         }
 

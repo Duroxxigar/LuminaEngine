@@ -40,4 +40,14 @@ namespace Lumina::Scripting
      * and the managed side reads its arguments back out of the frame through the parameters themselves.
      */
     RUNTIME_API void ScriptFunctionThunk(const FFunction& Function, void* Context, void* Frame);
+
+    /**
+     * Mints an override of Base onto Class, whose body is the script's rather than the C++ one.
+     *
+     * Shares Base's parameters rather than describing the signature again: they already describe the frame
+     * the generated caller builds, down to the offsets the compiler chose for it, so anything else would be
+     * a second opinion about the same layout. Base belongs to a native class, whose arena outlives everything.
+     */
+    RUNTIME_API FFunction* MintScriptOverride(CScriptClass& Class, const FFunction& Base,
+                                             FFunction::FNativeFuncPtr Thunk);
 }

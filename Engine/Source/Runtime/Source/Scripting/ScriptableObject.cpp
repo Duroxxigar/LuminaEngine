@@ -1,5 +1,9 @@
 ﻿#include "RuntimePCH.h"
+#include "ScriptFunctionMint.h"
 #include "ScriptableObject.h"
+
+#include "Core/Object/ObjectReinstancer.h"
+#include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 #include "ManagedTypeRegistry.h"
 
 #include "EntityScript.h"
@@ -74,73 +78,8 @@ namespace Lumina
             return Map;
         }
 
-        void ClearDeadClassRefsInStruct(CStruct* Layout, void* Data, CClass* Dead, const CObject* Owner, int32& OutCleared);
-
-        // Recurses through struct values, array elements and instanced-struct payloads.
-        void ClearDeadClassRefsInValue(FProperty* Property, void* Value, CClass* Dead, const CObject* Owner, int32& OutCleared)
-        {
-            switch (Property->TypeFlags)
-            {
-            case EPropertyTypeFlags::Class:
-            {
-                CClass** Ptr = static_cast<CClass**>(Value);
-                if (*Ptr == Dead)
-                {
-                    *Ptr = nullptr;
-                    ++OutCleared;
-                    LOG_DISPLAY("Scriptable: cleared '{}.{}', it referenced the retired class '{}'.",
-                        Owner->GetName().c_str(), Property->Name.c_str(), Dead->GetName().c_str());
-                }
-                break;
-            }
-            case EPropertyTypeFlags::Struct:
-            {
-                FStructProperty* StructProperty = static_cast<FStructProperty*>(Property);
-                if (StructProperty->GetStruct() != nullptr)
-                {
-                    ClearDeadClassRefsInStruct(StructProperty->GetStruct(), Value, Dead, Owner, OutCleared);
-                }
-                break;
-            }
-            case EPropertyTypeFlags::Vector:
-            {
-                FArrayProperty* ArrayProperty = static_cast<FArrayProperty*>(Property);
-                if (FProperty* Inner = ArrayProperty->GetInternalProperty())
-                {
-                    ArrayProperty->ForEach(Value, [&](void* Element, SIZE_T)
-                    {
-                        ClearDeadClassRefsInValue(Inner, Element, Dead, Owner, OutCleared);
-                    });
-                }
-                break;
-            }
-            case EPropertyTypeFlags::InstancedStruct:
-            {
-                FInstancedStruct* Instanced = static_cast<FInstancedStruct*>(Value);
-                if (Instanced->GetScriptStruct() != nullptr && Instanced->GetMutableMemory() != nullptr)
-                {
-                    ClearDeadClassRefsInStruct(Instanced->GetScriptStruct(), Instanced->GetMutableMemory(), Dead, Owner, OutCleared);
-                }
-                break;
-            }
-            default:
-                break;
-            }
-        }
-
-        void ClearDeadClassRefsInStruct(CStruct* Layout, void* Data, CClass* Dead, const CObject* Owner, int32& OutCleared)
-        {
-            for (CStruct* Current = Layout; Current != nullptr; Current = Current->GetSuperStruct())
-            {
-                Current->ForEachProperty<FProperty>([&](FProperty* Property)
-                {
-                    ClearDeadClassRefsInValue(Property, static_cast<uint8*>(Data) + Property->Offset, Dead, Owner, OutCleared);
-                });
-            }
-        }
-
         // Returns false while live instances remain, since destroying the class would dangle their pointers.
-        bool TryRetireMintedClass(const FName& NameId, CScriptClass* Class)
+        bool TryRetireMintedClass(const FName& NameId, CScriptClass* Class, const char* Reason)
         {
             int32 LiveInstances = 0;
             GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
@@ -160,6 +99,16 @@ namespace Lumina
 
             // It serializes by name, so a re-added type re-resolves from config and saves untouched.
             int32 Cleared = 0;
+            auto DropRetired = [&](CObject* Current) -> CObject*
+            {
+                if (Current != static_cast<CObject*>(Class))
+                {
+                    return Current;
+                }
+                ++Cleared;
+                return nullptr;
+            };
+
             GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
             {
                 if (Base == nullptr || Base == Class || Base->HasAnyFlag(OF_MarkedDestroy))
@@ -167,10 +116,7 @@ namespace Lumina
                     return;
                 }
                 CObject* Object = static_cast<CObject*>(Base);
-                if (Object->GetClass() != nullptr)
-                {
-                    ClearDeadClassRefsInStruct(Object->GetClass(), Object, Class, Object, Cleared);
-                }
+                FObjectReferenceVisitor::VisitStruct(Object->GetClass(), Object, DropRetired);
             });
 
             // The root set holds the only strong reference, so un-rooting reaches zero and frees inside it.
@@ -184,7 +130,7 @@ namespace Lumina
 
             Class->RemoveFromRoot();
 
-            LOG_DISPLAY("Scriptable: retired minted class '{}' (its C# type no longer exists).", NameId.c_str());
+            LOG_DISPLAY("Scriptable: retired minted class '{}' ({}).", NameId.c_str(), Reason);
             return true;
         }
     }
@@ -195,7 +141,73 @@ namespace Lumina
         GNativeInfos()[FString(NativeClassName)] = Info;
     }
 
-    CScriptClass* FScriptableRegistry::Mint(FStringView TypeName, FStringView NativeBaseName, uint64 OverrideFlags)
+    /**
+     * Turns the events a C# subclass overrides into real functions on the minted class.
+     *
+     * Each one borrows the declaration from the native base, so the override describes exactly the frame the
+     * generated caller builds; all that differs is whose body runs. Rebuilt from scratch, since a reload can
+     * remove an override as easily as add one.
+     */
+    void FScriptableRegistry::ApplyScriptOverrides(CScriptClass* Minted, TSpan<const FString> OverriddenEvents)
+    {
+        if (Minted == nullptr)
+        {
+            return;
+        }
+
+        Minted->ScriptOverrideFunctions.clear();
+
+        CStruct* Base = Minted->GetSuperStruct();
+        if (Base == nullptr)
+        {
+            return;
+        }
+
+        // The thunks are registered against the native base the shim was generated for, which is where the
+        // typed dispatch for each event lives.
+        const FScriptableNativeInfo* Info = nullptr;
+        if (const auto It = GNativeInfos().find(FString(Base->GetName().c_str())); It != GNativeInfos().end())
+        {
+            Info = &It->second;
+        }
+
+        for (const FString& Event : OverriddenEvents)
+        {
+            const FName EventName(Event.c_str());
+            const FFunction* Declared = Base->FindFunction(EventName);
+            if (Declared == nullptr)
+            {
+                LOG_WARN("Scriptable '{}' overrides '{}', which its base does not declare as a reflected "
+                         "function; the native body stays in place.", Minted->GetName(), EventName);
+                continue;
+            }
+
+            FFunction::FNativeFuncPtr Thunk = nullptr;
+            if (Info != nullptr)
+            {
+                for (const FScriptableEventThunk& Candidate : Info->EventThunks)
+                {
+                    if (Candidate.Name != nullptr && EventName == FName(Candidate.Name))
+                    {
+                        Thunk = Candidate.Thunk;
+                        break;
+                    }
+                }
+            }
+
+            if (Thunk == nullptr)
+            {
+                LOG_WARN("Scriptable '{}': '{}' has no generated dispatch, so the native body stays in place.",
+                    Minted->GetName(), EventName);
+                continue;
+            }
+
+            Scripting::MintScriptOverride(*Minted, *Declared, Thunk);
+        }
+    }
+
+    CScriptClass* FScriptableRegistry::Mint(FStringView TypeName, FStringView NativeBaseName,
+                                           TSpan<const FString> OverriddenEvents)
     {
         const FString Name(TypeName.data(), TypeName.size());
         const FName NameId(Name.c_str());
@@ -224,7 +236,7 @@ namespace Lumina
             Info.ShimSize, Info.ShimAlign, Info.GetBaseClass, Info.Factory);
         if (Minted != nullptr)
         {
-            Minted->ScriptOverrides = OverrideFlags;
+            ApplyScriptOverrides(Minted, OverriddenEvents);
             GMintedClasses()[NameId] = Minted;
         }
         return Minted;
@@ -344,37 +356,39 @@ namespace Lumina
         }
 
         // Its instances are the wrong class rather than the wrong size, and the redirect moves them across.
-        GatherRenamedClasses(NeedRebuild);
+        THashSet<CClass*> Renamed;
+        GatherRenamedClasses(Renamed);
 
-        TVector<EntityScripts::FEvacuatedScripts> Evacuated;
-
-        // The one live instance no registry owns, so nothing else would take it out of the way of a rebuild.
-        FName          EvacuatedGameInstanceClass;
-        TVector<uint8> EvacuatedGameInstanceBytes;
-        bool           bEvacuatedGameInstance = false;
-
-        if (!NeedRebuild.empty())
+        // A reshaped class is REPLACED rather than rebuilt: an instance's size is fixed at allocation, so a
+        // new layout needs a new class, and the reinstancer is what moves the live instances onto it.
+        struct FPendingReplacement
         {
-            const int32 Count = EntityScripts::Evacuate(NeedRebuild, Evacuated);
-            if (Count > 0)
+            FName         Name;
+            CScriptClass* Old = nullptr;
+        };
+
+        TVector<FPendingReplacement> Replacements;
+        for (CClass* Old : NeedRebuild)
+        {
+            auto* const Minted = Cast<CScriptClass>(Old);
+            if (Minted == nullptr)
             {
-                LOG_DISPLAY("Scriptable: {} script class(es) changed shape or name; evacuated {} entit{}.",
-                    NeedRebuild.size(), Count, Count == 1 ? "y" : "ies");
+                continue;
             }
 
-            if (GEngine != nullptr)
-            {
-                bEvacuatedGameInstance = GEngine->EvacuateGameInstance(
-                    NeedRebuild, EvacuatedGameInstanceClass, EvacuatedGameInstanceBytes);
-                if (bEvacuatedGameInstance)
-                {
-                    LOG_DISPLAY("Scriptable: evacuated the game instance ('{}') for the rebuild.",
-                        EvacuatedGameInstanceClass.c_str());
-                }
-            }
+            // Out of the registry and out of the way of the name so the replacement can claim it. The class
+            // object itself stays alive until the reinstance is done, since its instances still point at it.
+            const FName Name = Minted->GetName();
+            GMintedClasses().erase(Name);
+
+            static uint32 ReplacementCounter = 0;
+            const FString Retired = FString("REPLACED_") + Name.c_str();
+            Minted->Rename(FName(Retired.c_str(), ++ReplacementCounter), Minted->GetPackage());
+
+            Replacements.push_back(FPendingReplacement{ Name, Minted });
         }
 
-        // AFTER the evacuation, so a renamed class retires now instead of lingering in editor pickers.
+        // AFTER the replacements, so a renamed class retires now instead of lingering in editor pickers.
         THashSet<FName> LiveNames;
         for (const Scripting::FManagedTypeDefinition* Desc : Descs)
         {
@@ -390,7 +404,7 @@ namespace Lumina
         }
         for (const FName& Name : StaleNames)
         {
-            if (TryRetireMintedClass(Name, GMintedClasses()[Name]))
+            if (TryRetireMintedClass(Name, GMintedClasses()[Name], "its C# type no longer exists"))
             {
                 GMintedClasses().erase(Name);
             }
@@ -400,10 +414,10 @@ namespace Lumina
         TVector<CScriptClass*> NeedDefaults;
         for (const Scripting::FManagedTypeDefinition* Desc : Descs)
         {
-            if (CScriptClass* Minted = Mint(Desc->TypeName.c_str(), Desc->NativeBaseName, Desc->OverrideFlags))
+            if (CScriptClass* Minted = Mint(Desc->TypeName.c_str(), Desc->NativeBaseName, Desc->OverriddenEvents))
             {
                 // Minted classes are REUSED by name, so an added or removed override must update the mask.
-                Minted->ScriptOverrides = Desc->OverrideFlags;
+                ApplyScriptOverrides(Minted, Desc->OverriddenEvents);
                 Minted->ScriptUpdatePhase = Desc->UpdatePhase;
 
                 // Re-appending would duplicate properties, so a changed schema tears the block down and rebuilds.
@@ -425,27 +439,17 @@ namespace Lumina
                 }
                 else if (bHaveSchema)
                 {
+                    // A layout change never reaches here: it was staged as a replacement above, so this class
+                    // is a fresh one and the branch over it appended its block already.
                     const EScriptTypeDirty Dirty = Scripting::DiffScriptClassLayout(Minted, Schema);
 
-                    if (EnumHasAnyFlags(Dirty, EScriptTypeDirty::Layout))
+                    if (EnumHasAnyFlags(Dirty, EScriptTypeDirty::Metadata))
                     {
-                        // Refuses while live instances remain, since they are laid out at the old size.
-                        if (Scripting::MigrateMintedClassLayout(Minted, Schema))
-                        {
-                            NeedDefaults.push_back(Minted);
-                        }
+                        Scripting::RefreshScriptPropertyMetadata(Minted, Schema);
                     }
-                    else
+                    if (EnumHasAnyFlags(Dirty, EScriptTypeDirty::Defaults))
                     {
-                        // No reshape, so these land without touching instances that are already live.
-                        if (EnumHasAnyFlags(Dirty, EScriptTypeDirty::Metadata))
-                        {
-                            Scripting::RefreshScriptPropertyMetadata(Minted, Schema);
-                        }
-                        if (EnumHasAnyFlags(Dirty, EScriptTypeDirty::Defaults))
-                        {
-                            NeedDefaults.push_back(Minted);
-                        }
+                        NeedDefaults.push_back(Minted);
                     }
                 }
 
@@ -466,17 +470,44 @@ namespace Lumina
             DotNet::ApplyScriptableDefaults(Minted->GetName().ToString(), DefaultObject);
         }
 
-        // A property added this reload has to carry its initializer already or it would come back zeroed.
-        if (!Evacuated.empty())
+        // LAST, because a replacement has to be linked and hold a default object before an instance can be
+        // built on it. Every holder is reached through the reflected graph and the registered providers, so
+        // nothing here knows what was pointing at the old classes.
+        FObjectReinstancer Reinstancer;
+
+        for (const FPendingReplacement& Pending : Replacements)
         {
-            const int32 Count = EntityScripts::Restore(Evacuated);
-            LOG_DISPLAY("Scriptable: restored {} entit{} after the rebuild.", Count, Count == 1 ? "y" : "ies");
+            const auto Found = GMintedClasses().find(Pending.Name);
+            CScriptClass* const New = Found != GMintedClasses().end() ? Found->second : nullptr;
+            if (New == nullptr)
+            {
+                LOG_WARN("Scriptable: '{}' changed shape but was not re-minted; its instances are left on the "
+                         "previous class.", Pending.Name.c_str());
+                continue;
+            }
+            Reinstancer.MapClass(Pending.Old, New);
         }
 
-        if (bEvacuatedGameInstance && GEngine != nullptr)
+        // A rename has no replacement of its own: the instances move onto whatever the alias resolves to.
+        for (CClass* Old : Renamed)
         {
-            GEngine->RestoreGameInstance(EvacuatedGameInstanceClass, EvacuatedGameInstanceBytes);
-            LOG_DISPLAY("Scriptable: restored the game instance after the rebuild.");
+            if (CClass* Target = ResolveClass(Old->GetName()))
+            {
+                Reinstancer.MapClass(Old, Target);
+            }
+        }
+
+        if (!Reinstancer.IsEmpty())
+        {
+            const FReinstanceResult Result = Reinstancer.Commit();
+            LOG_DISPLAY("Scriptable: reinstanced {} object(s), repointed {} reference(s) across {} object(s) "
+                        "and {} provider(s).", Result.InstancesReplaced, Result.ReferencesPatched,
+                        Result.ObjectsScanned, Result.ProvidersVisited);
+
+            for (const FPendingReplacement& Pending : Replacements)
+            {
+                TryRetireMintedClass(Pending.Old->GetName(), Pending.Old, "superseded by a reshaped replacement");
+            }
         }
     }
 }

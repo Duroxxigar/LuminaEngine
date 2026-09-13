@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Containers/Queue.h"
+#include "Core/Object/ObjectReferenceProvider.h"
 #include <imgui/imgui.h>
 #include "Events/EventProcessor.h"
 #include "nlohmann/json.hpp"
@@ -27,9 +28,17 @@ namespace Lumina
 namespace Lumina
 {
     // EDITOR_API: exported so editor plugins can create/toggle tools via CreateTool/ToggleTool.
-    class EDITOR_API FEditorUI : public IDevelopmentToolUI, public IEditorToolContext
+    class EDITOR_API FEditorUI : public IDevelopmentToolUI, public IEditorToolContext, public IObjectReferenceProvider
     {
     public:
+
+        //~ IObjectReferenceProvider: a tool is not a CObject, so the assets and worlds the open editors hold
+        //~ are reachable from nowhere else.
+
+        const char* GetReferenceProviderName() const override { return "editor tools"; }
+
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override;
+
 
         FEditorUI() = default;
         ~FEditorUI() override = default;

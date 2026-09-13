@@ -6,7 +6,7 @@
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Containers/HashTable.h"
 #include "Containers/Vector.h"
-#include "Core/Object/Archive/ObjectReferenceReplacerArchive.h"
+#include "Core/Object/ObjectReferenceReplacer.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Object.h"
 #include "Core/Object/ObjectCore.h"
@@ -57,7 +57,7 @@ namespace Lumina::ReplaceReferences
             uint32                          Failed = 0;
             FName                           Current;
 
-            TUniquePtr<FObjectReferenceReplacerArchive> Archive;
+            TUniquePtr<FObjectReferenceReplacer> Replacer;
             TUniquePtr<FScopedAssetRegistryBatch>       RegistryBatch;
 
             ImGuiTextFilter                 PickerFilter;
@@ -199,7 +199,7 @@ namespace Lumina::ReplaceReferences
 
         void BeginApply(FModalState& State)
         {
-            State.Archive = MakeUnique<FObjectReferenceReplacerArchive>();
+            State.Replacer = MakeUnique<FObjectReferenceReplacer>();
 
             for (const FAssetReferenceFixup& Entry : State.Entries)
             {
@@ -222,7 +222,7 @@ namespace Lumina::ReplaceReferences
 
                 if (Target != nullptr)
                 {
-                    State.Archive->AddReplacement(Target, Replacement);
+                    State.Replacer->AddReplacement(Target, Replacement);
                 }
                 else
                 {
@@ -233,7 +233,7 @@ namespace Lumina::ReplaceReferences
 
                 const FGuid ReplacementGUID = Replacement != nullptr ? Entry.ReplacementGUID : FGuid();
 
-                State.Archive->AddSoftReplacement(Entry.AssetGUID,
+                State.Replacer->AddSoftReplacement(Entry.AssetGUID,
                     FStringView(Entry.AssetPath.c_str(), Entry.AssetPath.size()),
                     ReplacementGUID,
                     FStringView(ReplacementPath.c_str(), ReplacementPath.size()));
@@ -278,7 +278,7 @@ namespace Lumina::ReplaceReferences
                 }
                 State.VisitedPackages.insert(Package);
 
-                State.Archive->ResetNumReplaced();
+                uint32 ReplacedHere = 0;
 
                 TVector<CObject*> Objects;
                 GetObjectsWithPackage(Package, Objects);
@@ -289,11 +289,11 @@ namespace Lumina::ReplaceReferences
                         continue;
                     }
 
-                    Object->Serialize(*State.Archive);
+                    ReplacedHere += State.Replacer->ApplyTo(Object);
                 }
 
                 // The registry edge can predate an edit that already dropped the reference.
-                if (State.Archive->GetNumReplaced() == 0)
+                if (ReplacedHere == 0)
                 {
                     continue;
                 }
@@ -316,7 +316,7 @@ namespace Lumina::ReplaceReferences
             if (State.WorkIndex >= State.Work.size())
             {
                 State.RegistryBatch.reset();
-                State.Archive.reset();
+                State.Replacer.reset();
                 State.Phase = EPhase::Done;
             }
         }

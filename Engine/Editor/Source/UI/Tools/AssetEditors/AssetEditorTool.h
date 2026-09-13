@@ -17,6 +17,13 @@ namespace Lumina
     {
     public:
 
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override
+        {
+            FEditorTool::VisitObjectReferences(Func);
+            Asset = Func(Asset.Get());
+        }
+
+
         FAssetEditorTool(IEditorToolContext* Context, const FString& AssetName, CObject* InAsset, CWorld* InWorld = nullptr)
             : FEditorTool(Context, AssetName, InWorld)
             , bAssetLoadBroadcasted(false)

@@ -1,4 +1,6 @@
 ﻿#include "RuntimePCH.h"
+
+#include "World/ECS/ECSReferenceProvider.h"
 #include "Memory/MemoryTracking.h"
 #include "World/ECS/Registry.h"
 #include "Prefab.h"
@@ -114,6 +116,12 @@ namespace Lumina
     void CPrefab::BumpDataGeneration()
     {
         ++GDataGeneration;
+    }
+
+    void CPrefab::VisitAdditionalObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+    {
+        VisitRegistryObjectReferences(Registry, Func);
+        VisitRegistryObjectReferences(VariantDelta, Func);
     }
 
     void CPrefab::Serialize(FArchive& Ar)

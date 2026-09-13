@@ -61,6 +61,9 @@ namespace Lumina
         RUNTIME_API int32 GetInternalIndex() const { return InternalIndex; }
 
         /** Roots the object, preventing destruction. */
+        /** Re-keys this object's GUID in the object hash, so another object can take the one it had. */
+        RUNTIME_API void HandleGUIDChange(const FGuid& NewGUID) noexcept;
+
         RUNTIME_API void AddToRoot();
         RUNTIME_API void RemoveFromRoot();
 

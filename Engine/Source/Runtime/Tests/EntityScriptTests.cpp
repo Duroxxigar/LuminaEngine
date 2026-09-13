@@ -8,6 +8,9 @@
 #include "Core/Object/ObjectCore.h"
 #include "Scripting/EntityScript.h"
 #include "Scripting/ScriptableObject.h"
+#include "Core/Object/ObjectReinstancer.h"
+#include "Core/Reflection/Type/ObjectReferenceVisitor.h"
+#include "ScriptReshapeTestUtil.h"
 #include "Scripting/ScriptableTest.h"
 #include "Scripting/ScriptStruct.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
@@ -15,6 +18,50 @@
 #include "Core/Serialization/ObjectArchiver.h"
 
 using namespace Lumina;
+
+namespace
+{
+    // A registry a unit test owns is not reachable from GWorldManager, so it takes part in a reinstance the
+    // same way the engine's own holders do rather than through anything test-specific in the reinstancer.
+    class FLocalRegistryReferenceProvider final : public IObjectReferenceProvider
+    {
+    public:
+
+        explicit FLocalRegistryReferenceProvider(ECS::FRegistry& InRegistry)
+            : Registry(InRegistry)
+        {
+        }
+
+        const char* GetReferenceProviderName() const override { return "test registry"; }
+
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override
+        {
+            for (ECS::FSparseSet* Storage : Registry.GetActiveStorages())
+            {
+                CStruct* const Struct = Storage != nullptr ? Storage->GetStruct() : nullptr;
+                if (Struct == nullptr)
+                {
+                    continue;
+                }
+
+                const ECS::FEntity* Dense = Storage->GetDenseData();
+                const size_t        Count = Storage->GetDenseSize();
+                for (size_t Index = 0; Index < Count; ++Index)
+                {
+                    if (!Dense[Index].IsTombstone())
+                    {
+                        FObjectReferenceVisitor::VisitStruct(Struct, Storage->GetRawAtDense((uint32)Index), Func);
+                    }
+                }
+            }
+        }
+
+    private:
+
+        ECS::FRegistry& Registry;
+    };
+}
+
 
 // CEntityScript is one base both languages subclass, driven by one loop of virtual calls.
 
@@ -37,7 +84,7 @@ namespace
         Info.ShimAlign    = CEntityScriptTest::StaticClass()->GetAlignment();
         FScriptableRegistry::RegisterNative("CEntityScriptTest", Info);
 
-        CScriptClass* Minted = FScriptableRegistry::Mint(TypeName, "CEntityScriptTest", 0);
+        CScriptClass* Minted = FScriptableRegistry::Mint(TypeName, "CEntityScriptTest");
         if (Minted == nullptr)
         {
             return nullptr;
@@ -291,7 +338,7 @@ TEST(EntityScriptUnification, ManyScriptsAndEntitiesTickThroughOneLoop)
 // A minted CClass is attached and ticked by the SAME driver, with no separate code path.
 TEST(EntityScriptUnification, MintedScriptClassTicksThroughTheSameDriver)
 {
-    CScriptClass* Minted = FScriptableRegistry::Mint("EntityScript_GTestMinted", "CEntityScript", 0);
+    CScriptClass* Minted = FScriptableRegistry::Mint("EntityScript_GTestMinted", "CEntityScript");
     ASSERT_NE(Minted, nullptr) << "minting failed (is the CEntityScript shim registered?)";
     ProcessNewlyLoadedCObjects();
     Minted->GetDefaultObject();
@@ -399,7 +446,7 @@ TEST(EntityScriptUnification, ScriptPropertyValuesSurviveTheComponentRoundTrip)
         Label.Type->Kind = EPropertyTypeFlags::String;
     }
 
-    CScriptClass* Minted = FScriptableRegistry::Mint("EntityScript_GTestValues", "CEntityScript", 0);
+    CScriptClass* Minted = FScriptableRegistry::Mint("EntityScript_GTestValues", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     ASSERT_GT(Scripting::AppendScriptPropertiesToClass(Minted, Schema), 0u);
     ProcessNewlyLoadedCObjects();
@@ -481,7 +528,7 @@ TEST(EntityScriptUnification, FindAndRemoveByClass)
     EXPECT_FALSE(EntityScripts::Remove(Registry, Entity, First)) << "removing twice must be refused";
 }
 
-// The reload evacuates first, since a class rebuild cannot happen with instances alive.
+// The reinstancer carries attached scripts across, so no holder has to empty itself first.
 TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
 {
     ECS::FRegistry Registry{};
@@ -495,7 +542,7 @@ TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
         Before.Fields.push_back(std::move(Speed));
     }
 
-    CScriptClass* Minted = FScriptableRegistry::Mint("EvacTest_Script", "CEntityScript", 0);
+    CScriptClass* Minted = FScriptableRegistry::Mint("EvacTest_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Before);
     ProcessNewlyLoadedCObjects();
@@ -512,7 +559,6 @@ TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
     // Identity by GUID, not by address, since the pooled allocator may reuse the block.
     const FGuid AttachedGuid = Attached->GetGUID();
 
-    // A rebuild is refused while the script is attached, which is exactly why evacuation exists.
     Scripting::FScriptExportSchema After;
     {
         Scripting::FScriptExportField Kept;
@@ -527,47 +573,31 @@ TEST(EntityScriptUnification, ScriptsSurviveAClassLayoutRebuild)
         Added.Type->Kind = EPropertyTypeFlags::Int32;
         After.Fields.push_back(std::move(Added));
     }
-    EXPECT_FALSE(Scripting::MigrateMintedClassLayout(Minted, After));
 
-    // Evacuated by hand, since a unit test has no world contexts for ForEachWorld to walk.
-    TVector<uint8> Bytes;
-    {
-        SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
-        ASSERT_NE(Component, nullptr);
-        FMemoryWriter Writer(Bytes);
-        FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
-        Component->Serialize(Ar);
-        Component->Scripts.clear();
-    }
-    ASSERT_FALSE(Bytes.empty());
-
-    // With nothing attached the same rebuild goes through.
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Minted, After));
-
-    {
-        SEntityScriptComponent& Component = Registry.GetOrEmplace<SEntityScriptComponent>(Entity);
-        FMemoryReader Reader(Bytes);
-        FObjectProxyArchiver Ar(Reader, /*bLoadIfFindFails*/ true);
-        Component.Serialize(Ar);
-    }
+    // A local registry is not reachable from GWorldManager, so it takes part the same way any holder does.
+    FLocalRegistryReferenceProvider Provider{ Registry };
+    FObjectReferenceProviders::Register(&Provider);
+    Minted = ScriptTest::Reshape(Minted, "EvacTest_Script_V2", After, "CEntityScript");
+    FObjectReferenceProviders::Unregister(&Provider);
+    ASSERT_NE(Minted, nullptr);
 
     SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
     ASSERT_NE(Component, nullptr);
-    ASSERT_EQ(Component->Scripts.size(), 1u) << "the script did not come back";
+    ASSERT_EQ(Component->Scripts.size(), 1u) << "the attached script did not survive the reshape";
 
     CEntityScript* Restored = Component->Scripts[0].Get();
     ASSERT_NE(Restored, nullptr);
     EXPECT_EQ(Restored->GetClass(), Minted);
-    EXPECT_NE(Restored->GetGUID(), AttachedGuid) << "restore must build a NEW object; the old one was the old size";
+    EXPECT_EQ(Restored->GetGUID(), AttachedGuid) << "identity must follow the instance onto the replacement";
 
-    // The authored value rode across the rebuild, keyed by name.
+    // The authored value rode across the reshape, keyed by name.
     FProperty* NewSpeed = Minted->GetProperty(FName("Speed"));
     ASSERT_NE(NewSpeed, nullptr);
     EXPECT_FLOAT_EQ(*NewSpeed->GetValuePtr<float>(Restored), 12.5f) << "the authored value was lost";
 
-    // And the property added by this reload exists on the restored instance, at its default.
+    // And the property added by this reload exists on the carried instance, at its default.
     FProperty* Health = Minted->GetProperty(FName("Health"));
-    ASSERT_NE(Health, nullptr) << "the added property is missing from the restored instance";
+    ASSERT_NE(Health, nullptr) << "the added property is missing from the carried instance";
     EXPECT_EQ(*Health->GetValuePtr<int32>(Restored), 0);
 
     // Still a working script, so the driver adopts it and ticks it like any other.
@@ -601,7 +631,7 @@ TEST(EntityScriptUnification, RenamingAPropertyKeepsItsValueViaAlias)
     Scripting::FScriptExportSchema Before;
     Before.Fields.push_back(MakeReloadField("Speed", EPropertyTypeFlags::Float));
 
-    CScriptClass* Minted = FScriptableRegistry::Mint("RenameProp_Script", "CEntityScript", 0);
+    CScriptClass* Minted = FScriptableRegistry::Mint("RenameProp_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Before);
     ProcessNewlyLoadedCObjects();
@@ -612,28 +642,16 @@ TEST(EntityScriptUnification, RenamingAPropertyKeepsItsValueViaAlias)
     ASSERT_NE(Attached, nullptr);
     Minted->GetProperty(FName("Speed"))->SetValue<float>(Attached, 9.75f);
 
-    TVector<uint8> Bytes;
-    {
-        SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
-        ASSERT_NE(Component, nullptr);
-        FMemoryWriter Writer(Bytes);
-        FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
-        Component->Serialize(Ar);
-        Component->Scripts.clear();
-    }
-
     // Speed -> Velocity, declaring the old name.
     Scripting::FScriptExportSchema After;
     After.Fields.push_back(MakeReloadField("Velocity", EPropertyTypeFlags::Float, "Speed"));
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Minted, After));
-    ASSERT_EQ(Minted->GetProperty(FName("Speed")), nullptr);
 
-    {
-        SEntityScriptComponent& Component = Registry.GetOrEmplace<SEntityScriptComponent>(Entity);
-        FMemoryReader Reader(Bytes);
-        FObjectProxyArchiver Ar(Reader, /*bLoadIfFindFails*/ true);
-        Component.Serialize(Ar);
-    }
+    FLocalRegistryReferenceProvider Provider{ Registry };
+    FObjectReferenceProviders::Register(&Provider);
+    Minted = ScriptTest::Reshape(Minted, "RenameProp_Script_V2", After, "CEntityScript");
+    FObjectReferenceProviders::Unregister(&Provider);
+    ASSERT_NE(Minted, nullptr);
+    ASSERT_EQ(Minted->GetProperty(FName("Speed")), nullptr);
 
     SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
     ASSERT_NE(Component, nullptr);
@@ -659,7 +677,7 @@ TEST(EntityScriptUnification, RenamingWithoutAnAliasResetsToDefault)
     Scripting::FScriptExportSchema Before;
     Before.Fields.push_back(MakeReloadField("Speed", EPropertyTypeFlags::Float));
 
-    CScriptClass* Minted = FScriptableRegistry::Mint("RenameNoAlias_Script", "CEntityScript", 0);
+    CScriptClass* Minted = FScriptableRegistry::Mint("RenameNoAlias_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Before);
     ProcessNewlyLoadedCObjects();
@@ -670,25 +688,14 @@ TEST(EntityScriptUnification, RenamingWithoutAnAliasResetsToDefault)
     ASSERT_NE(Attached, nullptr);
     Minted->GetProperty(FName("Speed"))->SetValue<float>(Attached, 9.75f);
 
-    TVector<uint8> Bytes;
-    {
-        SEntityScriptComponent* Component = Registry.TryGet<SEntityScriptComponent>(Entity);
-        FMemoryWriter Writer(Bytes);
-        FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
-        Component->Serialize(Ar);
-        Component->Scripts.clear();
-    }
-
     Scripting::FScriptExportSchema After;
     After.Fields.push_back(MakeReloadField("Velocity", EPropertyTypeFlags::Float));   // no alias
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Minted, After));
 
-    {
-        SEntityScriptComponent& Component = Registry.GetOrEmplace<SEntityScriptComponent>(Entity);
-        FMemoryReader Reader(Bytes);
-        FObjectProxyArchiver Ar(Reader, /*bLoadIfFindFails*/ true);
-        Component.Serialize(Ar);
-    }
+    FLocalRegistryReferenceProvider Provider{ Registry };
+    FObjectReferenceProviders::Register(&Provider);
+    Minted = ScriptTest::Reshape(Minted, "RenameNoAlias_Script_V2", After, "CEntityScript");
+    FObjectReferenceProviders::Unregister(&Provider);
+    ASSERT_NE(Minted, nullptr);
 
     CEntityScript* Restored = Registry.Get<SEntityScriptComponent>(Entity).Scripts[0].Get();
     ASSERT_NE(Restored, nullptr);
@@ -705,7 +712,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
     Scripting::FScriptExportSchema Schema;
     Schema.Fields.push_back(MakeReloadField("Speed", EPropertyTypeFlags::Float));
 
-    CScriptClass* Old = FScriptableRegistry::Mint("RenameClass_Before", "CEntityScript", 0);
+    CScriptClass* Old = FScriptableRegistry::Mint("RenameClass_Before", "CEntityScript");
     ASSERT_NE(Old, nullptr);
     Scripting::AppendScriptPropertiesToClass(Old, Schema);
     ProcessNewlyLoadedCObjects();
@@ -727,7 +734,7 @@ TEST(EntityScriptUnification, RenamingAScriptClassMovesItsInstances)
     }
 
     // The reload brings up the renamed type and registers where the old name went.
-    CScriptClass* New = FScriptableRegistry::Mint("RenameClass_After", "CEntityScript", 0);
+    CScriptClass* New = FScriptableRegistry::Mint("RenameClass_After", "CEntityScript");
     ASSERT_NE(New, nullptr);
     Scripting::AppendScriptPropertiesToClass(New, Schema);
     ProcessNewlyLoadedCObjects();
@@ -778,7 +785,7 @@ TEST(EntityScriptUnification, SkipHotReloadFieldsResetOnRestore)
         Schema.Fields.push_back(std::move(Scratch));
     }
 
-    CScriptClass* Minted = FScriptableRegistry::Mint("SkipHotReload_Script", "CEntityScript", 0);
+    CScriptClass* Minted = FScriptableRegistry::Mint("SkipHotReload_Script", "CEntityScript");
     ASSERT_NE(Minted, nullptr);
     Scripting::AppendScriptPropertiesToClass(Minted, Schema);
     ProcessNewlyLoadedCObjects();

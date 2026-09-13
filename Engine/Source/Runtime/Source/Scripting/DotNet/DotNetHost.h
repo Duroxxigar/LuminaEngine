@@ -167,7 +167,9 @@ namespace Lumina::DotNet
         FString NativeBaseName;
         // Which ScriptEvents the C# subclass overrides. Type-uniform, so it is carried on the minted CClass
         // rather than per instance (CClass::ScriptOverrides); bit i == the wrapper's [ScriptEvent(i)].
-        uint64  OverrideFlags = 0;
+        /** Names of the ScriptEvents this type overrides. A list rather than a mask: an override is found
+         *  by name like any other function, so there is no index to agree on and no ceiling to hit. */
+        TVector<FString> OverriddenEvents;
         // EScriptUpdatePhase from the class's [UpdatePhase]; type-uniform, so it rides on the minted CClass.
         uint8   UpdatePhase = 0;
     };

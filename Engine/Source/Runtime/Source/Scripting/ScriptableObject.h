@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/Reflection/Type/Function.h"
+
 #include "Core/Object/ScriptClass.h"
 #include "ManagedTypeRegistry.h"
 
@@ -31,19 +33,33 @@ namespace Lumina
         RUNTIME_API void* GetOrCreateInstance(CObject* Object);
     }
 
+    /** One overridable event and the generated thunk that dispatches it into managed code. */
+    struct FScriptableEventThunk
+    {
+        const char*                Name = nullptr;
+        FFunction::FNativeFuncPtr  Thunk = nullptr;
+    };
+
     struct FScriptableNativeInfo
     {
         CClass*  (*GetBaseClass)() = nullptr;          // the native Scriptable class's StaticClass()
         CObject* (*Factory)(void* Memory) = nullptr;   // placement-new the shim into Memory
         uint32   ShimSize = 0;
         uint32   ShimAlign = 0;
+
+        /** Per event, so an override dispatches through a typed generated call rather than reflection. */
+        TVector<FScriptableEventThunk> EventThunks;
     };
 
     struct RUNTIME_API FScriptableRegistry
     {
         static void RegisterNative(const char* NativeClassName, const FScriptableNativeInfo& Info);
 
-        static CScriptClass* Mint(FStringView TypeName, FStringView NativeBaseName, uint64 OverrideFlags);
+        static CScriptClass* Mint(FStringView TypeName, FStringView NativeBaseName,
+                                  TSpan<const FString> OverriddenEvents = {});
+
+        /** Rebuilds the minted class's script overrides from the events the C# type declares it overrides. */
+        static void ApplyScriptOverrides(CScriptClass* Minted, TSpan<const FString> OverriddenEvents);
 
         static void RefreshMintedClasses(TSpan<const Scripting::FManagedTypeDefinition> Definitions);
 

@@ -20,6 +20,9 @@ namespace Lumina
     public:
 
         void Serialize(FArchive& Ar) override;
+
+        // The entities live in an ECS registry, which reflection cannot describe, so the prefab names them.
+        void VisitAdditionalObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override;
         void PostLoad() override;
 
         bool IsAsset() const override { return true; }

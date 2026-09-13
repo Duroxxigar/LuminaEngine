@@ -1,4 +1,5 @@
 ﻿#include "Platform/Time/PlatformTime.h"
+#include "World/ECS/ECSReferenceProvider.h"
 #include "RuntimePCH.h"
 #include <string>
 #include "Engine.h"
@@ -247,6 +248,14 @@ namespace Lumina
             }
             BootLast = Now;
         };
+
+        // Both before anything can build an object, so a reinstance always sees every holder.
+        FObjectReferenceProviders::Register(this);
+        FECSObjectReferenceProvider::Register();
+        if (GConfig != nullptr)
+        {
+            FObjectReferenceProviders::Register(GConfig);
+        }
 
         // Must run before renderer/Lua so Earliest/Core-phase plugins can wedge in ahead.
         FPluginManager::Get().DiscoverEnginePlugins();
@@ -1470,54 +1479,24 @@ namespace Lumina
         }
     }
 
-    bool FEngine::EvacuateGameInstance(const THashSet<CClass*>& Classes, FName& OutClassName,
-        TVector<uint8>& OutBytes)
+    void FEngine::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
     {
-        CGameInstance* Instance = GameInstance.Get();
-        if (Instance == nullptr || Instance->GetClass() == nullptr
-            || Classes.find(Instance->GetClass()) == Classes.end())
+        CGameInstance* const Current = GameInstance.Get();
+        if (Current == nullptr)
         {
-            return false;
-        }
-
-        OutClassName = Instance->GetClass()->GetName();
-        {
-            FMemoryWriter Writer(OutBytes);
-            FObjectProxyArchiver Ar(Writer, /*bLoadIfFindFails*/ false);
-            Instance->GetClass()->SerializeTaggedProperties(Ar, Instance);
-        }
-
-        // Shutdown is skipped for the same reason an evacuated entity script is not detached; it is coming back.
-        RepointGameInstanceContexts(nullptr);
-        GameInstance = nullptr;
-        return true;
-    }
-
-    void FEngine::RestoreGameInstance(const FName& ClassName, const TVector<uint8>& Bytes)
-    {
-        // Resolved through the redirect registry, since an alias is what carries a renamed class across.
-        CClass* InstanceClass = FScriptableRegistry::ResolveClass(ClassName);
-        if (InstanceClass == nullptr || !InstanceClass->IsChildOf(CGameInstance::StaticClass()))
-        {
-            LOG_WARN("GameInstance class '{}' did not survive the script reload; falling back to the base class.",
-                ClassName.c_str());
-            InstanceClass = CGameInstance::StaticClass();
-        }
-
-        GameInstance = Cast<CGameInstance>(NewObject(InstanceClass, nullptr, NAME_None, FGuid::New(), OF_Transient));
-        if (GameInstance == nullptr)
-        {
-            LOG_ERROR("GameInstance could not be rebuilt after the script reload.");
             return;
         }
 
+        CObject* const Replacement = Func(Current);
+        if (Replacement == Current)
         {
-            FMemoryReader Reader(const_cast<TVector<uint8>&>(Bytes));
-            FObjectProxyArchiver Ar(Reader, /*bLoadIfFindFails*/ true);
-            GameInstance->GetClass()->SerializeTaggedProperties(Ar, GameInstance.Get());
+            return;
         }
 
-        RepointGameInstanceContexts(GameInstance.Get());
+        // The world contexts mirror this pointer, so they move with it rather than keeping the retired one.
+        CGameInstance* const Replaced = Cast<CGameInstance>(Replacement);
+        GameInstance = Replaced;
+        RepointGameInstanceContexts(Replaced);
     }
 
     void FEngine::DestroyGameInstance()

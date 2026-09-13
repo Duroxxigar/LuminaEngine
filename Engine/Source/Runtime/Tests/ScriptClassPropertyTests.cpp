@@ -19,6 +19,7 @@
 #include "Scripting/ScriptStruct.h"
 #include "Scripting/ScriptableObject.h"
 #include "Scripting/ScriptableTest.h"
+#include "ScriptReshapeTestUtil.h"
 
 using namespace Lumina;
 
@@ -54,7 +55,7 @@ namespace
 
     CScriptClass* MintWithSchema(const char* ClassName, const Scripting::FScriptExportSchema& Schema, uint32& OutShimSize)
     {
-        CScriptClass* Minted = FScriptableRegistry::Mint(ClassName, "CScriptableTest", 0);
+        CScriptClass* Minted = FScriptableRegistry::Mint(ClassName, "CScriptableTest");
         if (Minted == nullptr)
         {
             return nullptr;
@@ -605,7 +606,8 @@ TEST(ScriptClassReload, AddingAPropertyRebuildsTheBlock)
     After.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
     After.Fields.push_back(MakeScalarField("Health", EPropertyTypeFlags::Int32));
 
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Sub, After));
+    Sub = ScriptTest::Reshape(Sub, "ScriptReshape_V1", After);
+    ASSERT_NE(Sub, nullptr);
 
     FProperty* Speed  = Sub->GetProperty(FName("Speed"));
     FProperty* Health = Sub->GetProperty(FName("Health"));
@@ -648,7 +650,8 @@ TEST(ScriptClassReload, RemovingAndRetypingAPropertyRebuildTheBlock)
     Scripting::FScriptExportSchema After;
     After.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Double));
 
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Sub, After));
+    Sub = ScriptTest::Reshape(Sub, "ScriptReshape_V2", After);
+    ASSERT_NE(Sub, nullptr);
 
     EXPECT_EQ(Sub->GetProperty(FName("Doomed")), nullptr) << "the removed property is still on the class";
 
@@ -696,7 +699,8 @@ TEST(ScriptClassReload, ValuesSurviveARebuildThroughTheStockSerializer)
     After.Fields.push_back(MakeField("Label", MakeType(EPropertyTypeFlags::String)));
     After.Fields.push_back(MakeScalarField("Added", EPropertyTypeFlags::Int32));
 
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Sub, After));
+    Sub = ScriptTest::Reshape(Sub, "ScriptReshape_V3", After);
+    ASSERT_NE(Sub, nullptr);
 
     CObject* Restored = NewObject(Sub, nullptr, NAME_None, FGuid::New(), OF_Transient);
     ASSERT_NE(Restored, nullptr);
@@ -718,36 +722,37 @@ TEST(ScriptClassReload, ValuesSurviveARebuildThroughTheStockSerializer)
     EXPECT_EQ(Sub->GetProperty(FName("Doomed")), nullptr);
 }
 
-TEST(ScriptClassReload, ARebuildIsRefusedWhileInstancesAreLive)
+TEST(ScriptClassReload, ALiveInstanceIsCarriedOntoTheReshapedClass)
 {
     Scripting::FScriptExportSchema Before;
     Before.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
 
     uint32 ShimSize = 0;
-    CScriptClass* Sub = MintWithSchema("ScriptReload_Refused", Before, ShimSize);
+    CScriptClass* Sub = MintWithSchema("ScriptReload_Live", Before, ShimSize);
     ASSERT_NE(Sub, nullptr);
 
-    CObject* Live = NewObject(Sub, nullptr, NAME_None, FGuid::New(), OF_Transient);
+    CObject* Live = NewObject(Sub, nullptr, FName("ReshapeSubject"), FGuid::New(), OF_Transient);
     ASSERT_NE(Live, nullptr);
+    Sub->GetProperty(FName("Speed"))->SetValue<float>(Live, 3.0f);
 
     Scripting::FScriptExportSchema After;
     After.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
     After.Fields.push_back(MakeScalarField("Health", EPropertyTypeFlags::Int32));
 
-    // An instance is laid out at the old size, so refusing is the contract and the caller evacuates.
-    EXPECT_FALSE(Scripting::MigrateMintedClassLayout(Sub, After));
+    // A live instance used to refuse the reshape outright; now it is the case the reinstancer exists for.
+    Sub = ScriptTest::Reshape(Sub, "ScriptReload_Live_V2", After);
+    ASSERT_NE(Sub, nullptr);
 
-    // And the refusal changed nothing, so the live instance is still usable.
-    ASSERT_EQ(Sub->GetProperty(FName("Health")), nullptr);
+    CObject* Carried = FindObject<CObject>(FName("ReshapeSubject"));
+    ASSERT_NE(Carried, nullptr) << "the instance did not come across to the reshaped class";
+    EXPECT_EQ(Carried->GetClass(), Sub);
+
     FProperty* Speed = Sub->GetProperty(FName("Speed"));
     ASSERT_NE(Speed, nullptr);
-    Speed->SetValue<float>(Live, 3.0f);
-    EXPECT_FLOAT_EQ(*Speed->GetValuePtr<float>(Live), 3.0f);
+    EXPECT_FLOAT_EQ(*Speed->GetValuePtr<float>(Carried), 3.0f) << "a value in both shapes survives the reshape";
 
-    // Once it is gone the same rebuild goes through.
-    Live->ForceDestroyNow();
-    EXPECT_TRUE(Scripting::MigrateMintedClassLayout(Sub, After));
-    EXPECT_NE(Sub->GetProperty(FName("Health")), nullptr);
+    ASSERT_NE(Sub->GetProperty(FName("Health")), nullptr);
+    EXPECT_EQ(*Sub->GetProperty(FName("Health"))->GetValuePtr<int32>(Carried), 0);
 }
 
 TEST(ScriptClassReload, ContainersSurviveARebuild)
@@ -770,7 +775,8 @@ TEST(ScriptClassReload, ContainersSurviveARebuild)
     After.Fields.push_back(MakeField("Values", Floats));
 
     EXPECT_FALSE(Scripting::ScriptClassLayoutMatches(Sub, After)) << "an element-type change was not noticed";
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Sub, After));
+    Sub = ScriptTest::Reshape(Sub, "ScriptReshape_V4", After);
+    ASSERT_NE(Sub, nullptr);
 
     FArrayProperty* Values = static_cast<FArrayProperty*>(Sub->GetProperty(FName("Values")));
     ASSERT_NE(Values, nullptr);
@@ -810,36 +816,47 @@ namespace
     }
 }
 
-// A superseded layout used to be kept forever, so an editing session grew a record per property edit.
-TEST(ScriptClassReload, RepeatedRebuildsRetainOnlyOneSupersededLayout)
+// The superseded-layout grace existed only for an in-place rebuild. A reshape now mints a new class, so the
+// invariant that matters is that the old one is left empty and can retire.
+TEST(ScriptClassReload, AReshapeLeavesTheOldClassWithNoInstances)
 {
     Scripting::FScriptExportSchema Initial;
     Initial.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
 
     uint32 ShimSize = 0;
-    CScriptClass* Sub = MintWithSchema("ScriptReload_Bounded", Initial, ShimSize);
-    ASSERT_NE(Sub, nullptr);
+    CScriptClass* Old = MintWithSchema("ScriptReload_Bounded", Initial, ShimSize);
+    ASSERT_NE(Old, nullptr);
 
-    const size_t AfterFirstBuild = CountObjectsNamed("ScriptClassLayout_ScriptReload_Bounded");
-    ASSERT_EQ(AfterFirstBuild, 1u);
-
-    // Alternating shapes so every pass is a real layout change rather than a no-op.
-    for (int32 Pass = 0; Pass < 8; ++Pass)
+    for (int32 Index = 0; Index < 4; ++Index)
     {
-        Scripting::FScriptExportSchema Next;
-        Next.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
-        if ((Pass % 2) == 0)
-        {
-            Next.Fields.push_back(MakeScalarField("Health", EPropertyTypeFlags::Int32));
-        }
-
-        ASSERT_FALSE(Scripting::ScriptClassLayoutMatches(Sub, Next));
-        ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Sub, Next));
+        NewObject(Old, nullptr, NAME_None, FGuid::New(), OF_Transient);
     }
 
-    // The live layout plus at most the one it superseded, no matter how many rebuilds ran.
-    const size_t Retained = CountObjectsNamed("ScriptClassLayout_ScriptReload_Bounded");
-    EXPECT_LE(Retained, 2u) << "a superseded layout record is leaking once per rebuild";
+    auto CountInstancesOf = [](const CClass* Class)
+    {
+        size_t Count = 0;
+        GObjectArray.ForEachObject([&](CObjectBase* Base, int32)
+        {
+            if (Base != nullptr && Base->GetClass() == Class
+                && !Base->HasAnyFlag(OF_MarkedDestroy) && !Base->HasAnyFlag(OF_DefaultObject))
+            {
+                ++Count;
+            }
+        });
+        return Count;
+    };
+
+    ASSERT_EQ(CountInstancesOf(Old), 4u);
+
+    Scripting::FScriptExportSchema Next;
+    Next.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
+    Next.Fields.push_back(MakeScalarField("Health", EPropertyTypeFlags::Int32));
+
+    CScriptClass* New = ScriptTest::Reshape(Old, "ScriptReload_Bounded_V2", Next);
+    ASSERT_NE(New, nullptr);
+
+    EXPECT_EQ(CountInstancesOf(Old), 0u) << "an instance left on the old class would block its retirement";
+    EXPECT_EQ(CountInstancesOf(New), 4u) << "every instance must land on the replacement";
 }
 
 namespace
@@ -927,36 +944,11 @@ TEST(ScriptClassReload, EditingASubStructShapeDoesNotStrandMints)
     {
         const Scripting::FScriptExportSchema Next = SchemaWithInnerFields(Pass);
         ASSERT_FALSE(Scripting::ScriptClassLayoutMatches(Sub, Next));
-        ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Sub, Next));
+        Sub = ScriptTest::Reshape(Sub, "ScriptReshape_V6", Next);
+    ASSERT_NE(Sub, nullptr);
     }
 
     const size_t Grown = CountObjectsNamed("ScriptSubStruct_") - Baseline;
     EXPECT_LE(Grown, 2u) << "a superseded sub-struct mint is stranded once per shape edit";
 }
 
-// The grace is one reload, not "until this class next changes", so a one-time edit is not held forever.
-TEST(ScriptClassReload, ASupersededLayoutIsFreedAtTheNextGeneration)
-{
-    Scripting::AdvanceScriptTypeGeneration();
-
-    Scripting::FScriptExportSchema Before;
-    Before.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
-
-    uint32 ShimSize = 0;
-    CScriptClass* Sub = MintWithSchema("ScriptReload_Generational", Before, ShimSize);
-    ASSERT_NE(Sub, nullptr);
-    ASSERT_EQ(CountObjectsNamed("ScriptClassLayout_ScriptReload_Generational"), 1u);
-
-    Scripting::FScriptExportSchema After;
-    After.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
-    After.Fields.push_back(MakeScalarField("Health", EPropertyTypeFlags::Int32));
-    ASSERT_TRUE(Scripting::MigrateMintedClassLayout(Sub, After));
-
-    // Still reachable within the generation that superseded it, which is what keeps a stale pointer stale.
-    EXPECT_EQ(CountObjectsNamed("ScriptClassLayout_ScriptReload_Generational"), 2u);
-
-    // The class is not touched again, so only the generation boundary can reclaim it.
-    Scripting::AdvanceScriptTypeGeneration();
-    EXPECT_EQ(CountObjectsNamed("ScriptClassLayout_ScriptReload_Generational"), 1u)
-        << "a superseded layout outlived the reload that was meant to reclaim it";
-}

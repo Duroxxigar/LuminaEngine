@@ -22,8 +22,8 @@ internal sealed class ScriptableRuntime
     // EntityScripts are created here but resolved and destroyed through EntityScriptRuntime's handle set.
     private readonly EntityScriptRuntime EntityScripts;
 
-    // Cached per user-type override bitmask (which ScriptEvents the subclass overrides); keyed by the user type.
-    private readonly Dictionary<Type, ulong> OverrideFlagsByType = new();
+    // Cached per user type: the names of the ScriptEvents that type overrides, joined once.
+    private readonly Dictionary<Type, string> OverriddenEventsByType = new();
 
     public ScriptableRuntime(TypeLibrary Library, EntityScriptRuntime EntityScripts)
     {
@@ -33,11 +33,11 @@ internal sealed class ScriptableRuntime
 
     public IReadOnlyCollection<string> TypeNames => Library.ScriptableTypeNames;
 
-    /// <summary>Reports each discovered Scriptable C# type as (full name, native base class name, override
-    /// mask) to a native sink, so the host can mint a CClass deriving from that native base. The native base
-    /// name is the <c>[NativeType]</c> name of the nearest <c>[ScriptableType]</c> wrapper in the base chain.
-    /// The mask is type-uniform, so it rides here and is stamped on the minted CClass once, rather than being
-    /// recomputed and stored per instance.</summary>
+    /// <summary>Reports each discovered Scriptable C# type as (full name, native base class name, the names
+    /// of the events it overrides) to a native sink, so the host can mint a CClass deriving from that native
+    /// base. The native base name is the <c>[NativeType]</c> name of the nearest <c>[ScriptableType]</c>
+    /// wrapper in the base chain. Overrides are named rather than numbered: the host turns each into a real
+    /// function on the minted class, so there is no index to agree on and no ceiling to hit.</summary>
     public unsafe void Enumerate(IntPtr Sink, IntPtr Context)
     {
         if (Sink == IntPtr.Zero)
@@ -45,9 +45,10 @@ internal sealed class ScriptableRuntime
             return;
         }
 
-        var Add = (delegate* unmanaged[Stdcall]<IntPtr, byte*, int, byte*, int, ulong, byte, void>)Sink;
+        var Add = (delegate* unmanaged[Stdcall]<IntPtr, byte*, int, byte*, int, byte*, int, byte, void>)Sink;
         Span<byte> NameScratch = stackalloc byte[256];
         Span<byte> BaseScratch = stackalloc byte[256];
+        Span<byte> OverrideScratch = stackalloc byte[1024];
         foreach (Type Type in Library.ScriptableTypes)
         {
             if (Type.FullName is not { } FullName)
@@ -62,13 +63,15 @@ internal sealed class ScriptableRuntime
 
             Interop.FInteropString Name = new(FullName, NameScratch);
             Interop.FInteropString Base = new(NativeBase, BaseScratch);
+            Interop.FInteropString Overrides = new(GetOverriddenEvents(Type), OverrideScratch);
             try
             {
-                Add(Context, Name.Pointer, Name.Length, Base.Pointer, Base.Length, GetOverrideFlags(Type),
-                    GetUpdatePhase(Type));
+                Add(Context, Name.Pointer, Name.Length, Base.Pointer, Base.Length,
+                    Overrides.Pointer, Overrides.Length, GetUpdatePhase(Type));
             }
             finally
             {
+                Overrides.Free();
                 Name.Free();
                 Base.Free();
             }
@@ -191,40 +194,31 @@ internal sealed class ScriptableRuntime
 
     // Bit i is set when the user subclass overrides the ScriptEvent the wrapper declared with [ScriptEvent(i)].
     // An override moves the method's DeclaringType out of the engine assembly (LuminaSharp.dll) into user code.
-    private ulong GetOverrideFlags(Type Type)
+    // The ScriptEvents this subclass actually overrides, semicolon joined. An override moves the method's
+    // DeclaringType out of the engine assembly (LuminaSharp.dll) into user code, which is what identifies one.
+    private string GetOverriddenEvents(Type Type)
     {
-        if (OverrideFlagsByType.TryGetValue(Type, out ulong Cached))
+        if (OverriddenEventsByType.TryGetValue(Type, out string? Cached))
         {
             return Cached;
         }
 
-        // Held as 64 bits to match the native mask. Built as an int, 1 << 31 set the sign bit and then
-        // sign-extended on the way to ulong, turning on every event from 31 upwards.
-        ulong Flags = 0;
+        var Names = new List<string>();
         Assembly Engine = typeof(ScriptableRuntime).Assembly;
         foreach (MethodInfo Method in Type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
-            ScriptEventAttribute? Event = Method.GetCustomAttribute<ScriptEventAttribute>(inherit: true);
-            if (Event == null || Method.DeclaringType is not { } Decl || Decl.Assembly == Engine)
+            if (Method.GetCustomAttribute<ScriptEventAttribute>(inherit: true) != null
+                && Method.DeclaringType is { } Decl && Decl.Assembly != Engine
+                && !Names.Contains(Method.Name))
             {
-                continue;
+                Names.Add(Method.Name);
             }
-
-            if (Event.Index < 0 || Event.Index >= MaxScriptEvents)
-            {
-                Debug.LogError($"ScriptEvent index {Event.Index} on {Type.Name}.{Method.Name} is outside the {MaxScriptEvents}-event mask; the override will not bind.");
-                continue;
-            }
-
-            Flags |= 1UL << Event.Index;
         }
 
-        OverrideFlagsByType[Type] = Flags;
-        return Flags;
+        string Joined = string.Join(';', Names);
+        OverriddenEventsByType[Type] = Joined;
+        return Joined;
     }
-
-    /// Mirrors CScriptClass::kMaxScriptEvents, the width of the native override mask.
-    private const int MaxScriptEvents = 64;
 
     // Which physics phase this class's OnUpdate runs in, from [UpdatePhase]; PrePhysics when unmarked.
     private static byte GetUpdatePhase(Type Type)

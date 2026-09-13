@@ -299,23 +299,6 @@ namespace Lumina::Scripting
     /** True when Target's appended block already matches Schema, so a hot reload needs no rebuild. */
     RUNTIME_API bool ScriptClassLayoutMatches(const CScriptClass* Target, const FScriptExportSchema& Schema);
 
-    /**
-     * Rebuilds Target's appended property block from Schema, for a hot reload that added, removed, retyped
-     * or renamed a C# `[Property]`.
-     *
-     * A minted class is reused by name across reloads and keeps its identity, but its SIZE is baked into
-     * every object at allocation (StaticAllocateObject reads Class->GetSize() once), so a changed property
-     * set cannot be patched in place. This tears the block down and builds the new one: retire the layout
-     * record, discard the CDO, unlink, restore the shim's size, re-append, and create a fresh CDO.
-     *
-     * Returns false and changes nothing if the class has live instances. They are laid out at the old size,
-     * so the caller must evacuate them first (serializing their owning components, which is already how
-     * SEntityScriptComponent round-trips) and repopulate after. Also returns false if Target never had an
-     * appended block, where the caller wants AppendScriptPropertiesToClass instead.
-     *
-     * Declared defaults are NOT applied; as with a first mint, the caller replays them onto the new CDO.
-     */
-    RUNTIME_API bool MigrateMintedClassLayout(CScriptClass* Target, const FScriptExportSchema& Schema);
 
     // Per-ScriptClass cache of minted script structs, owned by the .NET host and cleared on reload.
     class FScriptStructRegistry

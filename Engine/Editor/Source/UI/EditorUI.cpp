@@ -445,6 +445,9 @@ namespace Lumina
 
     void FEditorUI::Initialize(const FUpdateContext& UpdateContext)
     {
+        // Before any tool exists, so a reinstance during startup still finds this holder.
+        FObjectReferenceProviders::Register(this);
+
         ImGuiContext* Context = Render().GetImGuiRenderer()->GetImGuiContext();
         ImPlotContext* PlotContext = Render().GetImGuiRenderer()->GetImPlotContext();
         ImGui::SetCurrentContext(Context);
@@ -614,6 +617,8 @@ namespace Lumina
 
     void FEditorUI::Deinitialize(const FUpdateContext& UpdateContext)
     {
+        FObjectReferenceProviders::Unregister(this);
+
         if (AssetDataChangedHandle.IsValid())
         {
             AssetEvents::OnAssetDataChanged().Remove(AssetDataChangedHandle);
@@ -4078,6 +4083,30 @@ namespace Lumina
         }
 
         return false;
+    }
+
+    void FEditorUI::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+    {
+        for (FEditorTool* Tool : EditorTools)
+        {
+            if (Tool != nullptr)
+            {
+                Tool->VisitObjectReferences(Func);
+            }
+        }
+
+        // Keyed by the asset, so a repointed key is a rebuilt table: written in place it would sit in the
+        // bucket its old hash chose and the tool would never be found for that asset again.
+        THashMap<CObject*, FEditorTool*> Rebuilt;
+        Rebuilt.reserve(ActiveAssetTools.size());
+        for (const auto& [Asset, Tool] : ActiveAssetTools)
+        {
+            if (CObject* const Replacement = Func(Asset))
+            {
+                Rebuilt.insert_or_assign(Replacement, Tool);
+            }
+        }
+        ActiveAssetTools = Move(Rebuilt);
     }
 
     void FEditorUI::OnProjectLoaded()

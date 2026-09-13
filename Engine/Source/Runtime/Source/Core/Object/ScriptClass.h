@@ -2,6 +2,8 @@
 
 #include "Cast.h"
 #include "Class.h"
+#include "Containers/HashTable.h"
+#include "Core/Reflection/Type/Function.h"
 #include "Containers/Vector.h"
 #include "ObjectHandleTyped.h"
 
@@ -57,13 +59,15 @@ namespace Lumina
 
         RUNTIME_API CClass* GetMetaClass() const override;
 
-        /** How many ScriptEvents one Scriptable base can declare, which is the width of the mask below.
-         *  The generated shim asserts against it, so exceeding it fails the build rather than the run. */
-        static constexpr int32 kMaxScriptEvents = 64;
+        /** The events this C# subclass overrides, as real functions on this class whose body is managed.
+         *
+         *  A map rather than a mask: an override is a function like any other, found by the name it is
+         *  declared under, which is what removes both the event ceiling and the agreed-index contract that
+         *  the shim and the C# attribute used to have to keep in step. */
+        THashMap<FName, FFunction*> ScriptOverrideFunctions;
 
-        /** Which ScriptEvents the C# subclass actually overrides (bit i == the wrapper's [ScriptEvent(i)]),
-         *  so a non-overridden event costs one class-level test in the generated shim rather than a lookup. */
-        uint64 ScriptOverrides = 0;
+        /** The overriding function for Name, or null when the subclass leaves the native body in place. */
+        RUNTIME_API NODISCARD const FFunction* FindScriptOverride(const FName& Name) const;
 
         /** EScriptUpdatePhase for a minted entity-script class, from its C# [UpdatePhase]. */
         uint8 ScriptUpdatePhase = 0;
@@ -101,17 +105,6 @@ namespace Lumina
          *  same as a non-empty ScriptProperties: a type may legitimately append nothing. */
         bool bHasAppendedBlock = false;
 
-        //~ One superseded generation kept alive, so a property pointer that outlived a rebuild reads stale
-        //~ rather than freed. Dropped once a whole reload has passed.
-        TObjectPtr<CStruct> RetiredRecord;
-        TVector<FProperty*> RetiredProperties;
-        uint64              RetiredIn = 0;
-
-        /** Drops the superseded generation. Safe once a reload has passed with nothing reaching it. */
-        RUNTIME_API void DiscardRetiredLayout();
-
-        /** Moves the live block to the retired slot and clears it, for a rebuild. */
-        RUNTIME_API void RetireLayout(uint64 Generation);
     };
 
     /**
@@ -132,15 +125,15 @@ namespace Lumina
     }
 
     /**
-     * Whether the class minted from a script type overrides ScriptEvent number Index.
+     * The script body overriding Name on this class, or null to run the C++ one.
      *
-     * Called by the generated forwarding shim on every reflected virtual, so it stays a test on the CLASS:
-     * a native class is not a CScriptClass at all and answers false from the cast, which is what keeps a
-     * non-overridden event off the managed path entirely.
+     * Called by the generated forwarding shim on every reflected virtual. A native class is not a
+     * CScriptClass at all and answers null from the cast, which is what keeps an unscripted call off the
+     * managed path without touching the map.
      */
-    FORCEINLINE bool HasScriptOverride(const CClass* Class, int32 Index)
+    FORCEINLINE const FFunction* FindScriptOverride(const CClass* Class, const FName& Name)
     {
         const CScriptClass* ScriptClass = ToScriptClass(Class);
-        return ScriptClass != nullptr && (ScriptClass->ScriptOverrides & (1ull << Index)) != 0;
+        return ScriptClass != nullptr ? ScriptClass->FindScriptOverride(Name) : nullptr;
     }
 }

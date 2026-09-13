@@ -282,8 +282,8 @@ namespace Lumina::DotNet
         }
 
         // Sink the managed EnumerateScriptables calls once per Scriptable C# type; Ctx is the out desc vector.
-        void LmScriptableSink(void* Ctx, const char* Name, int NameLen, const char* Base, int BaseLen, uint64 OverrideFlags,
-            uint8 UpdatePhase)
+        void LmScriptableSink(void* Ctx, const char* Name, int NameLen, const char* Base, int BaseLen,
+            const char* Overrides, int OverridesLen, uint8 UpdatePhase)
         {
             auto* Out = static_cast<TVector<FScriptableTypeDesc>*>(Ctx);
             if (Out == nullptr || Name == nullptr || NameLen <= 0)
@@ -296,7 +296,26 @@ namespace Lumina::DotNet
             {
                 Desc.NativeBaseName = FString(Base, static_cast<size_t>(BaseLen));
             }
-            Desc.OverrideFlags = OverrideFlags;
+            // Semicolon joined, which is how every other list on this boundary travels.
+            if (Overrides != nullptr && OverridesLen > 0)
+            {
+                const FStringView Joined(Overrides, (size_t)OverridesLen);
+                size_t Start = 0;
+                while (Start <= Joined.size())
+                {
+                    size_t End = Joined.find(';', Start);
+                    if (End == FStringView::npos)
+                    {
+                        End = Joined.size();
+                    }
+                    if (End > Start)
+                    {
+                        Desc.OverriddenEvents.emplace_back(Joined.data() + Start, End - Start);
+                    }
+                    Start = End + 1;
+                }
+            }
+
             Desc.UpdatePhase = UpdatePhase;
             Out->emplace_back(std::move(Desc));
         }
@@ -1575,7 +1594,7 @@ namespace Lumina::DotNet
             Definition.Kind           = Scripting::EManagedTypeKind::ScriptableClass;
             Definition.TypeName       = FName(Desc.TypeName.c_str());
             Definition.NativeBaseName = Desc.NativeBaseName;
-            Definition.OverrideFlags  = Desc.OverrideFlags;
+            Definition.OverriddenEvents = Desc.OverriddenEvents;
             Definition.UpdatePhase    = Desc.UpdatePhase;
 
             // The one crossing for this type's schema. Consumers read it from here.

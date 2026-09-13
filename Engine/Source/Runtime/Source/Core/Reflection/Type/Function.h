@@ -35,6 +35,9 @@ namespace Lumina
 
         // returns something, so ReturnParam is set
         HasReturn       = BIT(5),
+
+        // the body lives in script rather than in C++, so calling it dispatches into managed code
+        ScriptImplemented = BIT(6),
     };
 
     ENUM_CLASS_FLAGS(EFunctionFlags);
@@ -91,6 +94,7 @@ namespace Lumina
         NODISCARD bool IsScriptable() const     { return EnumHasAnyFlags(Flags, EFunctionFlags::Scriptable); }
         NODISCARD bool IsScriptCallable() const { return EnumHasAnyFlags(Flags, EFunctionFlags::ScriptCallable); }
         NODISCARD bool HasReturn() const        { return EnumHasAnyFlags(Flags, EFunctionFlags::HasReturn); }
+        NODISCARD bool IsScriptImplemented() const { return EnumHasAnyFlags(Flags, EFunctionFlags::ScriptImplemented); }
 
         /** Brings a caller-owned frame of GetParmsSize() bytes up to a valid, default set of arguments. */
         RUNTIME_API void InitializeFrame(void* Frame) const;

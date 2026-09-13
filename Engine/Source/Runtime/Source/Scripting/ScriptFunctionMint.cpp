@@ -50,6 +50,24 @@ namespace Lumina::Scripting
 
 namespace Lumina::Scripting
 {
+    FFunction* MintScriptOverride(CScriptClass& Class, const FFunction& Base, FFunction::FNativeFuncPtr Thunk)
+    {
+        FFunction* Override = FFunctionBuilder::BuildMinted(Class.GetPropertyArena(), &Class,
+            Base.GetFunctionName(),
+            Base.GetFunctionFlags() | EFunctionFlags::ScriptImplemented | EFunctionFlags::ScriptCallable,
+            Base.GetParams(), Base.HasReturn() ? (int32)Base.GetParams().size() - 1 : -1,
+            Base.GetParmsSize(), Thunk);
+
+        if (Override == nullptr)
+        {
+            return nullptr;
+        }
+
+        Class.AddFunction(Override);
+        Class.ScriptOverrideFunctions.insert_or_assign(Base.GetFunctionName(), Override);
+        return Override;
+    }
+
     void ScriptFunctionThunk(const FFunction& Function, void* Context, void* Frame)
     {
         CObject* Object = static_cast<CObject*>(Context);
