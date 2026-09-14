@@ -173,6 +173,7 @@ int main(int ArgC, char** ArgV)
     BindInput(Window, Input);
 
     const bool bHeadless = ParsedCommandLine.Has("screenshot");
+    const bool bRealStep = ParsedCommandLine.Has("realstep");
     if (bHeadless)
     {
         Input.bCaptured = false;
@@ -238,7 +239,7 @@ int main(int ArgC, char** ArgV)
         Previous = Now;
 
         // A capture advances on a fixed step, so the same frame number always shows the same moment.
-        const float Delta = bHeadless ? 1.0f / 60.0f : Wall;
+        const float Delta = bHeadless && !bRealStep ? 1.0f / 60.0f : Wall;
 
         if (Input.bToggleMouse)
         {
