@@ -28,7 +28,7 @@ namespace Lumina
     };
 
 
-    class FNameProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FNameProperty : public FProperty
     {
     public:
         

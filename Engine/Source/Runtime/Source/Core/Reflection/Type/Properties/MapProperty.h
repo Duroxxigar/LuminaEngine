@@ -8,7 +8,7 @@ namespace Lumina
 {
     // Reflected THashMap<K,V>: the associative analogue of FArrayProperty. Holds a Key and a Value inner property
     // and operates on the container through a type-erased FMapOps table.
-    class FMapProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FMapProperty : public FProperty
     {
     public:
         explicit FMapProperty(const FMapPropertyParams* Params)

@@ -8,7 +8,7 @@ namespace Lumina
 
     // Backs TSubStructOf<T>: a property whose value is a CStruct* constrained to MetaStruct (T) or a
     // derived struct. The struct analog of FClassProperty; serialized by struct name.
-    class FSubStructProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FSubStructProperty : public FProperty
     {
     public:
         DECLARE_FPROPERTY(EPropertyTypeFlags::SubStruct)

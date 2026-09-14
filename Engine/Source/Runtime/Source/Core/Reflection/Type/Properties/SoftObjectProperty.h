@@ -7,7 +7,7 @@ namespace Lumina
 {
     // FObjectProperty counterpart for soft refs; Serialize routes through FSoftObjectPath::operator<<
     // so the saver records a Soft ImportTable entry.
-    class FSoftObjectProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FSoftObjectProperty : public FProperty
     {
     public:
         DECLARE_FPROPERTY(EPropertyTypeFlags::SoftObject)

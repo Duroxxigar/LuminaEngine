@@ -6,7 +6,7 @@
 namespace Lumina
 {
     /** Reflection wrapper for TOptional<T>. Wire format: bool engaged + optional payload. */
-    class FOptionalProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FOptionalProperty : public FProperty
     {
     public:
         explicit FOptionalProperty(const FOptionalPropertyParams* Params)

@@ -25,7 +25,7 @@ namespace Lumina
     static EPropertyTypeFlags StaticType() { return Type; }
     
     /** Exactly one cache line; keep the member block packed when adding to it. */
-    class FProperty
+    class LUMINA_VISIBLE_TYPE FProperty
     {
     public:
         
