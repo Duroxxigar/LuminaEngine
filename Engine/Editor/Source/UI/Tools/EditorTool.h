@@ -423,6 +423,16 @@ namespace Lumina
          *  true only for an outliner row drop; viewport placement acts on the target without adopting it. */
         ECS::FEntity HandleContentBrowserAssetDrop(FStringView VirtualPath, ECS::FEntity DropTarget, bool bAttachToTarget = false);
 
+        /** Records a before/after image of Object around Mutate, so an edit from outside the tool can be undone. */
+        void RunObjectTransacted(FName Label, CObject* Object, const TFunction<void()>& Mutate);
+
+        /** Undo or redo one step for a caller outside the tool; false when nothing ran. */
+        bool RunUndo();
+        bool RunRedo();
+
+        NODISCARD FName PeekUndoLabel() const { return TransactionManager.PeekUndoName(); }
+        NODISCARD FName PeekRedoLabel() const { return TransactionManager.PeekRedoName(); }
+
     protected:
 
         /** Undo/redo is only meaningful for an editable (Editor-type) world. Play/Simulate run on a

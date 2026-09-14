@@ -26,8 +26,8 @@ namespace Lumina
             else              { ValueProperty = Property; }
         }
 
-        void Serialize(FArchive& Ar, void* Value) override;
-        void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
+        RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
+        RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
 
         RUNTIME_API void NetSerialize(FNetArchive& Ar, void* Value) override;
 

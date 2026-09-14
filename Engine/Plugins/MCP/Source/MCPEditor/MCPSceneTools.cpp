@@ -124,6 +124,7 @@ namespace Lumina::MCP
 
                     ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
                     const int32 Limit = In.Limit > 0 ? In.Limit : 100;
+                    const int32 Offset = In.Offset > 0 ? In.Offset : 0;
 
                     for (auto Entity : Registry.View<SNameComponent>())
                     {
@@ -135,7 +136,7 @@ namespace Lumina::MCP
 
                         ++Out.Matched;
 
-                        if (static_cast<int32>(Out.Entities.size()) >= Limit)
+                        if (Out.Matched <= Offset || static_cast<int32>(Out.Entities.size()) >= Limit)
                         {
                             continue;
                         }
@@ -407,6 +408,116 @@ namespace Lumina::MCP
                         In.Component, In.Path, Out.Current));
                 });
         }
+
+        void RegisterRemoveComponent(FStringView Owner)
+        {
+            Agent::FToolRegistry::Get().Register<SRemoveComponentParams, SRemoveComponentResult>(
+                Owner, "entity.remove_component",
+                "Detach a component from an entity, as one undo step.",
+                Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
+                [](const SRemoveComponentParams& In, SRemoveComponentResult& Out)
+                {
+                    FWorldEditorTool* Tool = FindWorldEditor();
+                    if (Tool == nullptr)
+                    {
+                        return Agent::FToolResult::Error(GNoWorldEditor);
+                    }
+
+                    if (Tool->HasSimulatingWorld())
+                    {
+                        return Agent::FToolResult::Error("Stop play-in-editor first.");
+                    }
+
+                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+
+                    ECS::FEntity Entity = ECS::NullEntity;
+                    FString Error;
+                    if (!Agent::FEntityTokens::Resolve(Registry, FStringView(In.Entity), Entity, Error))
+                    {
+                        return Agent::FToolResult::Error(Error);
+                    }
+
+                    CStruct* Type = SceneOps::ResolveComponentType(FStringView(In.Component));
+                    if (Type == nullptr || !ECS::Utils::HasComponent(Registry, Entity, Type))
+                    {
+                        return Agent::FToolResult::Error(Lumina::Format("'{}' has no component named '{}'.",
+                            NameOf(Registry, Entity), In.Component));
+                    }
+
+                    Tool->RemoveComponentTransacted("Remove Component (agent)", Entity, Type);
+
+                    Out.bRemoved = !ECS::Utils::HasComponent(Registry, Entity, Type);
+                    if (!Out.bRemoved)
+                    {
+                        return Agent::FToolResult::Error(Lumina::Format("{} could not be removed from '{}'.",
+                            In.Component, NameOf(Registry, Entity)));
+                    }
+
+                    return Agent::FToolResult::Ok(Lumina::Format("Removed {} from '{}'.",
+                        In.Component, NameOf(Registry, Entity)));
+                });
+        }
+
+        void RegisterDestroyEntities(FStringView Owner)
+        {
+            Agent::FToolRegistry::Get().Register<SDestroyEntitiesParams, SDestroyEntitiesResult>(
+                Owner, "entity.destroy",
+                "Destroy entities and their children, as one undo step.",
+                Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
+                [](const SDestroyEntitiesParams& In, SDestroyEntitiesResult& Out)
+                {
+                    FWorldEditorTool* Tool = FindWorldEditor();
+                    if (Tool == nullptr)
+                    {
+                        return Agent::FToolResult::Error(GNoWorldEditor);
+                    }
+
+                    if (Tool->HasSimulatingWorld())
+                    {
+                        return Agent::FToolResult::Error("Stop play-in-editor first.");
+                    }
+
+                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    CWorld* World = Tool->GetSceneWorld();
+
+                    TVector<ECS::FEntity> Doomed;
+                    for (const FString& Token : In.Entities)
+                    {
+                        ECS::FEntity Entity = ECS::NullEntity;
+                        FString Error;
+                        if (Agent::FEntityTokens::Resolve(Registry, FStringView(Token), Entity, Error))
+                        {
+                            Doomed.push_back(Entity);
+                        }
+                        else
+                        {
+                            Out.Skipped.push_back(Token);
+                        }
+                    }
+
+                    if (Doomed.empty())
+                    {
+                        return Agent::FToolResult::Error("None of the ids named a live entity.");
+                    }
+
+                    Tool->RunDestroyTransacted("Delete Entity (agent)", Doomed, [&]()
+                    {
+                        for (ECS::FEntity Entity : Doomed)
+                        {
+                            // A child already taken down with its parent is no longer valid here.
+                            if (Registry.IsValid(Entity))
+                            {
+                                World->DestroyEntity(Entity);
+                                ++Out.Destroyed;
+                            }
+                        }
+                    });
+
+                    return Agent::FToolResult::Ok(Lumina::Format("Destroyed {} entit{}.{}",
+                        Out.Destroyed, Out.Destroyed == 1 ? "y" : "ies",
+                        Out.Skipped.empty() ? "" : Lumina::Format(" {} id(s) named nothing.", Out.Skipped.size())));
+                });
+        }
     }
 
     void RegisterSceneTools(FStringView Owner)
@@ -417,5 +528,7 @@ namespace Lumina::MCP
         RegisterCreateEntity(Owner);
         RegisterAddComponent(Owner);
         RegisterSetProperty(Owner);
+        RegisterRemoveComponent(Owner);
+        RegisterDestroyEntities(Owner);
     }
 }

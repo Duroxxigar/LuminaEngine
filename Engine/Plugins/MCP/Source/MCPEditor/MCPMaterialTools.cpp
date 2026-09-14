@@ -1,5 +1,6 @@
 #include "MCPMaterialTools.h"
 
+#include "Agent/AgentAssetResolve.h"
 #include "Agent/AgentPropertyPath.h"
 #include "Agent/AgentToolMarshal.h"
 #include "Agent/AgentToolRegistry.h"
@@ -38,25 +39,8 @@ namespace Lumina::MCP
 
         bool ResolveMaterial(const FString& Guid, EMaterialAccess Access, FMaterialTarget& Out, FString& OutError)
         {
-            const TOptional<FGuid> Parsed = FGuid::TryParse(FStringView(Guid));
-            if (!Parsed.IsSet())
+            if (!Agent::ResolveAsset<CMaterial>(FStringView(Guid), Out.Material, OutError))
             {
-                OutError = "That is not a GUID. Use assets.search to find a material.";
-                return false;
-            }
-
-            CObject* Loaded = StaticLoadObject(*Parsed);
-            if (Loaded == nullptr)
-            {
-                OutError = "That GUID names no asset that could be loaded.";
-                return false;
-            }
-
-            Out.Material = Cast<CMaterial>(Loaded);
-            if (Out.Material == nullptr)
-            {
-                OutError = Lumina::Format("'{}' is a {}, not a material.",
-                    Loaded->GetName(), Loaded->GetClass()->GetName());
                 return false;
             }
 

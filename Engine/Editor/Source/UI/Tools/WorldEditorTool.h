@@ -118,8 +118,8 @@ namespace Lumina
 
         // Pause/Resume for an in-progress Play or Simulate session; sits in the Play button's slot.
         void DrawPauseResumeButton(const ImVec2& ButtonSize);
-        bool IsPlaySessionPaused() const;
-        void SetPlaySessionPaused(bool bPause);
+        EDITOR_API bool IsPlaySessionPaused() const;
+        EDITOR_API void SetPlaySessionPaused(bool bPause);
 
         // Eject/Possess, PIE only.
         void DrawEjectButton(const ImVec2& ButtonSize);
@@ -178,8 +178,11 @@ namespace Lumina
         void UpdateSimulationGrab(const ImVec2& ViewportOrigin, const ImVec2& ViewportSize, bool bInViewportHovered);
 
         bool IsSimulationGrabActive() const { return GrabbedBodyID != 0xFFFFFFFFu; }
-        
-        void StopAllSimulations();
+
+        EDITOR_API void StopAllSimulations();
+
+        // Play-in-editor for a caller outside the tool; false when a session is already running.
+        EDITOR_API bool StartPlayInEditor();
         
         bool IsUnsavedDocument() override;
 

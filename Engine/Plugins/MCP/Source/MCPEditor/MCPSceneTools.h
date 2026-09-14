@@ -70,6 +70,10 @@ namespace Lumina
         /** How many to return at most, so a large level cannot flood the reply. */
         PROPERTY()
         int32 Limit = 100;
+
+        /** How many matches to skip first, so a list longer than Limit can be paged. */
+        PROPERTY()
+        int32 Offset = 0;
     };
 
     REFLECT()
@@ -182,7 +186,7 @@ namespace Lumina
         FString Path;
 
         /** The new value as JSON, so 12.5 or "Torch" or true or {"X":1,"Y":0,"Z":0}. */
-        PROPERTY()
+        PROPERTY(RawJson)
         FString Value;
     };
 
@@ -198,6 +202,51 @@ namespace Lumina
         /** What it holds now, read back after applying. */
         PROPERTY()
         FString Current;
+    };
+
+    REFLECT()
+    struct MCPEDITOR_API SDestroyEntitiesParams
+    {
+        GENERATED_BODY()
+
+        /** Ids from scene.list_entities. Children go with their parents. */
+        PROPERTY()
+        TVector<FString> Entities;
+    };
+
+    REFLECT()
+    struct MCPEDITOR_API SDestroyEntitiesResult
+    {
+        GENERATED_BODY()
+
+        PROPERTY()
+        int32 Destroyed = 0;
+
+        /** Ids that named nothing, reported rather than failing the whole call. */
+        PROPERTY()
+        TVector<FString> Skipped;
+    };
+
+    REFLECT()
+    struct MCPEDITOR_API SRemoveComponentParams
+    {
+        GENERATED_BODY()
+
+        PROPERTY()
+        FString Entity;
+
+        /** Component type name, as entity.describe reports it. */
+        PROPERTY()
+        FString Component;
+    };
+
+    REFLECT()
+    struct MCPEDITOR_API SRemoveComponentResult
+    {
+        GENERATED_BODY()
+
+        PROPERTY()
+        bool bRemoved = false;
     };
 
     namespace MCP

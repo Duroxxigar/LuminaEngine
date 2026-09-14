@@ -21,8 +21,8 @@ namespace Lumina
             SetElementSize(sizeof(FSoftObjectPath));
         }
 
-        void Serialize(FArchive& Ar, void* Value) override;
-        void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
+        RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
+        RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
 
         // Storage holds an FString; a raw memcpy (base impl) would share the heap buffer between
         // Dst and Src (double-free), and a byte memcmp would compare heap pointers + CachedGUID
