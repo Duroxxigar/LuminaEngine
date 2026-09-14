@@ -6,12 +6,9 @@
 #include "Agent/AgentToolMarshal.h"
 #include "Agent/AgentToolRegistry.h"
 #include "MCPTextMatch.h"
-#include "MCPWorldEditor.h"
 #include "Core/Engine/Engine.h"
-#include "LuminaEditor.h"
+#include "Session/SessionOps.h"
 #include "Scene/SceneOps.h"
-#include "UI/EditorUI.h"
-#include "UI/Tools/WorldEditorTool.h"
 #include "World/Entity/Components/NameComponent.h"
 #include "World/Entity/Components/Component.h"
 #include "World/Entity/EntityUtils.h"
@@ -106,13 +103,14 @@ namespace Lumina::MCP
                 Agent::EToolEffect::ReadOnly, Agent::EToolThread::GameThread,
                 [](const SListEntitiesParams& In, SListEntitiesResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditorScene);
+                        return Agent::FToolResult::Error(SceneError);
                     }
 
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    ECS::FRegistry& Registry = *ScenePtr;
                     const int32 Limit = In.Limit > 0 ? In.Limit : 100;
                     const int32 Offset = In.Offset > 0 ? In.Offset : 0;
 
@@ -151,13 +149,14 @@ namespace Lumina::MCP
                 Agent::EToolEffect::ReadOnly, Agent::EToolThread::GameThread,
                 [](const SDescribeEntityParams& In, SDescribeEntityResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditorScene);
+                        return Agent::FToolResult::Error(SceneError);
                     }
 
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    ECS::FRegistry& Registry = *ScenePtr;
 
                     ECS::FEntity Entity = ECS::NullEntity;
                     FString Error;
@@ -189,13 +188,14 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SCreateEntityParams& In, SCreateEntityResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditorScene);
+                        return Agent::FToolResult::Error(SceneError);
                     }
 
-                    CWorld* World = Tool->GetSceneWorld();
+                    CWorld* World = SessionOps::GetSceneWorld(SceneError);
                     if (World == nullptr)
                     {
                         return Agent::FToolResult::Error(GNoWorldEditorScene);
@@ -217,12 +217,12 @@ namespace Lumina::MCP
                         }
                     }
 
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    ECS::FRegistry& Registry = *ScenePtr;
                     const FName EntityName(In.Name.empty() ? "Entity" : In.Name.c_str());
 
                     ECS::FEntity Created = ECS::NullEntity;
 
-                    Tool->RunCreationTransacted("Create Entity (agent)", [&]()
+                    SessionOps::RunCreationTransacted("Create Entity (agent)", [&]()
                     {
                         Created = World->ConstructEntity(EntityName);
                         if (Created == ECS::NullEntity)
@@ -237,7 +237,7 @@ namespace Lumina::MCP
 
                             SceneOps::ApplyAddComponent(Registry, Plan, Type);
                         }
-                    });
+                    }, SceneError);
 
                     if (Created == ECS::NullEntity)
                     {
@@ -261,13 +261,14 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SAddComponentParams& In, SAddComponentResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditorScene);
+                        return Agent::FToolResult::Error(SceneError);
                     }
 
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    ECS::FRegistry& Registry = *ScenePtr;
 
                     ECS::FEntity Entity = ECS::NullEntity;
                     FString Error;
@@ -293,10 +294,10 @@ namespace Lumina::MCP
                             NameOf(Registry, Entity), In.Component));
                     }
 
-                    Tool->RunTransacted("Add Component (agent)", [&]()
+                    SessionOps::RunTransacted("Add Component (agent)", [&]()
                     {
                         SceneOps::ApplyAddComponent(Registry, Plan, Type);
-                    });
+                    }, SceneError);
 
                     Out.bAdded = true;
 
@@ -313,13 +314,14 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SSetPropertyParams& In, SSetPropertyResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditorScene);
+                        return Agent::FToolResult::Error(SceneError);
                     }
 
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    ECS::FRegistry& Registry = *ScenePtr;
 
                     ECS::FEntity Entity = ECS::NullEntity;
                     FString Error;
@@ -376,14 +378,14 @@ namespace Lumina::MCP
                     Out.Previous = FString(Before.dump().c_str());
 
                     Agent::FMarshalResult Applied;
-                    Tool->RunTransacted("Set Property (agent)", [&]()
+                    SessionOps::RunTransacted("Set Property (agent)", [&]()
                     {
                         // A bare store reaches no hook, so the renderer keeps serving the old baked record.
                         SceneOps::FPropertyEditScope Edit(Registry, Entity, Reflected, Data,
                             Target.Property, Target.ValuePtr);
 
                         Applied = Agent::ReadProperty(Value, Target.Property, Target.ValuePtr, FStringView(In.Path));
-                    });
+                    }, SceneError);
 
                     if (!Applied.IsValid())
                     {
@@ -407,18 +409,19 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SRemoveComponentParams& In, SRemoveComponentResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditorScene);
+                        return Agent::FToolResult::Error(SceneError);
                     }
 
-                    if (Tool->HasSimulatingWorld())
+                    if (SessionOps::IsSimulating())
                     {
                         return Agent::FToolResult::Error("Stop play-in-editor first.");
                     }
 
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    ECS::FRegistry& Registry = *ScenePtr;
 
                     ECS::FEntity Entity = ECS::NullEntity;
                     FString Error;
@@ -434,7 +437,7 @@ namespace Lumina::MCP
                             NameOf(Registry, Entity), In.Component));
                     }
 
-                    Tool->RemoveComponentTransacted("Remove Component (agent)", Entity, Type);
+                    SessionOps::RemoveComponentTransacted("Remove Component (agent)", Entity, Type, SceneError);
 
                     Out.bRemoved = !ECS::Utils::HasComponent(Registry, Entity, Type);
                     if (!Out.bRemoved)
@@ -456,19 +459,20 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SDestroyEntitiesParams& In, SDestroyEntitiesResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditorScene);
+                        return Agent::FToolResult::Error(SceneError);
                     }
 
-                    if (Tool->HasSimulatingWorld())
+                    if (SessionOps::IsSimulating())
                     {
                         return Agent::FToolResult::Error("Stop play-in-editor first.");
                     }
 
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
-                    CWorld* World = Tool->GetSceneWorld();
+                    ECS::FRegistry& Registry = *ScenePtr;
+                    CWorld* World = SessionOps::GetSceneWorld(SceneError);
 
                     TVector<ECS::FEntity> Doomed;
                     for (const FString& Token : In.Entities)
@@ -490,7 +494,7 @@ namespace Lumina::MCP
                         return Agent::FToolResult::Error("None of the ids named a live entity.");
                     }
 
-                    Tool->RunDestroyTransacted("Delete Entity (agent)", Doomed, [&]()
+                    SessionOps::RunDestroyTransacted("Delete Entity (agent)", Doomed, [&]()
                     {
                         for (ECS::FEntity Entity : Doomed)
                         {
@@ -501,7 +505,7 @@ namespace Lumina::MCP
                                 ++Out.Destroyed;
                             }
                         }
-                    });
+                    }, SceneError);
 
                     return Agent::FToolResult::Ok(Lumina::Format("Destroyed {} entit{}.{}",
                         Out.Destroyed, Out.Destroyed == 1 ? "y" : "ies",

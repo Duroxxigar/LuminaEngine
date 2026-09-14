@@ -7,13 +7,9 @@
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
 #include "Log/Log.h"
-#include "LuminaEditor.h"
+#include "Session/SessionOps.h"
 #include "MCPTextMatch.h"
-#include "MCPWorldEditor.h"
 #include "Tools/Screenshot/ScreenshotCapture.h"
-#include "UI/EditorUI.h"
-#include "UI/Tools/EditorTool.h"
-#include "UI/Tools/WorldEditorTool.h"
 #include "World/World.h"
 
 namespace Lumina::MCP
@@ -22,15 +18,15 @@ namespace Lumina::MCP
     {
         constexpr const char* GNoWorldEditorSession = "No world editor is open.";
 
-        void FillPlayState(FWorldEditorTool* Tool, SPlayState& Out)
+        void FillPlayState(SPlayState& Out)
         {
-            Out.bPlaying = Tool->HasSimulatingWorld();
-            Out.bPaused  = Out.bPlaying && Tool->IsPlaySessionPaused();
+            FString Error;
+            SessionOps::FPlayState State;
+            SessionOps::GetPlayState(State, Error);
 
-            if (CWorld* World = Tool->GetSceneWorld(); World != nullptr && World->GetPackage() != nullptr)
-            {
-                Out.World = FString(World->GetPackage()->GetPackagePath().c_str());
-            }
+            Out.bPlaying = State.bPlaying;
+            Out.bPaused  = State.bPaused;
+            Out.World    = State.World;
         }
 
         const char* LevelName(ELogLevel Level)
@@ -70,24 +66,25 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SUndoParams& In, SUndoResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SessionError;
+                    if (!SessionOps::HasSceneEditor())
                     {
                         return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
-                    if (Tool->HasSimulatingWorld())
+                    if (SessionOps::IsSimulating())
                     {
                         return Agent::FToolResult::Error("Undo is blocked while playing in editor.");
                     }
 
-                    for (int32 Step = 0; Step < Math::Max(In.Steps, 1) && Tool->RunUndo(); ++Step)
+                    for (int32 Step = 0; Step < Math::Max(In.Steps, 1) && SessionOps::Undo(1) > 0; ++Step)
                     {
                         ++Out.Applied;
                     }
 
-                    Out.NextUndo = Tool->PeekUndoLabel().IsNone() ? FString() : FString(Tool->PeekUndoLabel().ToString().c_str());
-                    Out.NextRedo = Tool->PeekRedoLabel().IsNone() ? FString() : FString(Tool->PeekRedoLabel().ToString().c_str());
+                    const SessionOps::FUndoState Undo = SessionOps::GetUndoState();
+                    Out.NextUndo = Undo.NextUndo;
+                    Out.NextRedo = Undo.NextRedo;
 
                     if (Out.Applied == 0)
                     {
@@ -104,24 +101,25 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SUndoParams& In, SUndoResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SessionError;
+                    if (!SessionOps::HasSceneEditor())
                     {
                         return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
-                    if (Tool->HasSimulatingWorld())
+                    if (SessionOps::IsSimulating())
                     {
                         return Agent::FToolResult::Error("Redo is blocked while playing in editor.");
                     }
 
-                    for (int32 Step = 0; Step < Math::Max(In.Steps, 1) && Tool->RunRedo(); ++Step)
+                    for (int32 Step = 0; Step < Math::Max(In.Steps, 1) && SessionOps::Redo(1) > 0; ++Step)
                     {
                         ++Out.Applied;
                     }
 
-                    Out.NextUndo = Tool->PeekUndoLabel().IsNone() ? FString() : FString(Tool->PeekUndoLabel().ToString().c_str());
-                    Out.NextRedo = Tool->PeekRedoLabel().IsNone() ? FString() : FString(Tool->PeekRedoLabel().ToString().c_str());
+                    const SessionOps::FUndoState Undo = SessionOps::GetUndoState();
+                    Out.NextUndo = Undo.NextUndo;
+                    Out.NextRedo = Undo.NextRedo;
 
                     if (Out.Applied == 0)
                     {
@@ -141,13 +139,13 @@ namespace Lumina::MCP
                 Agent::EToolEffect::ReadOnly, Agent::EToolThread::GameThread,
                 [](const SPlayStateParams&, SPlayState& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SessionError;
+                    if (!SessionOps::HasSceneEditor())
                     {
                         return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
-                    FillPlayState(Tool, Out);
+                    FillPlayState(Out);
                     return Agent::FToolResult::Ok(Out.bPlaying
                         ? Lumina::Format("Playing{} in {}.", Out.bPaused ? " (paused)" : "", Out.World)
                         : Lumina::Format("Editing {}.", Out.World));
@@ -159,20 +157,20 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SPlayStateParams&, SPlayState& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SessionError;
+                    if (!SessionOps::HasSceneEditor())
                     {
                         return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
-                    if (!Tool->StartPlayInEditor())
+                    if (!SessionOps::StartPlay(SessionError))
                     {
-                        FillPlayState(Tool, Out);
+                        FillPlayState(Out);
                         return Agent::FToolResult::Error("Already playing.");
                     }
 
                     LOG_INFO("[MCP] An agent started play-in-editor.");
-                    FillPlayState(Tool, Out);
+                    FillPlayState(Out);
                     return Agent::FToolResult::Ok("Playing.");
                 });
 
@@ -182,21 +180,21 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SPlayStateParams&, SPlayState& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SessionError;
+                    if (!SessionOps::HasSceneEditor())
                     {
                         return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
-                    if (!Tool->HasSimulatingWorld())
+                    if (!SessionOps::IsSimulating())
                     {
-                        FillPlayState(Tool, Out);
+                        FillPlayState(Out);
                         return Agent::FToolResult::Error("Nothing is playing.");
                     }
 
-                    Tool->StopAllSimulations();
+                    SessionOps::StopPlay(SessionError);
                     LOG_INFO("[MCP] An agent stopped play-in-editor.");
-                    FillPlayState(Tool, Out);
+                    FillPlayState(Out);
                     return Agent::FToolResult::Ok("Stopped.");
                 });
 
@@ -206,27 +204,22 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SPauseParams& In, SPlayState& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SessionError;
+                    if (!SessionOps::HasSceneEditor())
                     {
                         return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
-                    if (!Tool->HasSimulatingWorld())
+                    if (!SessionOps::IsSimulating())
                     {
-                        FillPlayState(Tool, Out);
+                        FillPlayState(Out);
                         return Agent::FToolResult::Error("Nothing is playing.");
                     }
 
-                    Tool->SetPlaySessionPaused(In.bPaused);
-                    FillPlayState(Tool, Out);
+                    SessionOps::SetPaused(In.bPaused, SessionError);
+                    FillPlayState(Out);
                     return Agent::FToolResult::Ok(In.bPaused ? "Paused." : "Resumed.");
                 });
-        }
-
-        FEditorUI* FindEditorUI()
-        {
-            return GEditorEngine != nullptr ? static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI()) : nullptr;
         }
 
         void RegisterTabs(FStringView Owner)
@@ -237,13 +230,7 @@ namespace Lumina::MCP
                 Agent::EToolEffect::ReadOnly, Agent::EToolThread::GameThread,
                 [](const SListTabsParams&, SListTabsResult& Out)
                 {
-                    FEditorUI* UI = FindEditorUI();
-                    if (UI == nullptr)
-                    {
-                        return Agent::FToolResult::Error("The editor UI is not running.");
-                    }
-
-                    UI->ForEachTab([&Out](const FEditorUI::FTabInfo& Tab)
+                    SessionOps::ForEachTab([&Out](const SessionOps::FTabInfo& Tab)
                     {
                         STabInfo Info;
                         Info.Name      = Tab.Name;
@@ -270,36 +257,18 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SOpenAssetParams& In, SOpenAssetResult& Out)
                 {
-                    FEditorUI* UI = FindEditorUI();
-                    if (UI == nullptr)
-                    {
-                        return Agent::FToolResult::Error("The editor UI is not running.");
-                    }
-
                     const TOptional<FGuid> Guid = FGuid::TryParse(FStringView(In.Asset));
                     if (!Guid.IsSet())
                     {
                         return Agent::FToolResult::Error(Lumina::Format("'{}' is not a GUID.", In.Asset));
                     }
 
-                    UI->OpenAssetEditor(*Guid);
-
-                    // A world retargets the singleton world editor rather than getting a tab of its own.
-                    CObject* Asset = FindObject<CObject>(*Guid);
-                    FEditorTool* Tool = Asset != nullptr ? UI->FindAssetEditor(Asset) : nullptr;
-                    if (Tool == nullptr && Asset != nullptr && Asset->IsA<CWorld>())
+                    FString Error;
+                    if (!SessionOps::OpenAsset(*Guid, Out.Tab, Error))
                     {
-                        Tool = UI->FindTool<FWorldEditorTool>();
+                        return Agent::FToolResult::Error(Error);
                     }
 
-                    if (Tool == nullptr)
-                    {
-                        return Agent::FToolResult::Error(Lumina::Format("No editor opened for {}.", In.Asset));
-                    }
-
-                    const FString Full(Tool->GetToolName().c_str());
-                    const size_t Hash = Full.find("###");
-                    Out.Tab = Hash == FString::npos ? Full : Full.substr(Hash + 3);
                     return Agent::FToolResult::Ok(Lumina::Format("Open in tab '{}'.", Out.Tab));
                 });
 
@@ -309,14 +278,8 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const STabNameParams& In, STabActionResult& Out)
                 {
-                    FEditorUI* UI = FindEditorUI();
-                    if (UI == nullptr)
-                    {
-                        return Agent::FToolResult::Error("The editor UI is not running.");
-                    }
-
                     FString Error;
-                    Out.bDone = UI->FocusTab(FStringView(In.Tab), Error);
+                    Out.bDone = SessionOps::FocusTab(FStringView(In.Tab), Error);
                     if (!Out.bDone)
                     {
                         return Agent::FToolResult::Error(Error + " Call editor.list_tabs.");
@@ -331,14 +294,8 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SCloseTabParams& In, STabActionResult& Out)
                 {
-                    FEditorUI* UI = FindEditorUI();
-                    if (UI == nullptr)
-                    {
-                        return Agent::FToolResult::Error("The editor UI is not running.");
-                    }
-
                     FString Error;
-                    Out.bDone = UI->CloseTab(FStringView(In.Tab), In.bDiscardUnsaved, Error);
+                    Out.bDone = SessionOps::CloseTab(FStringView(In.Tab), In.bDiscardUnsaved, Error);
                     if (!Out.bDone)
                     {
                         return Agent::FToolResult::Error(Error);

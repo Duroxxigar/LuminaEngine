@@ -9,10 +9,9 @@
 #include "Assets/Factories/Factory.h"
 #include "Core/Object/Package/Package.h"
 #include "FileSystem/FileSystem.h"
-#include "LuminaEditor.h"
+#include "Session/SessionOps.h"
 #include "MCPTextMatch.h"
 #include "Paths/Paths.h"
-#include "UI/EditorUI.h"
 
 namespace Lumina::MCP
 {
@@ -266,11 +265,8 @@ namespace Lumina::MCP
                             "{} asset(s) reference {}. Pass bForce to delete anyway.", Out.Referencers.size(), Out.Path));
                     }
 
-                    FEditorUI* UI = GEditorEngine != nullptr
-                        ? static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI())
-                        : nullptr;
-
-                    const AssetOps::FDeleteAssetResult Deleted = AssetOps::DeleteAsset(FStringView(Out.Path), UI);
+                    const AssetOps::FDeleteAssetResult Deleted =
+                        AssetOps::DeleteAsset(FStringView(Out.Path), SessionOps::GetToolContext());
                     if (!Deleted.bDeleted)
                     {
                         return Agent::FToolResult::Error(Deleted.Error);

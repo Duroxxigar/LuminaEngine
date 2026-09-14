@@ -9,25 +9,12 @@
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Core/Reflection/Type/Properties/ArrayProperty.h"
 #include "Core/Reflection/Type/Properties/StructProperty.h"
-#include "LuminaEditor.h"
-#include "UI/EditorUI.h"
-#include "UI/Tools/EditorTool.h"
+#include "Session/SessionOps.h"
 
 namespace Lumina::Agent
 {
     namespace
     {
-        FEditorTool* FindOpenEditorFor(CObject* Owner)
-        {
-            if (GEditorEngine == nullptr || Owner == nullptr)
-            {
-                return nullptr;
-            }
-
-            FEditorUI* UI = static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI());
-            return UI != nullptr ? UI->FindAssetEditor(Owner) : nullptr;
-        }
-
         FString Dump(const nlohmann::json& Value)
         {
             return FString(Value.dump().c_str());
@@ -113,12 +100,9 @@ namespace Lumina::Agent
             }
         };
 
-        if (FEditorTool* Editor = FindOpenEditorFor(Owner))
-        {
-            Editor->RunObjectTransacted(Label, Owner, Mutate);
-            Result.bUndoable = true;
-        }
-        else
+        // Undoable only when an open editor owns it, so an edit to an unopened asset still applies.
+        Result.bUndoable = SessionOps::RunObjectTransacted(Owner, Label, Mutate);
+        if (!Result.bUndoable)
         {
             Mutate();
         }

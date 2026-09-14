@@ -8,11 +8,8 @@
 #include "Assets/AssetTypes/Prefabs/Prefab.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
-#include "LuminaEditor.h"
+#include "Session/SessionOps.h"
 #include "MCPTextMatch.h"
-#include "MCPWorldEditor.h"
-#include "UI/EditorUI.h"
-#include "UI/Tools/WorldEditorTool.h"
 #include "World/ECS/Registry.h"
 #include "World/Entity/Components/Component.h"
 #include "World/Entity/Components/NameComponent.h"
@@ -157,13 +154,14 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SSpawnPrefabParams& In, SSpawnPrefabResult& Out)
                 {
-                    FWorldEditorTool* Tool = FindWorldEditor();
-                    if (Tool == nullptr)
+                    FString SceneError;
+                    ECS::FRegistry* ScenePtr = SessionOps::GetSceneRegistry(SceneError);
+                    if (ScenePtr == nullptr)
                     {
                         return Agent::FToolResult::Error("No world editor is open, so there is nowhere to spawn.");
                     }
 
-                    if (Tool->HasSimulatingWorld())
+                    if (SessionOps::IsSimulating())
                     {
                         return Agent::FToolResult::Error("Stop play-in-editor first.");
                     }
@@ -175,8 +173,8 @@ namespace Lumina::MCP
                         return Agent::FToolResult::Error(Error);
                     }
 
-                    CWorld* World = Tool->GetSceneWorld();
-                    ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
+                    CWorld* World = SessionOps::GetSceneWorld(SceneError);
+                    ECS::FRegistry& Registry = *ScenePtr;
 
                     ECS::FEntity Parent = ECS::NullEntity;
                     if (!In.Parent.empty() && !Agent::FEntityTokens::Resolve(Registry, FStringView(In.Parent), Parent, Error))
@@ -197,7 +195,7 @@ namespace Lumina::MCP
                     }
 
                     ECS::FEntity Root = ECS::NullEntity;
-                    Tool->RunCreationTransacted("Spawn Prefab (agent)", [&]()
+                    SessionOps::RunCreationTransacted("Spawn Prefab (agent)", [&]()
                     {
                         Root = World->SpawnPrefabAt(Ref, Transform, Parent);
 
@@ -208,7 +206,7 @@ namespace Lumina::MCP
                                 Named->Name = FName(In.Name);
                             }
                         }
-                    });
+                    }, SceneError);
 
                     if (Root == ECS::NullEntity)
                     {
