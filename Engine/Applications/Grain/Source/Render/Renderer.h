@@ -1,6 +1,7 @@
 #pragma once
 
 #include "World/Camera.h"
+#include "World/Sky.h"
 #include "World/VoxelSim.h"
 #include "World/VoxelWorld.h"
 
@@ -12,6 +13,7 @@ namespace Grain
 {
     inline constexpr int32 kBloomLevels = 5;
     inline constexpr int32 kAtrousPasses = 4;
+    inline constexpr int32 kMaxDestroyPerFrame = 8;
 
     struct FViewArgs
     {
@@ -22,31 +24,32 @@ namespace Grain
         RHI::GPUPtr Payload   = 0;
         RHI::GPUPtr SimGrid   = 0;
         RHI::GPUPtr SimCoarse = 0;
-
-        // Seven pointers leave the next float4 at offset 56, which straddles a 16 byte boundary.
-        RHI::GPUPtr Pad0      = 0;
+        RHI::GPUPtr Entities  = 0;
 
         FVector4 CameraPos;
         FVector4 CameraFwd;
         FVector4 CameraRight;
         FVector4 CameraUp;
         FVector4 SunDir;
-        FVector4 PrevPos;
-        FVector4 PrevFwd;
-        FVector4 PrevRight;
-        FVector4 PrevUp;
+        FVector4 MoonDir;
+        FVector4 SunColor;
+        FVector4 SkyZenith;
+        FVector4 SkyHorizon;
+        FVector4 SkyGround;
         FVector4 Params;
+        FVector4 Jitter;
+        FVector4 FogParams;
         FVector4 SimOrigin;
 
-        uint32 Unused0   = 0;
-        uint32 Unused1   = 0;
-        uint32 DebugMode = 0;
-        uint32 bSim      = 0;
+        uint32 EntityCount = 0;
+        uint32 Unused0     = 0;
+        uint32 DebugMode   = 0;
+        uint32 bSim        = 0;
     };
 
-    static_assert(sizeof(FViewArgs) == 256, "The Slang mirror expects a packed 240 byte block.");
+    static_assert(sizeof(FViewArgs) == 304, "The Slang mirror expects a packed 304 byte block.");
 
-    // Shared by the temporal, a trous and compose passes, since they all need the same view basis.
+    // Shared by the temporal, a trous, compose and antialiasing passes, since they need the same basis.
     struct FDenoiseArgs
     {
         uint32 IDs[4]   = { 0, 0, 0, 0 };
@@ -62,9 +65,13 @@ namespace Grain
         FVector4 PrevRight;
         FVector4 PrevUp;
         FVector4 SunDir;
+        FVector4 FogParams;
+        FVector4 SkyHorizon;
+        FVector4 SkyZenith;
+        FVector4 Misc;
     };
 
-    static_assert(sizeof(FDenoiseArgs) == 192, "The Slang mirror expects a packed 192 byte block.");
+    static_assert(sizeof(FDenoiseArgs) == 256, "The Slang mirror expects a packed 256 byte block.");
 
     struct FDestroyArgs
     {
@@ -85,7 +92,26 @@ namespace Grain
         FVector4 Params;
     };
 
-    static_assert(sizeof(FDestroyArgs) == 128, "The Slang mirror expects a packed 112 byte block.");
+    static_assert(sizeof(FDestroyArgs) == 128, "The Slang mirror expects a packed 128 byte block.");
+
+    // An aimed dig resolves its center on the GPU, while an explosion already knows where it landed.
+    struct FDestroyRequest
+    {
+        FVector3 Center { 0.0f, 0.0f, 0.0f };
+        FVector3 Origin { 0.0f, 0.0f, 0.0f };
+        FVector3 Direction { 0.0f, 0.0f, 1.0f };
+        float    Radius = 1.0f;
+        float    Reach = 90.0f;
+        bool     bExplicit = false;
+    };
+
+    struct FFrameTint
+    {
+        FVector3 Color { 1.0f, 1.0f, 1.0f };
+        float    Saturation = 1.16f;
+        float    Contrast = 1.10f;
+        float    ExposureScale = 1.0f;
+    };
 
     class FRenderer
     {
@@ -103,12 +129,19 @@ namespace Grain
         void SetFilter(bool bEnabled) { bFilter = bEnabled; }
         NODISCARD bool IsFilterEnabled() const { return bFilter; }
 
+        void SetAntialiasing(bool bEnabled) { bAntialias = bEnabled; }
+        NODISCARD bool IsAntialiasingEnabled() const { return bAntialias; }
+
+        void SetSky(const FSkyState& InSky) { Sky = InSky; }
+        void SetTint(const FFrameTint& InTint) { Tint = InTint; }
+        void SetOverlay(uint32 SampledSlot) { OverlaySlot = SampledSlot; }
+
         // Queued rather than issued, because destruction has to land before the frame's raymarch.
-        void RequestDestroy(float Radius) { PendingDestroy = Radius; }
+        void QueueDestroy(const FDestroyRequest& Request);
 
         void Render(RHI::FCmdListH CL, RHI::FTextureH SwapImage, const FUIntVector2& Extent,
                     const FVoxelWorld& World, const FVoxelSim& Sim, const FCamera& Camera,
-                    float RealTime, bool bMoved);
+                    float RealTime, float DeltaTime);
 
         bool CaptureToFile(const FUIntVector2& Extent, const char* Path);
 
@@ -121,30 +154,42 @@ namespace Grain
         void ReleaseTargets();
 
         void FillViewBasis(FDenoiseArgs& Args, const FUIntVector2& Extent, const FCamera& Camera) const;
+        void FillViewArgs(FViewArgs& Args, const FUIntVector2& Extent, const FVoxelWorld& World,
+                          const FVoxelSim& Sim, const FCamera& Camera, float RealTime) const;
 
-        void StepSim(RHI::FCmdListH CL, const FVoxelSim& Sim);
-        void RunDestroy(RHI::FCmdListH CL, const FVoxelWorld& World, const FVoxelSim& Sim, const FCamera& Camera);
+        void StepSim(RHI::FCmdListH CL, const FVoxelSim& Sim, float DeltaTime);
+        void RunDestroy(RHI::FCmdListH CL, const FVoxelWorld& World, const FVoxelSim& Sim);
 
         void DrawScene(RHI::FCmdListH CL, const FUIntVector2& Extent, const FVoxelWorld& World,
                        const FVoxelSim& Sim, const FCamera& Camera, float RealTime);
-        void Accumulate(RHI::FCmdListH CL, const FUIntVector2& Extent, const FCamera& Camera, bool bMoved);
-        void FilterIndirect(RHI::FCmdListH CL, const FUIntVector2& Extent);
+        void DrawIndirect(RHI::FCmdListH CL, const FVoxelWorld& World, const FVoxelSim& Sim,
+                          const FCamera& Camera, float RealTime);
+        void Accumulate(RHI::FCmdListH CL, const FCamera& Camera);
+        void FilterIndirect(RHI::FCmdListH CL);
         void Compose(RHI::FCmdListH CL, const FUIntVector2& Extent, const FCamera& Camera);
+        void Resolve(RHI::FCmdListH CL, const FUIntVector2& Extent, const FCamera& Camera);
+        void Adapt(RHI::FCmdListH CL, float DeltaTime);
 
         void DrawBloom(RHI::FCmdListH CL);
         void DrawComposite(RHI::FCmdListH CL, RHI::FTextureH SwapImage, const FUIntVector2& Extent);
 
+        NODISCARD RHI::FManagedTexture& SceneHistory() { return History[WriteIndex]; }
+
         EFormat SwapchainFormat = EFormat::UNKNOWN;
 
         RHI::FPipelineH RaymarchPipeline;
+        RHI::FPipelineH GiPipeline;
         RHI::FPipelineH TemporalPipeline;
         RHI::FPipelineH AtrousPipeline;
         RHI::FPipelineH ComposePipeline;
+        RHI::FPipelineH TaaPipeline;
+        RHI::FPipelineH ExposurePipeline;
         RHI::FPipelineH DownsamplePipeline;
         RHI::FPipelineH UpsamplePipeline;
         RHI::FPipelineH CompositePipeline;
         RHI::FPipelineH SimStepPipeline;
         RHI::FPipelineH SimCoarsePipeline;
+        RHI::FPipelineH SimDilatePipeline;
         RHI::FPipelineH PickPipeline;
         RHI::FPipelineH DestroyPipeline;
 
@@ -155,24 +200,43 @@ namespace Grain
 
         RHI::FGPUAllocation PickBuffer;
 
-        RHI::FManagedTexture RawIndirect;
         RHI::FManagedTexture RawDirect;
         RHI::FManagedTexture RawAlbedo;
+        RHI::FManagedTexture GiRaw;
+        RHI::FManagedTexture GiGeo;
         RHI::FManagedTexture Accum[2];
         RHI::FManagedTexture Moment[2];
         RHI::FManagedTexture Scratch[2];
         RHI::FManagedTexture SceneTarget;
+        RHI::FManagedTexture History[2];
+        RHI::FManagedTexture Exposure[2];
         RHI::Utils::FMipChain BloomChain;
 
+        FDestroyRequest PendingDestroy[kMaxDestroyPerFrame];
+        int32           PendingDestroyCount = 0;
+
+        FSkyState  Sky;
+        FFrameTint Tint;
+
         FUIntVector2 TargetExtent { 0, 0 };
+        FUIntVector2 HalfExtent { 0, 0 };
         uint32       FrameIndex = 0;
         uint32       DebugMode = 0;
+        uint32       OverlaySlot = 0;
         bool         bTemporal = true;
         bool         bFilter = true;
-        float        PendingDestroy = 0.0f;
+        bool         bAntialias = true;
         int32        WriteIndex = 0;
         int32        FilterOutput = 0;
         bool         bHasHistory = false;
+        bool         bHasSceneHistory = false;
+        bool         bHasExposure = false;
+
+        // A dig only invalidates the pixels it moved, so the history shortens rather than resets.
+        uint32       SettleFrames = 0;
+
+        float        SimAccumulator = 0.0f;
+        FVector2     Jitter { 0.0f, 0.0f };
 
         FVector3 PrevPosition { 0.0f, 0.0f, 0.0f };
         FVector3 PrevForward { 0.0f, 0.0f, 1.0f };

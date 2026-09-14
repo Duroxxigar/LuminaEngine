@@ -1,5 +1,6 @@
 #include "Render/Renderer.h"
 #include "World/Camera.h"
+#include "World/Sky.h"
 #include "World/VoxelSim.h"
 #include "World/VoxelWorld.h"
 
@@ -183,6 +184,7 @@ int main(int ArgC, char** ArgV)
     Renderer.SetFilter(!ParsedCommandLine.Has("nofilter"));
     if (ParsedCommandLine.Has("gputimes")) { Renderer.EnableGpuTimers(); }
     Renderer.SetTemporal(!ParsedCommandLine.Has("notemporal"));
+    Renderer.SetAntialiasing(!ParsedCommandLine.Has("noaa"));
     const bool bReady = bUploaded && Renderer.Initialize(Target.GetFormat());
 
     if (!bReady)
@@ -247,7 +249,24 @@ int main(int ArgC, char** ArgV)
         if (Input.bDestroy)
         {
             Input.bDestroy = false;
-            Renderer.RequestDestroy(1.35f);
+            FDestroyRequest Dig;
+            Dig.Origin = Camera.GetPosition();
+            Dig.Direction = Camera.Forward();
+            Dig.Radius = 1.35f;
+            Renderer.QueueDestroy(Dig);
+        }
+
+        // A single scripted dig from a still camera, so a capture can isolate what a crater disturbs.
+        if (const auto DigAt = ParsedCommandLine.GetInt("digat"))
+        {
+            if (Frames == uint32(*DigAt))
+            {
+                FDestroyRequest Dig;
+                Dig.Origin = Camera.GetPosition();
+                Dig.Direction = Camera.Forward();
+                Dig.Radius = 2.4f;
+                Renderer.QueueDestroy(Dig);
+            }
         }
 
         // A scripted dig, so a headless capture can show craters without a human at the mouse.
@@ -260,7 +279,11 @@ int main(int ArgC, char** ArgV)
             else if (Frames > 14 && Frames < 150 && (Frames % 4) == 0
                   && !ParsedCommandLine.Has("nodestroy"))
             {
-                Renderer.RequestDestroy(2.4f);
+                FDestroyRequest Dig;
+                Dig.Origin = Camera.GetPosition();
+                Dig.Direction = Camera.Forward();
+                Dig.Radius = 2.4f;
+                Renderer.QueueDestroy(Dig);
                 Camera.Look(7.0f, 0.0f);
             }
         }
@@ -277,7 +300,8 @@ int main(int ArgC, char** ArgV)
         RHI::CmdSetTextureHeap(CL, RHI::GetGlobalHeap());
         Target.BarrierToRender(CL);
 
-        Renderer.Render(CL, SwapImage, Target.GetExtent(), World, Sim, Camera, float(Now - Started), bMoved);
+        Renderer.SetSky(EvaluateSky(float(ParsedCommandLine.GetInt("time").value_or(22)) * 0.01f));
+        Renderer.Render(CL, SwapImage, Target.GetExtent(), World, Sim, Camera, float(Now - Started), Delta);
 
         Target.Present(CL);
 
