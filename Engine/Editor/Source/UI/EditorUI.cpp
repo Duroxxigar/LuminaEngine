@@ -1429,6 +1429,137 @@ namespace Lumina
         return Itr != ActiveAssetTools.end() ? Itr->second : nullptr;
     }
 
+    void FEditorUI::ForEachTab(const TFunction<void(const FTabInfo&)>& Functor) const
+    {
+        for (FEditorTool* Tool : EditorTools)
+        {
+            if (Tool == nullptr)
+            {
+                continue;
+            }
+
+            FTabInfo Info;
+            Info.Name      = FString(Tool->GetToolName().c_str());
+            Info.bUnsaved  = Tool->IsUnsavedDocument();
+            Info.bFocused  = Tool == LastActiveTool;
+            Info.bClosable = CanCloseTool(Tool);
+
+            // The window name carries an icon glyph, so the id after ### is what a caller can retype.
+            const size_t Hash = Info.Name.find("###");
+            Info.Id = Hash == FString::npos ? Info.Name : Info.Name.substr(Hash + 3);
+
+            for (const auto& Pair : ActiveAssetTools)
+            {
+                if (Pair.second == Tool && Pair.first != nullptr)
+                {
+                    Info.AssetGuid = FString(Pair.first->GetGUID().ToString().c_str());
+                    break;
+                }
+            }
+
+            Functor(Info);
+        }
+    }
+
+    FEditorTool* FEditorUI::FindTab(FStringView Name, FString& OutError) const
+    {
+        const auto Lower = [](char Character)
+        {
+            return (Character >= 'A' && Character <= 'Z') ? static_cast<char>(Character - 'A' + 'a') : Character;
+        };
+
+        const auto ContainsFold = [&Lower](FStringView Haystack, FStringView Needle)
+        {
+            for (size_t Start = 0; Start + Needle.size() <= Haystack.size(); ++Start)
+            {
+                bool bMatches = true;
+                for (size_t Index = 0; Index < Needle.size() && bMatches; ++Index)
+                {
+                    bMatches = Lower(Haystack[Start + Index]) == Lower(Needle[Index]);
+                }
+
+                if (bMatches)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        FEditorTool* Partial = nullptr;
+        int32 PartialCount = 0;
+
+        for (FEditorTool* Tool : EditorTools)
+        {
+            if (Tool == nullptr)
+            {
+                continue;
+            }
+
+            const FStringView Full(Tool->GetToolName().c_str());
+            const size_t Hash = Full.find("###");
+            const FStringView Id = Hash == FStringView::npos ? FStringView() : Full.substr(Hash + 3);
+
+            if (Full == Name || (!Id.empty() && Id == Name))
+            {
+                return Tool;
+            }
+
+            if (!Name.empty() && ContainsFold(Full, Name))
+            {
+                Partial = Tool;
+                ++PartialCount;
+            }
+        }
+
+        if (PartialCount == 1)
+        {
+            return Partial;
+        }
+
+        OutError = PartialCount == 0
+            ? Lumina::Format("No tab is named '{}'.", Name)
+            : Lumina::Format("'{}' matches {} tabs; use the id from the tab list.", Name, PartialCount);
+        return nullptr;
+    }
+
+    bool FEditorUI::FocusTab(FStringView Name, FString& OutError)
+    {
+        FEditorTool* Tool = FindTab(Name, OutError);
+        if (Tool == nullptr)
+        {
+            return false;
+        }
+
+        FocusTargetWindowName = FString(Tool->GetToolName().c_str());
+        return true;
+    }
+
+    bool FEditorUI::CloseTab(FStringView Name, bool bDiscardUnsaved, FString& OutError)
+    {
+        FEditorTool* Tool = FindTab(Name, OutError);
+        if (Tool == nullptr)
+        {
+            return false;
+        }
+
+        if (!CanCloseTool(Tool))
+        {
+            OutError = Lumina::Format("'{}' cannot be closed.", Name);
+            return false;
+        }
+
+        if (Tool->IsUnsavedDocument() && !bDiscardUnsaved)
+        {
+            OutError = Lumina::Format("'{}' has unsaved changes. Save it, or pass bDiscardUnsaved.", Name);
+            return false;
+        }
+
+        RequestCloseTool(Tool);
+        return true;
+    }
+
     void FEditorUI::OpenAssetEditor(const FGuid& AssetGUID)
     {
         // Fans the whole Hard and Owned closure across workers instead of an inline depth-first walk.

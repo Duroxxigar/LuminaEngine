@@ -179,9 +179,9 @@ namespace Lumina
 
         virtual bool HasSetterOrGetter() const { return false; }
 
-        virtual void CallSetter(void* Container, const void* InValue) const;
+        RUNTIME_API virtual void CallSetter(void* Container, const void* InValue) const;
 
-        virtual void CallGetter(const void* Container, void* OutValue) const;
+        RUNTIME_API virtual void CallGetter(const void* Container, void* OutValue) const;
 
         
     private:

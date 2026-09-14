@@ -4,10 +4,15 @@
 #include "Agent/AgentToolMarshal.h"
 #include "Agent/AgentToolRegistry.h"
 #include "Agent/AgentToolSchema.h"
+#include "Core/Reflection/Type/LuminaTypes.h"
 #include "Log/Log.h"
+#include "MCPAssetObjectTools.h"
 #include "MCPAssetTools.h"
-#include "MCPMaterialTools.h"
 #include "MCPBuiltinTools.h"
+#include "MCPDataTableTools.h"
+#include "MCPEditorSessionTools.h"
+#include "MCPMaterialTools.h"
+#include "MCPPrefabTools.h"
 #include "MCPSceneTools.h"
 
 namespace Lumina::MCP
@@ -38,6 +43,43 @@ namespace Lumina::MCP
             Content.push_back(Move(Block));
             return Content;
         }
+
+        // A RawJson string field takes any JSON value, re-encoded as text so a model need not double-quote it.
+        void EncodeRawJsonArguments(CStruct* ParamsType, nlohmann::json& Arguments)
+        {
+            if (ParamsType == nullptr || !Arguments.is_object())
+            {
+                return;
+            }
+
+            ParamsType->ForEachProperty<FProperty>([&Arguments](FProperty* Property)
+            {
+                if (Property == nullptr || Property->GetType() != EPropertyTypeFlags::String
+                    || !Property->HasMetadata("RawJson"))
+                {
+                    return;
+                }
+
+                const auto Found = Arguments.find(ToStandard(FStringView(Property->GetPropertyName().ToString())));
+                if (Found == Arguments.end())
+                {
+                    return;
+                }
+
+                if (!Found->is_string())
+                {
+                    *Found = Found->dump();
+                    return;
+                }
+
+                // A string that is not itself JSON is a plain string, so it is quoted rather than refused.
+                const std::string Text = Found->get<std::string>();
+                if (nlohmann::json::parse(Text, nullptr, false).is_discarded())
+                {
+                    *Found = nlohmann::json(Text).dump();
+                }
+            });
+        }
     }
 
     FServer::~FServer()
@@ -59,7 +101,11 @@ namespace Lumina::MCP
         RegisterBuiltinTools(GOwner);
         RegisterSceneTools(GOwner);
         RegisterAssetTools(GOwner);
+        RegisterAssetObjectTools(GOwner);
         RegisterMaterialTools(GOwner);
+        RegisterDataTableTools(GOwner);
+        RegisterPrefabTools(GOwner);
+        RegisterEditorSessionTools(GOwner);
 
         Http::FServerParams Params;
         Params.Port = Settings.Port;
@@ -180,7 +226,7 @@ namespace Lumina::MCP
             }
 
             const auto Arguments = Request.Params.find("arguments");
-            const nlohmann::json Given = Arguments != Request.Params.end() && Arguments->is_object()
+            nlohmann::json Given = Arguments != Request.Params.end() && Arguments->is_object()
                 ? *Arguments
                 : nlohmann::json::object();
 
@@ -192,6 +238,8 @@ namespace Lumina::MCP
                 return JsonRpc::FResponse::Failure(JsonRpc::EErrorCode::InternalError,
                     "The tool's parameters could not be constructed.");
             }
+
+            EncodeRawJsonArguments(Params.GetType(), Given);
 
             if (const Agent::FMarshalResult Read = Agent::ReadStruct(Given, Params.GetType(), Params.Get());
                 !Read.IsValid())

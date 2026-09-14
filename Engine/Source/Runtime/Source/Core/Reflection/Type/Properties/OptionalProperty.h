@@ -30,8 +30,8 @@ namespace Lumina
         void  SetValue(void* InContainer, const void* InValue) const { SetValueFn(InContainer, InValue); }
         void  Reset(void* InContainer) const          { ResetFn(InContainer); }
 
-        void Serialize(FArchive& Ar, void* Value) override;
-        void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
+        RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
+        RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
 
         /** Compares engaged-state then payload via Inner; Copy mirrors engaged state. */
         RUNTIME_API bool Identical(const void* ValueA, const void* ValueB) const override;

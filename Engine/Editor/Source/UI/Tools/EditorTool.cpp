@@ -22,6 +22,7 @@
 #include "Transactions/EntityDestroyCommand.h"
 #include "Transactions/EntityRelationshipCommand.h"
 #include "Transactions/EntityTransformCommand.h"
+#include "Transactions/ObjectSnapshotCommand.h"
 #include "Settings/EditorSettings.h"
 #include "Thumbnails/ThumbnailManager.h"
 #include "Thumbnails/ThumbnailUtils.h"
@@ -2301,6 +2302,41 @@ namespace Lumina
     void FEditorTool::AbortTransaction()
     {
         TransactionManager.AbortTransaction();
+    }
+
+    void FEditorTool::RunObjectTransacted(FName Label, CObject* Object, const TFunction<void()>& Mutate)
+    {
+        if (!Mutate)
+        {
+            return;
+        }
+
+        TransactionManager.BeginTransaction(Label);
+        TransactionManager.Record(MakeUnique<FObjectSnapshotCommand>(Object, Label));
+        Mutate();
+        TransactionManager.CommitTransaction();
+    }
+
+    bool FEditorTool::RunUndo()
+    {
+        if (!AllowsUndoRedo() || !TransactionManager.CanUndo())
+        {
+            return false;
+        }
+
+        Undo();
+        return true;
+    }
+
+    bool FEditorTool::RunRedo()
+    {
+        if (!AllowsUndoRedo() || !TransactionManager.CanRedo())
+        {
+            return false;
+        }
+
+        Redo();
+        return true;
     }
 
     void FEditorTool::Undo()

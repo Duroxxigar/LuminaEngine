@@ -1,6 +1,12 @@
 #include <gtest/gtest.h>
 
 #include "Agent/AgentToolSchema.h"
+#include "Assets/AssetTypes/Animation/Montage/AnimationMontage.h"
+#include "Core/Engine/GameInstance.h"
+#include "Core/Object/PropertyArena.h"
+#include "Core/Reflection/Type/Properties/ClassProperty.h"
+#include "Core/Reflection/Type/Properties/SoftObjectProperty.h"
+#include "World/World.h"
 #include "World/Entity/Components/AudioSourceComponent.h"
 #include "World/Entity/Components/LifetimeComponent.h"
 #include "World/Entity/Components/MeshComponent.h"
@@ -121,10 +127,10 @@ TEST(AgentToolSchema, AnObjectReferenceBecomesAGuidString)
 // A refusal has to name the offending property, or nobody can tell which field broke registration.
 TEST(AgentToolSchema, ARefusalNamesTheOffendingProperty)
 {
-    const FSchemaResult Result = SchemaOfProperty(SRigidBodyComponent::StaticStruct(), "OnContactBegin");
+    const FSchemaResult Result = SchemaOfProperty(SRigidBodyComponent::StaticStruct(), "CollisionProfile");
 
     ASSERT_FALSE(Result.IsValid());
-    EXPECT_NE(Result.Error.find("OnContactBegin"), FString::npos);
+    EXPECT_NE(Result.Error.find("CollisionProfile"), FString::npos);
 }
 
 // One bad field has to sink the whole struct, or a tool would advertise a shape missing a parameter.
@@ -152,4 +158,62 @@ TEST(AgentToolSchema, TheSameStructGeneratesTheSameSchemaTwice)
     ASSERT_TRUE(First.IsValid());
     ASSERT_TRUE(Second.IsValid());
     EXPECT_EQ(First.Schema, Second.Schema);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Container and reference kinds, described so a model knows the shape before it calls.
+// ---------------------------------------------------------------------------------------------------------------
+
+namespace
+{
+    CClass* SchemaWorldClass() { return CWorld::StaticClass(); }
+    const FSoftObjectPropertyParams GSchemaStartupMap = { { "GameStartupMap", EPropertyFlags::None, EPropertyTypeFlags::SoftObject, nullptr, nullptr, 0 }, &SchemaWorldClass };
+
+    CClass* SchemaGameInstanceClass() { return CGameInstance::StaticClass(); }
+    const FClassPropertyParams GSchemaGameInstance = { { "GameInstanceClass", EPropertyFlags::None, EPropertyTypeFlags::Class, nullptr, nullptr, 0 }, &SchemaGameInstanceClass };
+}
+
+TEST(AgentToolSchema, ASoftObjectIsAStringNamingItsClass)
+{
+    FPropertyArena Arena;
+    TVector<FProperty*> Collected;
+    const FPropertyOwner Owner{ &Arena, nullptr, nullptr, &Collected };
+
+    const FSchemaResult Result = GeneratePropertySchema(Owner.Build<FSoftObjectProperty>(&GSchemaStartupMap));
+
+    ASSERT_TRUE(Result.IsValid()) << Result.Error.c_str();
+    EXPECT_EQ(Result.Schema["type"], "string");
+    EXPECT_NE(Result.Schema["description"].get<std::string>().find("CWorld"), std::string::npos);
+}
+
+TEST(AgentToolSchema, AClassIsAStringNamingItsBase)
+{
+    FPropertyArena Arena;
+    TVector<FProperty*> Collected;
+    const FPropertyOwner Owner{ &Arena, nullptr, nullptr, &Collected };
+
+    const FSchemaResult Result = GeneratePropertySchema(Owner.Build<FClassProperty>(&GSchemaGameInstance));
+
+    ASSERT_TRUE(Result.IsValid()) << Result.Error.c_str();
+    EXPECT_EQ(Result.Schema["type"], "string");
+    EXPECT_NE(Result.Schema["description"].get<std::string>().find("CGameInstance"), std::string::npos);
+}
+
+TEST(AgentToolSchema, AnInstancedStructDescribesTypeAndData)
+{
+    const FSchemaResult Result = SchemaOfProperty(SAnimMontageNotify::StaticStruct(), "Notify");
+
+    ASSERT_TRUE(Result.IsValid()) << Result.Error.c_str();
+    EXPECT_EQ(Result.Schema["type"], "object");
+    EXPECT_EQ(Result.Schema["properties"]["StructType"]["type"], "string");
+    EXPECT_EQ(Result.Schema["properties"]["Data"]["type"], "object");
+}
+
+// A delegate is not data, so it drops out of the struct instead of making the struct undescribable.
+TEST(AgentToolSchema, ADelegateIsSkippedNotRejected)
+{
+    const FSchemaResult Result = SchemaOfProperty(SRigidBodyComponent::StaticStruct(), "OnWake");
+
+    ASSERT_TRUE(Result.IsValid()) << Result.Error.c_str();
+    EXPECT_TRUE(Result.Schema.is_null());
 }

@@ -7,9 +7,15 @@
 #include "Core/Object/ObjectCore.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
 #include "Core/Reflection/Type/Properties/ArrayProperty.h"
+#include "Core/Reflection/Type/Properties/ClassProperty.h"
 #include "Core/Reflection/Type/Properties/EnumProperty.h"
+#include "Core/Reflection/Type/Properties/InstancedStructProperty.h"
+#include "Core/Reflection/Type/Properties/MapProperty.h"
 #include "Core/Reflection/Type/Properties/ObjectProperty.h"
+#include "Core/Reflection/Type/Properties/OptionalProperty.h"
+#include "Core/Reflection/Type/Properties/SoftObjectProperty.h"
 #include "Core/Reflection/Type/Properties/StructProperty.h"
+#include "Core/Reflection/Type/Properties/SubStructProperty.h"
 
 namespace Lumina::Agent
 {
@@ -109,6 +115,12 @@ namespace Lumina::Agent
                         return;
                     }
 
+                    // A null schema means the field is deliberately invisible, not a failure.
+                    if (Field.is_null())
+                    {
+                        return;
+                    }
+
                     Properties[Detail::ToStandard(FStringView(Property->GetPropertyName().ToString()))] = Move(Field);
                 });
 
@@ -170,9 +182,143 @@ namespace Lumina::Agent
                 break;
 
             case EPropertyTypeFlags::String:
+                // RawJson strings carry any JSON value, which the server re-encodes before the struct is read.
+                if (Property->HasMetadata("RawJson"))
+                {
+                    Out["description"] = "Any JSON value.";
+                    break;
+                }
+                Out["type"] = "string";
+                break;
+
             case EPropertyTypeFlags::Name:
                 Out["type"] = "string";
                 break;
+
+            case EPropertyTypeFlags::SoftObject:
+                {
+                    CClass* Expected = static_cast<FSoftObjectProperty*>(Property)->GetPropertyClass();
+
+                    Out["type"] = "string";
+                    Out["description"] = Detail::ToStandard(FStringView(Lumina::Format(
+                        "Path or GUID of a {} asset, or an empty string for none.",
+                        Expected != nullptr ? Expected->GetName().ToString() : FString("CObject"))));
+                    break;
+                }
+
+            case EPropertyTypeFlags::Class:
+                {
+                    CClass* Base = static_cast<FClassProperty*>(Property)->GetMetaClass();
+
+                    Out["type"] = "string";
+                    Out["description"] = Detail::ToStandard(FStringView(Lumina::Format(
+                        "Name of a class deriving from {}, or an empty string for none.",
+                        Base != nullptr ? Base->GetName().ToString() : FString("CObject"))));
+                    break;
+                }
+
+            case EPropertyTypeFlags::SubStruct:
+                {
+                    CStruct* Base = static_cast<FSubStructProperty*>(Property)->GetMetaStruct();
+
+                    Out["type"] = "string";
+                    Out["description"] = Detail::ToStandard(FStringView(Lumina::Format(
+                        "Name of a struct deriving from {}, or an empty string for none.",
+                        Base != nullptr ? Base->GetName().ToString() : FString("any struct"))));
+                    break;
+                }
+
+            case EPropertyTypeFlags::Optional:
+                {
+                    FProperty* Inner = static_cast<FOptionalProperty*>(Property)->GetInternalProperty();
+                    if (Inner == nullptr)
+                    {
+                        return Reject("its value type is missing");
+                    }
+
+                    nlohmann::json Value;
+                    FString Reason;
+                    if (!BuildProperty(Inner, Path, Depth + 1, Value, Reason))
+                    {
+                        return Propagate(Reason);
+                    }
+
+                    nlohmann::json Record = nlohmann::json::object();
+                    Record["type"] = "object";
+                    Record["properties"] = nlohmann::json::object();
+                    Record["properties"]["Engaged"] = nlohmann::json::object({ { "type", "boolean" } });
+                    Record["properties"]["Value"] = Value;
+
+                    Out["anyOf"] = nlohmann::json::array({ nlohmann::json::object({ { "type", "null" } }), Value, Move(Record) });
+                    Out["description"] = "Optional: null for none, the value itself, or {\"Engaged\": bool, \"Value\": ...}.";
+                    break;
+                }
+
+            case EPropertyTypeFlags::InstancedStruct:
+                {
+                    CStruct* Base = static_cast<FInstancedStructProperty*>(Property)->GetMetaStruct();
+
+                    nlohmann::json StructType = nlohmann::json::object();
+                    StructType["type"] = "string";
+                    StructType["description"] = Detail::ToStandard(FStringView(Lumina::Format(
+                        "Name of a struct deriving from {}, or an empty string for none.",
+                        Base != nullptr ? Base->GetName().ToString() : FString("any struct"))));
+
+                    Out["type"] = "object";
+                    Out["properties"] = nlohmann::json::object();
+                    Out["properties"]["StructType"] = Move(StructType);
+                    Out["properties"]["Data"] = nlohmann::json::object({ { "type", "object" } });
+                    Out["description"] = "Instanced struct: the concrete type by name, and its fields under Data.";
+                    break;
+                }
+
+            case EPropertyTypeFlags::Map:
+                {
+                    FMapProperty* Map = static_cast<FMapProperty*>(Property);
+                    FProperty* KeyProperty = Map->GetKeyProperty();
+                    FProperty* ValueProperty = Map->GetValueProperty();
+                    if (KeyProperty == nullptr || ValueProperty == nullptr)
+                    {
+                        return Reject("its key or value type is missing");
+                    }
+
+                    nlohmann::json Key;
+                    nlohmann::json Value;
+                    FString Reason;
+                    if (!BuildProperty(KeyProperty, Path, Depth + 1, Key, Reason)
+                        || !BuildProperty(ValueProperty, Path, Depth + 1, Value, Reason))
+                    {
+                        return Propagate(Reason);
+                    }
+
+                    nlohmann::json Flat = nlohmann::json::object();
+                    Flat["type"] = "array";
+                    Flat["description"] = "Alternating key, value, key, value, ...";
+
+                    nlohmann::json Forms = nlohmann::json::array({ Move(Flat) });
+
+                    // Only a key JSON can spell as an object key gets the object form.
+                    const bool bObjectKeyed = Key.contains("type")
+                        && (Key["type"] == "string" || Key["type"] == "integer");
+                    if (bObjectKeyed)
+                    {
+                        nlohmann::json Keyed = nlohmann::json::object();
+                        Keyed["type"] = "object";
+                        Keyed["additionalProperties"] = Value;
+                        Forms.push_back(Move(Keyed));
+                    }
+
+                    Out["anyOf"] = Move(Forms);
+                    Out["description"] = bObjectKeyed
+                        ? "Map: an object keyed by the map key, or a flat [key, value, ...] array."
+                        : "Map: a flat [key, value, key, value, ...] array.";
+                    break;
+                }
+
+            case EPropertyTypeFlags::Delegate:
+                // Not data, so it is left out of the schema rather than making the struct undescribable.
+                Out = nlohmann::json();
+                return true;
 
             case EPropertyTypeFlags::Object:
                 {
