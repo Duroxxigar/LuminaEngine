@@ -60,7 +60,7 @@ namespace Lumina
 
         /** Content hash of the base string, identical in every run. For a persisted or displayed derivation
          *  (a per-name colour, an ImGui id) that must not move between sessions. */
-        RUNTIME_API uint64 GetStableHash() const;
+        uint64 GetStableHash() const;
 
         /** Whether this name carries a numeric suffix (e.g. "Entity_3"). */
         bool HasNumber() const { return Number != kNoNumber; }
