@@ -27,8 +27,8 @@ namespace Lumina::DotNet
     // v5: native->managed exports resolved by name (ResolveManagedExport) instead of a mirrored struct/hash.
     // v6: managed system-descriptor sink carries declared read/write component-ops tokens (parallel C# systems).
     // v7: delegate properties replace hardcoded collision/perception dispatch; adds OnNativeDelegateDestroyed.
-    // v8: managed RenderScene bridge (C# world renderers via RenderSceneFactory).
-    inline constexpr int32 GAbiVersion = 11;
+    // v12: the managed RenderScene bridge is gone; a C# world renderer is no longer a thing.
+    inline constexpr int32 GAbiVersion = 12;
 
     // Boots the embedded runtime and runs the managed handshake.
     RUNTIME_API void Initialize();
@@ -249,30 +249,6 @@ namespace Lumina::DotNet
     RUNTIME_API void DestroyManagedSystem(void* Handle);
 
     RUNTIME_API void TickManagedSystem(void* Handle, const FSystemContext* Context);
-
-    //~ Managed RenderScene bridge: a C# subclass of LuminaSharp's RenderScene drives a world's rendering
-    //  through the FManagedRenderScene proxy (see ManagedRenderScene.h). Create runs the managed ctor +
-    //  OnInit; Destroy runs OnShutdown and frees the GCHandle. Extract/GetExtent run on the game thread,
-    //  Render/GetDisplayTexture during the render phase (the CLR attaches threads on demand).
-
-    RUNTIME_API void GatherManagedRenderSceneTypes(TVector<FString>& Out);
-
-    RUNTIME_API void* CreateManagedRenderScene(FStringView TypeName, uint64 World);
-
-    RUNTIME_API void DestroyManagedRenderScene(void* Handle);
-
-    // View is a const FManagedSceneView* (blittable camera snapshot, see ManagedRenderScene.h).
-    RUNTIME_API void ManagedRenderSceneExtract(void* Handle, const void* View);
-
-    RUNTIME_API void ManagedRenderSceneRender(void* Handle, int32 FrameIndex);
-
-    RUNTIME_API void ManagedRenderSceneResize(void* Handle, uint32 Width, uint32 Height);
-
-    RUNTIME_API uint64 ManagedRenderSceneGetDisplayTexture(void* Handle);
-
-    RUNTIME_API uint32 ManagedRenderSceneGetDisplayResourceID(void* Handle);
-
-    RUNTIME_API void ManagedRenderSceneGetExtent(void* Handle, uint32* OutWidth, uint32* OutHeight);
 
     // Feeds a script's InputAction / InputAxis bindings this frame's evaluated action states. No-op for a
     // C++ script, which has no managed instance. States points into the owning FInputContext.

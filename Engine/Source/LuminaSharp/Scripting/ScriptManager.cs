@@ -45,8 +45,6 @@ internal sealed class ScriptManager
     /// <summary>The EntitySystem runtime for the current generation, or null when no scripts are loaded.</summary>
     public EntitySystemRuntime? EntitySystems { get; private set; }
 
-    public RenderSceneRuntime? RenderScenes { get; private set; }
-
     /// <summary>Hosts C# subclasses of REFLECT(Scriptable) native CObjects for the current generation.</summary>
     public ScriptableRuntime? Scriptables { get; private set; }
 
@@ -183,7 +181,6 @@ internal sealed class ScriptManager
         var Library = new TypeLibrary(AllTypes);
         EntityScripts = new EntityScriptRuntime(Library);
         EntitySystems = new EntitySystemRuntime(Library);
-        RenderScenes = new RenderSceneRuntime(Library);
         Scriptables = new ScriptableRuntime(Library, EntityScripts);
         DataStructs = new ScriptDataStructRuntime(Library);
 
@@ -445,8 +442,6 @@ internal sealed class ScriptManager
         EntityScripts = null;
         EntitySystems?.FreeAll();
         EntitySystems = null;
-        RenderScenes?.FreeAll();  // native destroys these pre-reload; this is the process-shutdown backstop
-        RenderScenes = null;
         // C# Scriptable subclass instances live in their native object's managed-instance slot, and those
         // handles are STRONG -- they would pin this ALC. Draining the whole table here keeps that release at
         // exactly the point in the teardown contract it has always been at, just on the side that owns it now.
