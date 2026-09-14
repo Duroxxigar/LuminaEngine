@@ -30,6 +30,7 @@ namespace Lumina
         if (const FComponentOps* Ops = FindComponentOps(Component.ToString().View()))
         {
             Access.Writes.push_back((uint32)Ops->TypeId);
+            Access.PoolAssurers.push_back(Ops->Assure);
         }
         else
         {
@@ -42,6 +43,7 @@ namespace Lumina
         if (const FComponentOps* Ops = FindComponentOps(Component.ToString().View()))
         {
             Access.Reads.push_back((uint32)Ops->TypeId);
+            Access.PoolAssurers.push_back(Ops->Assure);
         }
         else
         {

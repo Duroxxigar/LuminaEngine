@@ -93,6 +93,9 @@ TEST(EntitySystem, ConfigureDeclaresStagesAndAccess)
     EXPECT_TRUE(Access.DeclaresRead((uint32)ECS::GetComponentTypeID<SStaticMeshComponent>()));
     EXPECT_FALSE(Access.DeclaresWrite((uint32)ECS::GetComponentTypeID<SStaticMeshComponent>()));
 
+    // Without one per declared type the lazy assure rehashes the shared pool map inside a parallel batch.
+    EXPECT_EQ(Access.PoolAssurers.size(), 2u) << "a name keyed declaration must carry a pool assurer too";
+
     EntitySystems::DestroyAll(Systems);
 }
 
