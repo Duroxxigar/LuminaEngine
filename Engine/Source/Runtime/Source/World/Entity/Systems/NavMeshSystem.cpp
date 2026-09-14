@@ -12,6 +12,7 @@
 #include "Renderer/Vertex.h"
 #include "TaskSystem/TaskSystem.h"
 #include "World/Entity/Components/CharacterComponent.h"
+#include "World/Entity/Components/DynamicMeshComponent.h"
 #include "World/Entity/Components/NavMeshComponent.h"
 #include "World/Entity/Components/PhysicsComponent.h"
 #include "World/Entity/Components/StaticMeshComponent.h"
@@ -28,7 +29,8 @@ namespace Lumina
         .Write<SNavMeshComponent>()
         .Read<SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent,
               SCapsuleColliderComponent, SCylinderColliderComponent, SCharacterPhysicsComponent,
-              STerrainColliderComponent, STerrainComponent, STransformComponent, SStaticMeshComponent>();
+              STerrainColliderComponent, STerrainComponent, STransformComponent, SStaticMeshComponent,
+              SDynamicMeshColliderComponent, SDynamicMeshComponent>();
 
     // NOLINTBEGIN(bugprone-throwing-static-initialization)
 
@@ -207,7 +209,7 @@ namespace Lumina
         }
 
         // Tag-bit packed into cache key so one entity may track one collider of each type.
-        enum class ENavColliderType : uint8 { Box = 0, Sphere = 1, Mesh = 2, CharacterCapsule = 3, Capsule = 4, Cylinder = 5, Terrain = 6, TriangleSoup = 7 };
+        enum class ENavColliderType : uint8 { Box = 0, Sphere = 1, Mesh = 2, CharacterCapsule = 3, Capsule = 4, Cylinder = 5, Terrain = 6, TriangleSoup = 7, DynamicMesh = 8 };
 
         FORCEINLINE uint64 PackSourceKey(ECS::FEntity E, ENavColliderType T)
         {
@@ -388,10 +390,8 @@ namespace Lumina
             return Fallback ? Fallback->StaticMesh.Get() : nullptr;
         }
 
-        void EmitMeshGeometry(const FMatrix4& W, CStaticMesh* Mesh, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc)
+        void EmitMeshGeometry(const FMatrix4& W, const FMeshResource& Res, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc)
         {
-            if (!Mesh) return;
-            const FMeshResource& Res = Mesh->GetMeshResource();
             const FMeshletData&  Md  = Res.MeshletData;
             if (Md.IsEmpty() || Res.bSkinnedMesh) return;
 
@@ -481,6 +481,7 @@ namespace Lumina
             FMatrix4                        World = FMatrix4(1.0f);
             FVector3                        Shape = FVector3(0.0f);   // Box half-extent, or Radius and HalfHeight
             CStaticMesh*                    Mesh  = nullptr;
+            TSharedPtr<FDynamicMeshRenderData> DynamicMesh;          // held so a re-commit on the game thread cannot free it under the bake
             TSharedPtr<TVector<FVector3>>   TriangleSoup;             // world-space tri soup (groups of 3); Terrain and TriangleSoup types
         };
 
@@ -498,7 +499,8 @@ namespace Lumina
             {
                 case ENavColliderType::Box:    EmitBoxGeometry(P.World, P.Shape, BakeMin, BakeMax, Acc); break;
                 case ENavColliderType::Sphere: EmitSphereGeometry(P.World, P.Shape.x, BakeMin, BakeMax, Acc); break;
-                case ENavColliderType::Mesh:   EmitMeshGeometry(P.World, P.Mesh, BakeMin, BakeMax, Acc); break;
+                case ENavColliderType::Mesh:   if (P.Mesh) EmitMeshGeometry(P.World, P.Mesh->GetMeshResource(), BakeMin, BakeMax, Acc); break;
+                case ENavColliderType::DynamicMesh: if (P.DynamicMesh) EmitMeshGeometry(P.World, P.DynamicMesh->Resource, BakeMin, BakeMax, Acc); break;
                 case ENavColliderType::Capsule:
                 case ENavColliderType::CharacterCapsule: EmitCapsuleGeometry(P.World, P.Shape.y, P.Shape.x, BakeMin, BakeMax, Acc); break;
                 case ENavColliderType::Cylinder: EmitCylinderGeometry(P.World, P.Shape.y, P.Shape.x, BakeMin, BakeMax, Acc); break;
@@ -713,6 +715,29 @@ namespace Lumina
                     {Local.Min.x, Local.Max.y, Local.Min.z}, {Local.Max.x, Local.Max.y, Local.Min.z},
                     {Local.Min.x, Local.Min.y, Local.Max.z}, {Local.Max.x, Local.Min.y, Local.Max.z},
                     {Local.Min.x, Local.Max.y, Local.Max.z}, {Local.Max.x, Local.Max.y, Local.Max.z},
+                };
+                CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
+                Out.push_back(std::move(Entry));
+            }
+
+            // Keyed on the render-data version so a re-commit with unchanged bounds still dirties the tile.
+            auto DynamicMeshView = Context.CreateView<SDynamicMeshColliderComponent, SDynamicMeshComponent, STransformComponent>();
+            for (ECS::FEntity E : DynamicMeshView)
+            {
+                if (!DynamicMeshView.Get<SDynamicMeshColliderComponent>(E).bAffectsNavigation) continue;
+                const SDynamicMeshComponent& DM = DynamicMeshView.Get<SDynamicMeshComponent>(E);
+                TSharedPtr<FDynamicMeshRenderData> MeshData = DM.LoadRenderData();
+                if (!MeshData || MeshData->Resource.MeshletData.IsEmpty()) continue;
+                FNavSourceEntry Entry;
+                Entry.Key = PackSourceKey(E, ENavColliderType::DynamicMesh, DM.LoadRenderDataVersion());
+                Entry.Prim.Type = ENavColliderType::DynamicMesh;
+                Entry.Prim.World = DynamicMeshView.Get<STransformComponent>(E).GetWorldMatrix();
+                Entry.Prim.DynamicMesh = MeshData;
+                const FVector3& Mn = MeshData->LocalMin;
+                const FVector3& Mx = MeshData->LocalMax;
+                const FVector3 Corners[8] = {
+                    {Mn.x, Mn.y, Mn.z}, {Mx.x, Mn.y, Mn.z}, {Mn.x, Mx.y, Mn.z}, {Mx.x, Mx.y, Mn.z},
+                    {Mn.x, Mn.y, Mx.z}, {Mx.x, Mn.y, Mx.z}, {Mn.x, Mx.y, Mx.z}, {Mx.x, Mx.y, Mx.z},
                 };
                 CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
                 Out.push_back(std::move(Entry));
