@@ -5,16 +5,14 @@
 
 namespace Lumina
 {
-    REFLECT(System)
-    struct SSpriteAnimationSystem
+    REFLECT()
+    class SSpriteAnimationSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics))
-
     public:
 
-        static FSystemAccess Access;
+        void Configure() override;
 
-        static void Update(const FSystemContext& SystemContext) noexcept;
+        void OnUpdate() override;
     };
 }

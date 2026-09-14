@@ -10,7 +10,7 @@ namespace LuminaSharp;
 public static unsafe partial class Host
 {
     // Must equal Lumina::DotNet::GAbiVersion. Bump on ABI breaks.
-    private const int AbiVersion = 11;
+    private const int AbiVersion = 13;
 
     // Logical name for the engine module hosting this assembly (Runtime); resolved to a native handle via ModuleHandle.
     public const string NativeLibrary = "LuminaNative";
@@ -225,7 +225,7 @@ public static unsafe partial class Host
 
             Diag.Generation        = Scripts?.Generation ?? 0;
             Diag.EntityScriptCount = Scripts?.EntityScripts?.TypeNames.Count ?? 0;
-            Diag.EntitySystemCount = Scripts?.EntitySystems?.TypeCount ?? 0;
+            Diag.EntitySystemCount = Scripts?.EntitySystemCount ?? 0;
             Diag.LoadedTypeCount   = Scripts?.LoadedTypeCount ?? 0;
             Diag.ScriptsOnline     = Scripts?.EntityScripts != null ? 1 : 0;
 
@@ -485,83 +485,6 @@ public static unsafe partial class Host
             {
                 Add(Context, Bytes, Blob.Length);
             }
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    // EntitySystem bridge: one instance per world; the GCHandle is the FStageSlot Self.
-
-    /// Reports every discovered EntitySystem to a native sink as (full name, stage, priority, write-ops, read-ops). Once per type.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void EnumerateEntitySystems(IntPtr Sink, IntPtr Context)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Enumerate(Sink, Context);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Instantiates an EntitySystem for a world; returns a strong GCHandle (as IntPtr) the native FStageSlot stores as Self, or IntPtr.Zero on failure.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static IntPtr CreateEntitySystem(byte* TypeName, int TypeNameLength, ulong World)
-    {
-        try
-        {
-            return Scripts?.EntitySystems?.Create(Interop.GetString(TypeName, TypeNameLength), World) ?? IntPtr.Zero;
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-            return IntPtr.Zero;
-        }
-    }
-
-    /// Starts one EntitySystem instance once, forwarding to OnStartup with the native FSystemContext*.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void StartupEntitySystem(IntPtr Handle, IntPtr SystemContext)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Startup(Handle, SystemContext);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Ticks one EntitySystem instance: forwards to OnUpdate with the native FSystemContext*.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void TickEntitySystem(IntPtr Handle, IntPtr SystemContext)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Tick(Handle, SystemContext);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void DestroyEntitySystem(IntPtr Handle)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Destroy(Handle);
         }
         catch (Exception Exception)
         {

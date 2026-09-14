@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "ProjectileSystem.h"
 #include "World/ECS/Registry.h"
 
@@ -11,8 +11,15 @@
 
 namespace Lumina
 {
-    void SProjectileSystem::Update(const FSystemContext& Context) noexcept
+    void SProjectileSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics);
+    }
+
+    void SProjectileSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         const float Dt = (float)Context.GetDeltaTime();

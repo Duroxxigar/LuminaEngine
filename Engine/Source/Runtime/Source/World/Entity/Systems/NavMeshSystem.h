@@ -10,22 +10,23 @@ namespace Lumina
     struct SNavMeshComponent;
 
     /** Owns SNavMeshComponent lifecycle: rehydrate, drain bakes, rebuild on Tiles change. */
-    REFLECT(System)
-    struct RUNTIME_API SNavMeshSystem
+    REFLECT()
+    class RUNTIME_API SNavMeshSystem : public CEntitySystem
     {
         GENERATED_BODY()
+    public:
+
         // Paused stage required so editor-mode ticks for bake button, debug draw, dirty detection.
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::FrameStart), RequiresUpdate(EUpdateStage::Paused))
+        void Configure() override;
 
     public:
 
         // Update only reads colliders/transforms and writes SNavMeshComponent (no structural changes),
         // so it overlaps animation/camera in the editor (Paused) stage. Defined in the .cpp.
-        static FSystemAccess Access;
 
-        static void Startup (const FSystemContext& Context) noexcept;
-        static void Update  (const FSystemContext& Context) noexcept;
-        static void Teardown(const FSystemContext& Context) noexcept;
+        void OnStartup() override;
+        void OnUpdate() override;
+        void OnTeardown() override;
 
         /** Kick async bake; no-op if one is already in flight. */
         static void RequestBake(const FSystemContext& Context, SNavMeshComponent& Component);

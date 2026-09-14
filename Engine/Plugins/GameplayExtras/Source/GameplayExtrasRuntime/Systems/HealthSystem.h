@@ -6,14 +6,14 @@
 namespace Lumina
 {
     // Drives SHealthComponent::RegenPerSecond and the post-damage cooldown that gates it.
-    REFLECT(System)
-    struct SHealthSystem
+    REFLECT()
+    class SHealthSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Low))
+    public:
 
-        static FSystemAccess Access;
+        void Configure() override;
 
-        static void Update(const FSystemContext& Context) noexcept;
+        void OnUpdate() override;
     };
 }

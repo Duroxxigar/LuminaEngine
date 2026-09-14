@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "CameraSystem.h"
 #include "Core/Math/Easing.h"
 #include "World/ECS/Registry.h"
@@ -11,9 +11,13 @@
 
 namespace Lumina
 {
-    FSystemAccess SCameraSystem::Access = FSystemAccess{}
-        .Write<FResolvedSceneView, FCameraGlobalState, SCameraComponent>()
-        .Read<STransformComponent, SPostProcessComponent>();
+    void SCameraSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::FrameEnd, EUpdatePriority::Low);
+        RequireUpdate(EUpdateStage::Paused, EUpdatePriority::Low);
+        Writes<FResolvedSceneView, FCameraGlobalState, SCameraComponent>();
+        Reads<STransformComponent, SPostProcessComponent>();
+    }
 
     float EvaluateCameraBlend(ECameraBlendFunction Function, float Alpha)
     {
@@ -160,17 +164,23 @@ namespace Lumina
         }
     }
 
-    void SCameraSystem::Startup(const FSystemContext& Context) noexcept
+    void SCameraSystem::OnStartup()
     {
+        const FSystemContext& Context = GetContext();
+
         Context.GetRegistry().GetSignals<SCameraComponent>().OnConstruct.Connect<&Detail::NewCameraConstructed>();
     }
 
-    void SCameraSystem::Teardown(const FSystemContext& Context) noexcept
+    void SCameraSystem::OnTeardown()
     {
+        const FSystemContext& Context = GetContext();
+
     }
 
-    void SCameraSystem::Update(const FSystemContext& Context) noexcept
+    void SCameraSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = Context.GetRegistry();

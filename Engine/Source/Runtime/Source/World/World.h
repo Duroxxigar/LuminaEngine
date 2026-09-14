@@ -103,38 +103,11 @@ namespace Lumina
 
     public:
         
-        // A system as scheduled in one stage.
+        // One system as scheduled in one stage. Systems owns the instance; this only orders it.
         struct FStageSlot
         {
-            FSystemFn      Update = nullptr;
-            void*          Self = nullptr;
-            FSystemAccess  Access;
+            CEntitySystem* System = nullptr;
             uint8          StagePriority = 255;
-            FName          Name;            // for the Gameplay Insights schedule view (GetSystemSchedule)
-        };
-
-        // A unique active system in this world. Owns the once-per-system Startup/Teardown lifecycle; the
-        // per-stage FStageSlots reference its Update. One entry per system regardless of how many stages
-        // it ticks in.
-        struct FActiveSystem
-        {
-            FName      Name;
-            uint64     Hash = 0;
-            FSystemFn  Startup = nullptr;
-            FSystemFn  Teardown = nullptr;
-            void*      Self = nullptr;
-        };
-
-        // One C#-authored system created for this world. Instance is a strong GCHandle (the FStageSlot
-        // Self); Generation is the C# script generation it was created under, so a hot reload can drop
-        // stale handles without touching a freed managed instance.
-        struct FManagedSystem
-        {
-            void*        Instance = nullptr;
-            EUpdateStage Stage = EUpdateStage::PrePhysics;
-            int32        Priority = 128;
-            int32        Generation = -1;
-            bool         bStarted = false;
         };
 
         CWorld();
@@ -459,8 +432,6 @@ namespace Lumina
         // Per-world UI (Rml context + documents); created in InitializeWorld, freed in TeardownWorld.
         FWorldUIContext* GetUIContext() const { return UIContext.get(); }
 
-        const TVector<FStageSlot>& GetSystemsForUpdateStage(EUpdateStage Stage);
-
         // One reflected engine system, as surfaced to the World Editor's Systems panel.
         struct FSystemInfo
         {
@@ -494,9 +465,6 @@ namespace Lumina
 
         // Convenience that forwards to AddEntityScript.
         void SetEntityScript(ECS::FEntity Entity, FStringView ScriptClass);
-
-        // Starts managed systems that have not started yet, and only once the world's own startup pass has run.
-        void StartupManagedSystems();
 
         void RegisterSystems();
 
@@ -543,9 +511,6 @@ namespace Lumina
 
         const FSystemContext& GetSystemContext() const { return SystemContext; }
         
-        
-        template<typename TFunc>
-        void ForEachUniqueSystem(TFunc&& Func);
         
         template<typename T, typename... TArgs>
         decltype(auto) EmplaceComponent(ECS::FEntity Entity, TArgs&&... Args);
@@ -722,9 +687,15 @@ namespace Lumina
 
         NODISCARD const TVector<TObjectPtr<CWorldSubsystem>>& GetSubsystems() const { return Subsystems; }
 
+        NODISCARD const TVector<TObjectPtr<CEntitySystem>>& GetSystems() const { return Systems; }
+
         // Runtime state rather than map data, but reflected so the hot reload reinstancer reaches it.
         PROPERTY(NoSerialize)
         TVector<TObjectPtr<CWorldSubsystem>>               Subsystems;
+
+        // One instance of every enabled system class; the per-stage FStageSlots only point into it.
+        PROPERTY(NoSerialize)
+        TVector<TObjectPtr<CEntitySystem>>                 Systems;
 
     private:
 
@@ -737,9 +708,11 @@ namespace Lumina
 
         void TickSystems(FSystemContext& Context);
 
-        // Tears down + frees this world's C# system instances (respecting the generation guard: a stale
-        // instance from a prior script generation is dropped, not destroyed, since managed already freed it).
-        void DestroyManagedSystems();
+        // Rebuilds the per-stage slot lists and their parallel batches from the current Systems list.
+        void RebuildSystemSchedule();
+
+        // Runs OnStartup on any system that has not had it yet, once the world's own startup pass has run.
+        void StartupPendingSystems();
 
         // Applies a deferred enable/disable request (set via SetSystemEnabled): tears down newly-disabled
         // systems, rebuilds the stage lists honoring DisabledSystems, then starts up newly-enabled ones.
@@ -766,19 +739,11 @@ namespace Lumina
         // the stage lists, so it is built once by RegisterSystems rather than per tick.
         TVector<TVector<uint16>>                           SystemBatches[(int32)EUpdateStage::Max];
 
-        // Unique active systems in this world; owns Startup/Teardown lifecycle (one entry per system).
-        TVector<FActiveSystem>                             ActiveSystems;
-
-        // C#-authored systems created for this world (one managed instance each), scheduled into the
-        // stage lists via the shared ManagedSystemUpdate shim. Destroyed on teardown / rebuild.
-        TVector<FManagedSystem>                            ManagedSystems;
-
-        // Set once the world has run its startup pass; gates StartupManagedSystems.
+        // Set once the world has run its startup pass; gates StartupPendingSystems.
         bool                                               bSystemsStarted = false;
 
-        // C# script generation the ManagedSystems were created under; a change (hot reload) triggers a
-        // RegisterSystems rebuild so stale GCHandle slots are never ticked. -1 = none created yet.
-        int32                                              ManagedSystemGeneration = -1;
+        // C# script generation the scripted systems were built against, so a hot reload can rebuild them.
+        int32                                              ScriptGeneration = -1;
 
         // Reflected systems disabled for this world, by name. DisabledSystems is the applied state used by
         // RegisterSystems; PendingDisabledSystems is the editor-requested next state. They diverge only
@@ -831,16 +796,6 @@ namespace Lumina
     
     
     
-
-    template <typename TFunc>
-    void CWorld::ForEachUniqueSystem(TFunc&& Func)
-    {
-        // ActiveSystems already holds exactly one entry per system.
-        for (FActiveSystem& System : ActiveSystems)
-        {
-            Func(System);
-        }
-    }
 
     template <typename T, typename ... TArgs>
     decltype(auto) CWorld::EmplaceComponent(ECS::FEntity Entity, TArgs&&... Args)

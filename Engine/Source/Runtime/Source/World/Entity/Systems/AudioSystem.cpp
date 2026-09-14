@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "AudioSystem.h"
 #include "World/ECS/Registry.h"
 #include "Assets/AssetTypes/Audio/AudioStream.h"
@@ -15,10 +15,12 @@
 namespace Lumina
 {
 	// PhysicsQuery is needed because occlusion casts rays against the live scene.
-	FSystemAccess SAudioSystem::Access = FSystemAccess{}
-		.Write<SAudioSourceComponent, SProceduralAudioComponent, SAudioListenerComponent>()
-		.Read<STransformComponent, SystemResource::PhysicsQuery, SystemResource::Significance,
-		      SystemResource::Kinematics>();
+    void SAudioSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::PostPhysics);
+        Writes<SAudioSourceComponent, SProceduralAudioComponent, SAudioListenerComponent>();
+        Reads<STransformComponent, SystemResource::PhysicsQuery, SystemResource::Significance, SystemResource::Kinematics>();
+    }
 
 	namespace
 	{
@@ -32,12 +34,16 @@ namespace Lumina
 		}
 	}
 
-	void SAudioSystem::Startup(const FSystemContext& Context) noexcept
+	void SAudioSystem::OnStartup()
 	{
+	    const FSystemContext& Context = GetContext();
+
 	}
 
-	void SAudioSystem::Teardown(const FSystemContext& Context) noexcept
+	void SAudioSystem::OnTeardown()
 	{
+	    const FSystemContext& Context = GetContext();
+
 		// No audio device in a headless dedicated server (Audio::Initialize is skipped).
 		if (!Audio::HasDevice())
 		{
@@ -68,8 +74,10 @@ namespace Lumina
 		});
 	}
 
-	void SAudioSystem::Update(const FSystemContext& SystemContext) noexcept
+	void SAudioSystem::OnUpdate()
 	{
+	    const FSystemContext& SystemContext = GetContext();
+
 		LUMINA_PROFILE_SCOPE();
 
 		// No audio device in a headless dedicated server (Audio::Initialize is skipped).

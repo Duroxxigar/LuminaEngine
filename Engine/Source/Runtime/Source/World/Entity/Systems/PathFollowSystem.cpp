@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "PathFollowSystem.h"
 #include "World/ECS/Registry.h"
 
@@ -16,9 +16,12 @@
 namespace Lumina
 {
     // STransformComponent is READ-only here, so this batches in parallel with other readers.
-    FSystemAccess SPathFollowSystem::Access = FSystemAccess{}
-        .Write<SPathFollowComponent, SCharacterControllerComponent>()
-        .Read<STransformComponent, FRelationshipComponent, SNavMeshComponent, SystemResource::Significance>();
+    void SPathFollowSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::PrePhysics);
+        Writes<SPathFollowComponent, SCharacterControllerComponent>();
+        Reads<STransformComponent, FRelationshipComponent, SNavMeshComponent, SystemResource::Significance>();
+    }
 
     namespace
     {
@@ -54,8 +57,10 @@ namespace Lumina
         }
     }
 
-    void SPathFollowSystem::Update(const FSystemContext& Context) noexcept
+    void SPathFollowSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
         
         constexpr FVector3 Lift(0.0f, 0.1f, 0.0f);

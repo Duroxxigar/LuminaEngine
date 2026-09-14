@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -40,8 +40,7 @@ internal sealed class TypeLibrary
             {
                 EntityScripts[FullName] = Describe(Type);
             }
-            else if (typeof(EntitySystem).IsAssignableFrom(Type)
-                     && Type.GetCustomAttribute<EntitySystemAttribute>() != null)
+            else if (typeof(EntitySystem).IsAssignableFrom(Type))
             {
                 EntitySystems[FullName] = Type;
             }
@@ -158,14 +157,8 @@ internal sealed class TypeLibrary
         return false;
     }
 
-    /// <summary>Every discovered EntitySystem type (carries [EntitySystem]); for the native scheduler.</summary>
+    // Every discovered EntitySystem type, for the scripting diagnostics report.
     public IReadOnlyCollection<Type> EntitySystemTypes => EntitySystems.Values;
-
-    /// <summary>An EntitySystem type by full name, or null if unknown.</summary>
-    public Type? GetEntitySystem(string FullName)
-    {
-        return EntitySystems.TryGetValue(FullName, out Type? Type) ? Type : null;
-    }
 
     /// <summary>The description for an EntityScript by full name, falling back through class aliases.</summary>
     public TypeDescription? GetEntityScript(string FullName)

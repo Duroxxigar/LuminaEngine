@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "Scripting/ManagedTypeRegistry.h"
 
@@ -27,8 +27,8 @@ namespace Lumina::DotNet
     // v5: native->managed exports resolved by name (ResolveManagedExport) instead of a mirrored struct/hash.
     // v6: managed system-descriptor sink carries declared read/write component-ops tokens (parallel C# systems).
     // v7: delegate properties replace hardcoded collision/perception dispatch; adds OnNativeDelegateDestroyed.
-    // v12: the managed RenderScene bridge is gone; a C# world renderer is no longer a thing.
-    inline constexpr int32 GAbiVersion = 12;
+    // v13 dropped the C# entity system bridge, since a C# system is now a CEntitySystem subclass.
+    inline constexpr int32 GAbiVersion = 13;
 
     // Boots the embedded runtime and runs the managed handshake.
     RUNTIME_API void Initialize();
@@ -229,26 +229,6 @@ namespace Lumina::DotNet
     /** Runs a script type's declared [Property] initializers into its class default object. Once per type at
      *  mint, after the CDO exists; every instance is then copied from it. */
     RUNTIME_API void ApplyScriptableDefaults(FStringView TypeName, void* DefaultObject);
-
-    struct FManagedSystemDesc
-    {
-        FString         TypeName;
-        EUpdateStage    Stage = EUpdateStage::PrePhysics;
-        int32           Priority = 128;
-        TVector<uint32> Writes;   // Component type ids written (empty => exclusive system)
-        TVector<uint32> Reads;    // Component type ids read
-    };
-
-    RUNTIME_API void GatherManagedSystemDescs(TVector<FManagedSystemDesc>& Out);
-
-
-    RUNTIME_API void* CreateManagedSystem(FStringView TypeName, uint64 World);
-
-    RUNTIME_API void StartupManagedSystem(void* Handle, const FSystemContext* Context);
-
-    RUNTIME_API void DestroyManagedSystem(void* Handle);
-
-    RUNTIME_API void TickManagedSystem(void* Handle, const FSystemContext* Context);
 
     // Feeds a script's InputAction / InputAxis bindings this frame's evaluated action states. No-op for a
     // C++ script, which has no managed instance. States points into the owning FInputContext.

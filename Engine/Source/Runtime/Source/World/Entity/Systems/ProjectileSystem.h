@@ -7,12 +7,14 @@ namespace Lumina
 {
     // Sweeps every SProjectileComponent forward each frame, reports the first hit, and despawns on hit or
     // lifetime expiry. Runs in PrePhysics so movement lands before the physics step and rendering.
-    REFLECT(System)
-    struct RUNTIME_API SProjectileSystem
+    REFLECT()
+    class RUNTIME_API SProjectileSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics))
+    public:
 
-        static void Update(const FSystemContext& Context) noexcept;
+        void Configure() override;
+
+        void OnUpdate() override;
     };
 }

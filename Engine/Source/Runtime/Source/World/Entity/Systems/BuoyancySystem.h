@@ -6,15 +6,16 @@
 
 namespace Lumina
 {
-    REFLECT(System)
-    struct RUNTIME_API SBuoyancySystem
+    REFLECT()
+    class RUNTIME_API SBuoyancySystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics))
-        
-        static FSystemAccess Access;
+    public:
 
-        static void Startup(const FSystemContext& Context) noexcept;
-        static void Update(const FSystemContext& Context) noexcept;
+        void Configure() override;
+        
+
+        void OnStartup() override;
+        void OnUpdate() override;
     };
 }

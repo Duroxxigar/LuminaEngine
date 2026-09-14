@@ -16,9 +16,13 @@ namespace Lumina
     static TConsoleVar<bool> CVarKinematicsEnabled("Kinematics.Enabled", true,
         "Resolve a shared per-entity velocity each frame. Off makes every lookup report zero.");
 
-    FSystemAccess SKinematicsSystem::Access = FSystemAccess{}
-        .Write<SVelocityComponent, SystemResource::Kinematics>()
-        .Read<STransformComponent, SCharacterMovementComponent, SRigidBodyComponent, SystemResource::PhysicsQuery>();
+    void SKinematicsSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Highest);
+        RequireUpdate(EUpdateStage::Paused, EUpdatePriority::Highest);
+        Writes<SVelocityComponent, SystemResource::Kinematics>();
+        Reads<STransformComponent, SCharacterMovementComponent, SRigidBodyComponent, SystemResource::PhysicsQuery>();
+    }
 
     namespace
     {
@@ -26,13 +30,17 @@ namespace Lumina
         constexpr uint32 kKinematicsInvalidBody = 0xFFFFFFFFu;
     }
 
-    void SKinematicsSystem::Startup(const FSystemContext& Context) noexcept
+    void SKinematicsSystem::OnStartup()
     {
+        const FSystemContext& Context = GetContext();
+
         Context.GetRegistry().Ctx().Emplace<FKinematicsState>();
     }
 
-    void SKinematicsSystem::Update(const FSystemContext& Context) noexcept
+    void SKinematicsSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         FKinematicsState* StatePtr = Context.GetRegistry().Ctx().Find<FKinematicsState>();

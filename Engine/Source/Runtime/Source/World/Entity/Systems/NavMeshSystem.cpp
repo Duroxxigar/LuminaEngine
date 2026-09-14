@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "NavMeshSystem.h"
 #include "World/ECS/Registry.h"
 
@@ -24,11 +24,13 @@
 
 namespace Lumina
 {
-    FSystemAccess SNavMeshSystem::Access = FSystemAccess{}
-        .Write<SNavMeshComponent>()
-        .Read<SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent,
-              SCapsuleColliderComponent, SCylinderColliderComponent, SCharacterPhysicsComponent,
-              STerrainColliderComponent, STerrainComponent, STransformComponent, SStaticMeshComponent>();
+    void SNavMeshSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::FrameStart);
+        RequireUpdate(EUpdateStage::Paused);
+        Writes<SNavMeshComponent>();
+        Reads<SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent, SCapsuleColliderComponent, SCylinderColliderComponent, SCharacterPhysicsComponent, STerrainColliderComponent, STerrainComponent, STransformComponent, SStaticMeshComponent>();
+    }
 
     // NOLINTBEGIN(bugprone-throwing-static-initialization)
 
@@ -1227,8 +1229,10 @@ namespace Lumina
         }
     }
 
-    void SNavMeshSystem::Startup(const FSystemContext& Context) noexcept
+    void SNavMeshSystem::OnStartup()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         // A sink binds by handler identity, so reconnecting the same one is a no-op.
@@ -1241,8 +1245,10 @@ namespace Lumina
         }
     }
 
-    void SNavMeshSystem::Update(const FSystemContext& Context) noexcept
+    void SNavMeshSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
         auto View = Context.CreateView<SNavMeshComponent>();
         for (ECS::FEntity Entity : View)
@@ -1251,8 +1257,10 @@ namespace Lumina
         }
     }
 
-    void SNavMeshSystem::Teardown(const FSystemContext& Context) noexcept
+    void SNavMeshSystem::OnTeardown()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
         auto View = Context.CreateView<SNavMeshComponent>();
         for (ECS::FEntity Entity : View)

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -42,9 +42,6 @@ internal sealed class ScriptManager
     /// <summary>The runtime for the current generation, or null when no scripts are loaded.</summary>
     public EntityScriptRuntime? EntityScripts { get; private set; }
 
-    /// <summary>The EntitySystem runtime for the current generation, or null when no scripts are loaded.</summary>
-    public EntitySystemRuntime? EntitySystems { get; private set; }
-
     /// <summary>Hosts C# subclasses of REFLECT(Scriptable) native CObjects for the current generation.</summary>
     public ScriptableRuntime? Scriptables { get; private set; }
 
@@ -56,6 +53,9 @@ internal sealed class ScriptManager
 
     /// <summary>Total managed types in the current generation's assembly (for editor diagnostics).</summary>
     public int LoadedTypeCount { get; private set; }
+
+    // EntitySystem subclasses in the current generation, for editor diagnostics.
+    public int EntitySystemCount { get; private set; }
 
     public bool LoadOrReload(IReadOnlyList<ScriptAssemblyUnit> Units)
     {
@@ -179,8 +179,8 @@ internal sealed class ScriptManager
 
         LoadedTypeCount = AllTypes.Count;
         var Library = new TypeLibrary(AllTypes);
+        EntitySystemCount = Library.EntitySystemTypes.Count;
         EntityScripts = new EntityScriptRuntime(Library);
-        EntitySystems = new EntitySystemRuntime(Library);
         Scriptables = new ScriptableRuntime(Library, EntityScripts);
         DataStructs = new ScriptDataStructRuntime(Library);
 
@@ -440,8 +440,6 @@ internal sealed class ScriptManager
         // Every strong handle has to go before the unload, or it roots the generation the ALC is dropping.
         EntityScripts?.FreeAll();  // detaches only; the table drain below owns the script handles
         EntityScripts = null;
-        EntitySystems?.FreeAll();
-        EntitySystems = null;
         // C# Scriptable subclass instances live in their native object's managed-instance slot, and those
         // handles are STRONG -- they would pin this ALC. Draining the whole table here keeps that release at
         // exactly the point in the teardown contract it has always been at, just on the side that owns it now.

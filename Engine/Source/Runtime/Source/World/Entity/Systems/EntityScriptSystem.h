@@ -20,12 +20,14 @@ namespace Lumina
      * Scripts on a disabled entity, or under the outliner's per-entity script toggle, are skipped by the view
      * filter in the driver.
      */
-    REFLECT(System)
-    struct SEntityScriptSystem
+    REFLECT()
+    class SEntityScriptSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics), RequiresUpdate(EUpdateStage::PostPhysics))
+    public:
 
-        static void Update(const FSystemContext& Context) noexcept;
+        void Configure() override;
+
+        void OnUpdate() override;
     };
 }

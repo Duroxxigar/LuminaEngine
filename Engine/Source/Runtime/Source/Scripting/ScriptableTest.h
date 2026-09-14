@@ -3,6 +3,8 @@
 #include "Containers/Name.h"
 #include "Core/Object/Object.h"
 #include "Scripting/EntityScript.h"
+#include "World/Entity/Components/TransformComponent.h"
+#include "World/Entity/Systems/EntitySystem.h"
 #include "World/Subsystems/WorldSubsystem.h"
 #include "ScriptableTest.generated.h"
 
@@ -101,5 +103,47 @@ namespace Lumina
     public:
 
         bool ShouldCreate() override { return false; }
+    };
+
+    // Throwaway entity system, gated off so discovery never puts one in a real world.
+    REFLECT()
+    class RUNTIME_API CEntitySystemTest : public CEntitySystem
+    {
+        GENERATED_BODY()
+    public:
+
+        static inline bool bAllowCreation = false;
+
+        bool ShouldCreate() override { return bAllowCreation; }
+
+        void Configure() override
+        {
+            ++ConfigureCount;
+            RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::High);
+            RequireUpdate(EUpdateStage::FrameEnd);
+            Writes<STransformComponent>();
+            DeclareRead("SStaticMeshComponent");
+        }
+
+        void OnStartup() override  { ++StartupCount; }
+        void OnUpdate() override   { ++UpdateCount; }
+        void OnTeardown() override { ++TeardownCount; }
+
+        int32 ConfigureCount = 0;
+        int32 StartupCount = 0;
+        int32 UpdateCount = 0;
+        int32 TeardownCount = 0;
+    };
+
+    // Declares no access, so a test can prove the driver falls back to running it alone.
+    REFLECT()
+    class RUNTIME_API CEntitySystemExclusiveTest : public CEntitySystem
+    {
+        GENERATED_BODY()
+    public:
+
+        bool ShouldCreate() override { return CEntitySystemTest::bAllowCreation; }
+
+        void Configure() override { RequireUpdate(EUpdateStage::FrameStart); }
     };
 }

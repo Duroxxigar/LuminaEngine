@@ -4,14 +4,15 @@
 
 namespace Lumina
 {
-    REFLECT(System)
-    struct SInputSystem
+    REFLECT()
+    class SInputSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest))
-        
-        static FSystemAccess Access;
+    public:
 
-        static void Update(const FSystemContext& Context) noexcept;
+        void Configure() override;
+        
+
+        void OnUpdate() override;
     };
 }

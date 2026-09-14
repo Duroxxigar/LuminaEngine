@@ -45,6 +45,7 @@ namespace Lumina
 
     // Lower value = higher priority; systems sort ascending so Highest ticks first.
     // Disabled drops the system from the stage entirely.
+    REFLECT()
     enum class EUpdatePriority : uint8
     {
         Highest     = 0,

@@ -5,8 +5,15 @@
 
 namespace Lumina
 {
-    void STweenSystem::Update(const FSystemContext& Context) noexcept
+    void STweenSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest);
+    }
+
+    void STweenSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = Context.GetRegistry();

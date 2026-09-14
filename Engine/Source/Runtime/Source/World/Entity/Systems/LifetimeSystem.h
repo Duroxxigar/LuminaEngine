@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "World/ECS/Registry.h"
 
@@ -10,14 +10,21 @@
 
 namespace Lumina
 {
-    REFLECT(System)
-    struct SLifetimeSystem
+    REFLECT()
+    class SLifetimeSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::FrameEnd))
-        
-        static void Update(const FSystemContext& Context) noexcept
+    public:
+
+        void Configure() override
         {
+            RequireUpdate(EUpdateStage::FrameEnd);
+        }
+        
+        void OnUpdate() override
+        {
+            const FSystemContext& Context = GetContext();
+
             LUMINA_PROFILE_SCOPE();
             
             Context.CreateView<SLifetimeComponent>().ForEach([&](ECS::FEntity Entity, SLifetimeComponent& Component)

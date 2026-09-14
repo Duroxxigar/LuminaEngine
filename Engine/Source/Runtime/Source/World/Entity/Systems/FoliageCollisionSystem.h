@@ -7,15 +7,15 @@
 namespace Lumina
 {
     // Bakes static physics bodies for collision-enabled foliage types; rebakes when instances change.
-    REFLECT(System)
-    struct RUNTIME_API SFoliageCollisionSystem
+    REFLECT()
+    class RUNTIME_API SFoliageCollisionSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics))
+    public:
 
-        static FSystemAccess Access;
+        void Configure() override;
 
-        static void Update(const FSystemContext& Context) noexcept;
-        static void Teardown(const FSystemContext& Context) noexcept;
+        void OnUpdate() override;
+        void OnTeardown() override;
     };
 }

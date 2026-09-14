@@ -47,24 +47,24 @@ namespace Lumina
      * Publishes FDebugDrawState once per frame, ahead of every other system, for both editor (Paused)
      * and game (FrameStart) worlds. Stateless: the state lives in the registry context.
      */
-    REFLECT(System)
-    struct RUNTIME_API SDebugDrawSystem
+    REFLECT()
+    class RUNTIME_API SDebugDrawSystem : public CEntitySystem
     {
         GENERATED_BODY()
+    public:
+
         // Paused as well as FrameStart, so editor worlds -- which tick only Paused -- get a view too.
         // Highest on both: this has to land before anything that might draw reads it.
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest),
-                      RequiresUpdate(EUpdateStage::Paused,     EUpdatePriority::Highest))
+        void Configure() override;
 
     public:
 
         // Writes only its own ctx singleton and reads the camera's resolved view, so it never conflicts
         // with a component-touching system. Defined in the .cpp.
-        static FSystemAccess Access;
 
-        static void Startup (const FSystemContext& Context) noexcept;
-        static void Update  (const FSystemContext& Context) noexcept;
-        static void Teardown(const FSystemContext& Context) noexcept;
+        void OnStartup() override;
+        void OnUpdate() override;
+        void OnTeardown() override;
     };
 
     namespace DebugDraw

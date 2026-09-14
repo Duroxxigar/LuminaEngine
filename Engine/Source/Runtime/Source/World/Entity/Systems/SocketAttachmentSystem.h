@@ -8,16 +8,16 @@ namespace Lumina
     // Drives entities with an SSocketAttachmentComponent from their parent's animated skeletal pose.
     // Runs after the animation systems (PrePhysics/Low) so the frame's pose is final, and while paused
     // so editor preview and paused gameplay keep attachments glued.
-    REFLECT(System)
-    struct RUNTIME_API SSocketAttachmentSystem
+    REFLECT()
+    class RUNTIME_API SSocketAttachmentSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Low),
-                      RequiresUpdate(EUpdateStage::Paused, EUpdatePriority::Low))
+    public:
+
+        void Configure() override;
 
         // Writes the attached entity's transform; reads the parent's mesh/pose. Defined in the .cpp.
-        static FSystemAccess Access;
 
-        static void Update(const FSystemContext& SystemContext) noexcept;
+        void OnUpdate() override;
     };
 }
