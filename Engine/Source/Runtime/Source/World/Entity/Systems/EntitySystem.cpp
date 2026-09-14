@@ -21,7 +21,7 @@ namespace Lumina
         if (Stage < EUpdateStage::Max)
         {
             const int32 Clamped = Priority < 0 ? 0 : (Priority > 255 ? 255 : Priority);
-            Priorities.SetStagePriority(FUpdateStagePriority(Stage, (EUpdatePriority)Clamped));
+            Priorities.SetStagePriority(Stage, (EUpdatePriority)Clamped);
         }
     }
 

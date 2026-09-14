@@ -19,13 +19,6 @@ namespace Lumina
         Max,
     };
     
-    struct FUpdateStage_FrameStart      {};
-    struct FUpdateStage_PrePhysics      {};
-    struct FUpdateStage_DuringPhysics   {};
-    struct FUpdateStage_PostPhysics     {};
-    struct FUpdateStage_FrameEnd        {};
-    struct FUpdateStage_Paused          {};
-    
     constexpr const char* GUpdateStageNames[] = 
     {
         "FrameStart",
@@ -35,13 +28,6 @@ namespace Lumina
         "FrameEnd",
         "Paused"
     };
-
-    #define US_FrameStart       EUpdateStage::FrameStart
-    #define US_PrePhysics       EUpdateStage::PrePhysics
-    #define US_DuringPhysics    EUpdateStage::DuringPhysics
-    #define US_PostPhysics      EUpdateStage::PostPhysics
-    #define US_FrameEnd         EUpdateStage::FrameEnd
-    #define US_Paused           EUpdateStage::Paused
 
     // Lower value = higher priority; systems sort ascending so Highest ticks first.
     // Disabled drops the system from the stage entirely.
@@ -56,32 +42,12 @@ namespace Lumina
         Default     = Medium,
     };
 
-    struct FUpdateStagePriority
-    {
-        FUpdateStagePriority(EUpdateStage InStage) : Stage(InStage) { }
-        FUpdateStagePriority(EUpdateStage InStage, EUpdatePriority InPriority) : Stage(InStage), Priority(InPriority) { }
-
-    public:
-
-        EUpdateStage     Stage;
-        EUpdatePriority  Priority = EUpdatePriority::Default;
-    };
-
-    using RequiresUpdate = FUpdateStagePriority;
-    
+    // The stages one system ticks in, as a priority per stage. CEntitySystem::Configure fills it.
     struct FUpdatePriorityList
     {
         FUpdatePriorityList()
         {
             Reset();
-        }
-
-        template<typename... Args>
-        requires (sizeof...(Args) > 0) && (std::is_constructible_v<FUpdateStagePriority, Args> && ...)
-        FUpdatePriorityList(Args&&... args)
-        {
-            Reset();
-            ((*this << std::forward<Args>(args)), ...);
         }
 
         void Reset()
@@ -99,23 +65,9 @@ namespace Lumina
             return Priorities[(uint8)Stage];
         }
 
-        FUpdatePriorityList& SetStagePriority(FUpdateStagePriority&& StagePriority)
+        void SetStagePriority(EUpdateStage Stage, EUpdatePriority Priority)
         {
-            Priorities[(uint8) StagePriority.Stage] = (uint8)StagePriority.Priority;
-            return *this;
-        }
-
-        FUpdatePriorityList& operator<<(FUpdateStagePriority&& StagePriority)
-        {
-            Priorities[(uint8)StagePriority.Stage] = (uint8)StagePriority.Priority;
-            return *this;
-        }
-
-        bool AreAllStagesDisabled() const
-        {
-            const static uint8 DisabledStages[(uint8)EUpdateStage::Max] = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
-            static_assert(sizeof(DisabledStages) == sizeof(Priorities), "disabled stages must be the same size as the priorities list");
-            return memcmp(Priorities, DisabledStages, sizeof(Priorities)) == 0;
+            Priorities[(uint8)Stage] = (uint8)Priority;
         }
 
     private:

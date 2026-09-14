@@ -179,14 +179,14 @@ internal sealed class ScriptManager
 
         LoadedTypeCount = AllTypes.Count;
         var Library = new TypeLibrary(AllTypes);
-        EntitySystemCount = Library.EntitySystemTypes.Count;
+        EntitySystemCount = Library.EntitySystemCount;
         EntityScripts = new EntityScriptRuntime(Library);
         Scriptables = new ScriptableRuntime(Library, EntityScripts);
         DataStructs = new ScriptDataStructRuntime(Library);
 
         Native.Log(ELogLevel.Info,
             $"Loaded C# scripts [generation {Generation}]: {Pending.Count} assembl(ies), {AllTypes.Count} type(s), " +
-            $"{Library.EntityScriptTypeNames.Count} EntityScript(s), {Library.EntitySystemTypes.Count} EntitySystem(s).");
+            $"{Library.EntityScriptTypeNames.Count} EntityScript(s), {Library.EntitySystemCount} EntitySystem(s).");
         return true;
     }
 

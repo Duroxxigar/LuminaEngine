@@ -5,16 +5,13 @@
 #include "Containers/Vector.h"
 #include "Containers/String.h"
 #include "Platform/GenericPlatform.h"
-#include "Core/UpdateStage.h"
 
 namespace Lumina
 {
-    struct FSystemContext;
     struct FInputActionState;
     class CObject;
     class CScriptStruct;
     class CWorld;
-    enum class EUpdateStage : uint8;
     namespace Scripting { struct FScriptExportSchema; struct FScriptPropertyEntry; struct FScriptButton; }
 }
 

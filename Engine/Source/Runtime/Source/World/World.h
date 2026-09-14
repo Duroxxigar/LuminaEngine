@@ -67,7 +67,7 @@ namespace Lumina
     // GetAccessTypeName (SystemAccess.h).
     struct FSystemScheduleEntry
     {
-        FName           Name;                  // None for a managed (C#) system
+        FName           Name;                  // the system's class name
         TVector<uint32> Writes;
         TVector<uint32> Reads;
         uint8           Stage      = 0;        // EUpdateStage
@@ -450,7 +450,7 @@ namespace Lumina
 
         // Enable/disable a system for this world. Persists to SDefaultWorldSettings immediately and
         // defers the live system-list rebuild to the start of the next frame (ApplyPendingSystemChanges),
-        // so it is safe to call mid-frame. Applies to native systems only.
+        // so it is safe to call mid-frame.
         void SetSystemEnabled(FName System, bool bEnabled);
 
         void OnRelationshipComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
@@ -686,8 +686,6 @@ namespace Lumina
         }
 
         NODISCARD const TVector<TObjectPtr<CWorldSubsystem>>& GetSubsystems() const { return Subsystems; }
-
-        NODISCARD const TVector<TObjectPtr<CEntitySystem>>& GetSystems() const { return Systems; }
 
         // Runtime state rather than map data, but reflected so the hot reload reinstancer reaches it.
         PROPERTY(NoSerialize)

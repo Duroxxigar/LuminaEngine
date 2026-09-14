@@ -11,7 +11,6 @@ namespace LuminaSharp;
 internal sealed class TypeLibrary
 {
     private readonly Dictionary<string, TypeDescription> EntityScripts = new();
-    private readonly Dictionary<string, Type> EntitySystems = new();
     // C# subclasses of REFLECT(Scriptable) native CObjects, keyed by full name; the host mints a CClass per one.
     private readonly Dictionary<string, Type> Scriptables = new();
     // Types carrying a ScriptStructBase marker, keyed by StableId (the simple type name). The host mints a
@@ -42,7 +41,7 @@ internal sealed class TypeLibrary
             }
             else if (typeof(EntitySystem).IsAssignableFrom(Type))
             {
-                EntitySystems[FullName] = Type;
+                ++EntitySystemCount;
             }
 
             // NOT an "else": the roles above describe what a type is FOR, and being a Scriptable is a
@@ -157,8 +156,8 @@ internal sealed class TypeLibrary
         return false;
     }
 
-    // Every discovered EntitySystem type, for the scripting diagnostics report.
-    public IReadOnlyCollection<Type> EntitySystemTypes => EntitySystems.Values;
+    // Discovery is the native class walk, so this only feeds the scripting diagnostics report.
+    public int EntitySystemCount { get; private set; }
 
     /// <summary>The description for an EntityScript by full name, falling back through class aliases.</summary>
     public TypeDescription? GetEntityScript(string FullName)
