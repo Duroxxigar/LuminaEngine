@@ -29,6 +29,11 @@ public readonly unsafe partial struct SystemContext
     // The world's component store, mirroring C++ ECS::FRegistry. Author typed views with Registry.View.
     public EntityRegistry Registry => new(World);
 
+    // The world this system ticks in, so a system reaches the same subsystems a script does.
+    public CWorld? OwningWorld => World == 0 ? null : Wrapper<CWorld>.ForObject((IntPtr)World);
+
+    public T? GetSubsystem<T>() where T : NativeObject => OwningWorld?.GetSubsystem<T>();
+
     /// <summary>Seconds since the previous frame.</summary>
     public float DeltaTime => GetDeltaTime();
 
