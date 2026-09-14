@@ -65,6 +65,9 @@ public abstract class EntityScript : Lumina.CEntityScript
     public Lumina.STransformComponent Transform => Registry.Get<Lumina.STransformComponent>(Entity);
 
 
+    // The world subsystem of type T, which is where shared gameplay state belongs.
+    protected T? GetSubsystem<T>() where T : NativeObject => World.GetSubsystem<T>();
+
     /// <summary>Get the script of type T on another entity (or this one), or null.</summary>
     protected T? GetScript<T>(Entity Target) where T : EntityScript
     {

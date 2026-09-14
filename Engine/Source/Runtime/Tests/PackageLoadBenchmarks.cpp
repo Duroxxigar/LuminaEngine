@@ -2,10 +2,14 @@
 
 #include <cstdio>
 #include <cstdlib>
+
+// The sampler below is a sigprof profiler, so it and its headers only exist off Windows.
+#if !defined(LE_PLATFORM_WINDOWS)
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <signal.h>
 #include <sys/time.h>
+#endif
 
 #include "Assets/AssetTypes/ParticleSystem/ParticleSystem.h"
 #include "Containers/Name.h"
@@ -31,6 +35,14 @@ namespace PackageLoadBench
     // a sigprof sampler, since perf_event_paranoid can block unprivileged perf, resolve with addr2line
     namespace Sampler
     {
+#if defined(LE_PLATFORM_WINDOWS)
+
+        // Stubs, so every benchmark below still builds and runs where the sampler cannot.
+        void Start() {}
+        void Stop() {}
+        void Dump(const char*) {}
+
+#else
         constexpr int32 kMaxFrames  = 40;
         constexpr int32 kMaxSamples = 120000;
 
@@ -117,6 +129,7 @@ namespace PackageLoadBench
 
             std::fclose(File);
         }
+#endif
     }
 
     constexpr const char* kAlias = "/PkgBench";

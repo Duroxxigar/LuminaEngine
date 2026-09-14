@@ -114,7 +114,6 @@ namespace Lumina
 
     void CStruct::Link()
     {
-
         if (bLinked)
         {
             return;
@@ -126,6 +125,11 @@ namespace Lumina
             SuperStruct->Link();
         }
 
+        Flatten();
+    }
+
+    void CStruct::Flatten()
+    {
         // Copied, not spliced: a struct with no own properties used to adopt the super's list head outright,
         // so a later AddProperty walked into the super and appended there instead.
         AllProperties = OwnProperties;
@@ -176,11 +180,22 @@ namespace Lumina
     void CStruct::AddProperty(FProperty* Property)
     {
         OwnProperties.push_back(Property);
+
+        // Link caches the flattened list, so a member arriving after it would otherwise never be seen.
+        if (bLinked)
+        {
+            Flatten();
+        }
     }
 
     void CStruct::AddFunction(FFunction* Function)
     {
         OwnFunctions.push_back(Function);
+
+        if (bLinked)
+        {
+            Flatten();
+        }
     }
 
     FFunction* CStruct::FindFunction(const FName& Name) const

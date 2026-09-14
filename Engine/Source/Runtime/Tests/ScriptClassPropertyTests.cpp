@@ -573,7 +573,7 @@ TEST(ScriptClassReload, RefreshingMetadataKeepsTheSamePropertiesAndReachesTheEdi
 
     FProperty* Before = Sub->GetProperty(FName("Speed"));
     ASSERT_NE(Before, nullptr);
-    EXPECT_EQ(FStringView(Before->GetMetadata("Tooltip")), FStringView("how fast"));
+    EXPECT_EQ(Before->GetMetadata("Tooltip").View(), FStringView("how fast"));
 
     Scripting::FScriptExportSchema Retitled;
     Retitled.Fields.push_back(MakeScalarField("Speed", EPropertyTypeFlags::Float));
@@ -584,8 +584,8 @@ TEST(ScriptClassReload, RefreshingMetadataKeepsTheSamePropertiesAndReachesTheEdi
 
     FProperty* After = Sub->GetProperty(FName("Speed"));
     EXPECT_EQ(After, Before) << "a metadata refresh must not rebuild the block";
-    EXPECT_EQ(FStringView(After->GetMetadata("Tooltip")), FStringView("how fast it goes"));
-    EXPECT_EQ(FStringView(After->GetMetadata("Category")), FStringView("Movement"));
+    EXPECT_EQ(After->GetMetadata("Tooltip").View(), FStringView("how fast it goes"));
+    EXPECT_EQ(After->GetMetadata("Category").View(), FStringView("Movement"));
 
     // And the record now agrees, so the next reload sees no change rather than the same one again.
     EXPECT_EQ(Scripting::DiffScriptClassLayout(Sub, Retitled), EScriptTypeDirty::None);

@@ -129,18 +129,17 @@ TEST(ManagedTypeRegistry, CompilingWithNoStagesOrNoTypesIsHarmless)
     EXPECT_EQ(Only.SeenCount, 0u);
 }
 
-// The engine's own sequence: classes, then data structs, then renderers. Asserted here because the reason
-// for each position is a real constraint, not a preference.
+// Classes before data structs, because a struct's schema can name a class the first stage mints. Asserted
+// here because the position is a real constraint rather than a preference.
 TEST(ManagedTypeRegistry, TheBuiltInStagesAreRegisteredInTheOrderTheyMustRun)
 {
     FManagedTypeRegistry::Get().ResetForTesting();
     RegisterBuiltInManagedTypeStages();
 
     const TSpan<IManagedTypeCompiler* const> Stages = FManagedTypeRegistry::Get().GetStages();
-    ASSERT_EQ(Stages.size(), 3u);
+    ASSERT_EQ(Stages.size(), 2u);
     EXPECT_STREQ(Stages[0]->GetName(), "ScriptableClasses");
     EXPECT_STREQ(Stages[1]->GetName(), "DataStructs");
-    EXPECT_STREQ(Stages[2]->GetName(), "RenderScenes");
 }
 
 // Reverse, because a stage built on an earlier one has to come down before the thing it was built from.

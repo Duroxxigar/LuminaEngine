@@ -5,12 +5,14 @@
 namespace Lumina
 {
     // Serial by default, since a tween setter or its finished callback can touch anything.
-    REFLECT(System)
-    struct STweenSystem
+    REFLECT()
+    class STweenSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest))
+    public:
 
-        static void Update(const FSystemContext& Context) noexcept;
+        void Configure() override;
+
+        void OnUpdate() override;
     };
 }

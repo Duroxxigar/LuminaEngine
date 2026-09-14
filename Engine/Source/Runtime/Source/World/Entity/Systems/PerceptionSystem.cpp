@@ -1,4 +1,4 @@
-﻿#include "Core/Threading/Thread.h"
+#include "Core/Threading/Thread.h"
 #include "RuntimePCH.h"
 #include "World/ECS/Registry.h"
 #include "PerceptionSystem.h"
@@ -21,13 +21,18 @@
 
 namespace Lumina
 {
-    FSystemAccess SPerceptionSystem::Access = FSystemAccess::Exclusive();
+    void SPerceptionSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::High);
+    }
 
     FOnPerceptionUpdated SPerceptionSystem::OnTargetPerceived;
     FOnPerceptionUpdated SPerceptionSystem::OnTargetLost;
 
-    void SPerceptionSystem::Startup(const FSystemContext& Context) noexcept
+    void SPerceptionSystem::OnStartup()
     {
+        const FSystemContext& Context = GetContext();
+
         // Created serially at world init so Update only ever READS the registry context.
         Perception::GetOrCreateState(Context.GetRegistry());
     }
@@ -220,8 +225,10 @@ namespace Lumina
         }
     }
 
-    void SPerceptionSystem::Update(const FSystemContext& Context) noexcept
+    void SPerceptionSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         const float DeltaTime = (float)Context.GetDeltaTime();

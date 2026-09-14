@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "FoliageTerrainSystem.h"
 #include "SystemContext.h"
 #include "TaskSystem/TaskSystem.h"
@@ -9,12 +9,18 @@
 
 namespace Lumina
 {
-    FSystemAccess SFoliageTerrainSystem::Access = FSystemAccess{}
-        .Read<STransformComponent>()
-        .Write<STerrainComponent, SFoliageComponent>();
-
-    void SFoliageTerrainSystem::Startup(const FSystemContext& Context) noexcept
+    void SFoliageTerrainSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::FrameStart);
+        RequireUpdate(EUpdateStage::Paused);
+        Reads<STransformComponent>();
+        Writes<STerrainComponent, SFoliageComponent>();
+    }
+
+    void SFoliageTerrainSystem::OnStartup()
+    {
+        const FSystemContext& Context = GetContext();
+
         (void)Context.CreateView<STerrainComponent, STransformComponent>();
     }
 
@@ -30,8 +36,10 @@ namespace Lumina
         };
     }
 
-    void SFoliageTerrainSystem::Update(const FSystemContext& Context) noexcept
+    void SFoliageTerrainSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         // Snapshot of terrain origin, accumulated dirty world-rect, and the running version sum.

@@ -14,13 +14,19 @@ namespace Grain
     {
         constexpr EFormat kSceneFormat = EFormat::RGBA16_FLOAT;
 
+        constexpr float kFieldOfView = 1.20f;
+
+        // The sim advances on its own clock, or a fast frame rate runs the water far too often.
+        constexpr float kSimTickSeconds = 1.0f / 60.0f;
+
         // One slot per pass boundary, so a report is a walk over consecutive differences.
         constexpr const char* kTimerNames[] =
         {
-            "Water sim", "Destroy", "Raymarch", "Temporal", "A trous", "Compose", "Bloom", "Composite",
+            "Water sim", "Destroy", "Raymarch", "Bounce", "Temporal",
+            "A trous", "Compose", "Resolve", "Exposure", "Bloom", "Composite",
         };
 
-        constexpr uint32 kTimerSlots = 9;
+        constexpr uint32 kTimerSlots = 12;
 
         struct FBloomArgs
         {
@@ -47,19 +53,24 @@ namespace Grain
         {
             uint32   SceneID;
             uint32   BloomID;
-            FVector2 Resolution;
+            uint32   OverlayID;
+            uint32   ExposureID;
+            uint32   Flags;
             float    BloomIntensity;
-            float    Exposure;
+            FVector2 Resolution;
+            float    ExposureBias;
             float    Vignette;
-            float    Pad0;
+            float    Saturation;
+            float    Contrast;
+            FVector4 Tint;
         };
 
         static_assert(sizeof(FBloomArgs) == 32, "Slang mirror expects a packed 32 byte block.");
-        static_assert(sizeof(FCompositeArgs) == 32, "Slang mirror expects a packed 32 byte block.");
+        static_assert(sizeof(FCompositeArgs) == 64, "Slang mirror expects a packed 64 byte block.");
 
         static_assert(kRootCountX == 5 && kRootCountY == 4 && kRootCountZ == 5,
-            "Shaders.h hardcodes the root grid, so both sides have to change together.");
-        static_assert(kVoxelsPerRoot == 512, "Shaders.h hardcodes kRootSpan.");
+            "ShaderCommon.h hardcodes the root grid, so both sides have to change together.");
+        static_assert(kVoxelsPerRoot == 512, "ShaderCommon.h hardcodes kRootSpan.");
 
         TVector<uint32> CompileFrom(const char* Module, const char* EntryPoint, const char* DebugName)
         {
@@ -144,7 +155,16 @@ namespace Grain
                                                ShaderSource(Pixel, PixelEntry), Raster);
         }
 
-        // RHI::Utils only opens a single target pass, and the raymarch splits across three.
+        RHI::FPipelineH MakeCompute(const TVector<uint32>& Spirv)
+        {
+            if (Spirv.empty())
+            {
+                return {};
+            }
+            return RHI::CreateComputePipeline(ShaderSource(Spirv, EntryPointName(Spirv).c_str()));
+        }
+
+        // RHI::Utils only opens a single target pass, and several passes here split across two or three.
         void BeginMultiPass(RHI::FCmdListH CL, TSpan<const RHI::FTextureH> Targets,
                             const FUIntVector2& Extent)
         {
@@ -180,6 +200,14 @@ namespace Grain
         {
             return { V.x, V.y, V.z, W };
         }
+
+        // The R2 sequence, which spreads far more evenly over a few frames than a random offset.
+        FVector2 JitterFor(uint32 Frame)
+        {
+            const float X = 0.7548776662f * float(Frame + 1u);
+            const float Y = 0.5698402909f * float(Frame + 1u);
+            return { X - Math::Floor(X) - 0.5f, Y - Math::Floor(Y) - 0.5f };
+        }
     }
 
     bool FRenderer::Initialize(EFormat InSwapchainFormat)
@@ -193,61 +221,139 @@ namespace Grain
     {
         const TVector<uint32> Vertex     = CompileEntry("FullscreenVS", "Grain.Fullscreen");
         const TVector<uint32> Raymarch   = CompileEntry("RaymarchPS", "Grain.Raymarch");
+        const TVector<uint32> Gi         = CompileEntry("GiPS", "Grain.Gi");
         const TVector<uint32> Downsample = CompileEntry("DownsamplePS", "Grain.Downsample");
         const TVector<uint32> Upsample   = CompileEntry("UpsamplePS", "Grain.Upsample");
         const TVector<uint32> Temporal   = CompileEntry("TemporalPS", "Grain.Temporal");
         const TVector<uint32> Atrous     = CompileEntry("AtrousPS", "Grain.Atrous");
         const TVector<uint32> Compose    = CompileEntry("ComposePS", "Grain.Compose");
+        const TVector<uint32> Taa        = CompileEntry("TaaPS", "Grain.Taa");
+        const TVector<uint32> ExposureFit = CompileEntry("ExposurePS", "Grain.Exposure");
         const TVector<uint32> Composite  = CompileEntry("CompositePS", "Grain.Composite");
         const TVector<uint32> SimStep    = CompileFrom(Shaders::kSimModule, "SimFlowCS", "Grain.SimFlow");
         const TVector<uint32> SimCoarse  = CompileFrom(Shaders::kSimModule, "SimCoarseCS", "Grain.SimCoarse");
+        const TVector<uint32> SimDilate  = CompileFrom(Shaders::kSimModule, "SimDilateCS", "Grain.SimDilate");
         const TVector<uint32> Pick       = CompileFrom(Shaders::kSimModule, "PickCS", "Grain.Pick");
         const TVector<uint32> Destroy    = CompileFrom(Shaders::kSimModule, "DestroyCS", "Grain.Destroy");
 
-        RaymarchPipeline   = MakePipeline(Vertex, Raymarch, "RaymarchPS", kSceneFormat, 3);
+        RaymarchPipeline   = MakePipeline(Vertex, Raymarch, "RaymarchPS", kSceneFormat, 2);
+        GiPipeline         = MakePipeline(Vertex, Gi, "GiPS", kSceneFormat, 2);
         TemporalPipeline   = MakePipeline(Vertex, Temporal, "TemporalPS", kSceneFormat, 2);
         AtrousPipeline     = MakePipeline(Vertex, Atrous, "AtrousPS", kSceneFormat);
         ComposePipeline    = MakePipeline(Vertex, Compose, "ComposePS", kSceneFormat);
+        TaaPipeline        = MakePipeline(Vertex, Taa, "TaaPS", kSceneFormat);
+        ExposurePipeline   = MakePipeline(Vertex, ExposureFit, "ExposurePS", kSceneFormat);
         DownsamplePipeline = MakePipeline(Vertex, Downsample, "DownsamplePS", kSceneFormat);
         UpsamplePipeline   = MakePipeline(Vertex, Upsample, "UpsamplePS", kSceneFormat);
         CompositePipeline  = MakePipeline(Vertex, Composite, "CompositePS", SwapchainFormat);
 
-        const FString StepName = EntryPointName(SimStep);
-        const FString CoarseName = EntryPointName(SimCoarse);
-
-        if (!SimStep.empty())
-        {
-            SimStepPipeline = RHI::CreateComputePipeline(ShaderSource(SimStep, StepName.c_str()));
-        }
-        if (!SimCoarse.empty())
-        {
-            SimCoarsePipeline = RHI::CreateComputePipeline(ShaderSource(SimCoarse, CoarseName.c_str()));
-        }
-        if (!Pick.empty())
-        {
-            PickPipeline = RHI::CreateComputePipeline(ShaderSource(Pick, EntryPointName(Pick).c_str()));
-        }
-        if (!Destroy.empty())
-        {
-            DestroyPipeline = RHI::CreateComputePipeline(ShaderSource(Destroy, EntryPointName(Destroy).c_str()));
-        }
+        SimStepPipeline   = MakeCompute(SimStep);
+        SimCoarsePipeline = MakeCompute(SimCoarse);
+        SimDilatePipeline = MakeCompute(SimDilate);
+        PickPipeline      = MakeCompute(Pick);
+        DestroyPipeline   = MakeCompute(Destroy);
 
         PickBuffer = RHI::Malloc(16, RHI::EMemoryType::Default);
         RHI::SetDebugName(PickBuffer.Gpu, "Grain.Pick");
 
-        LOG_INFO("Grain: compute entry points '{}' and '{}'.", StepName, CoarseName);
+        return RHI::IsValid(RaymarchPipeline) && RHI::IsValid(GiPipeline)
+            && RHI::IsValid(DownsamplePipeline) && RHI::IsValid(UpsamplePipeline)
+            && RHI::IsValid(CompositePipeline) && RHI::IsValid(TemporalPipeline)
+            && RHI::IsValid(AtrousPipeline) && RHI::IsValid(ComposePipeline)
+            && RHI::IsValid(TaaPipeline) && RHI::IsValid(ExposurePipeline)
+            && RHI::IsValid(SimStepPipeline)
+            && RHI::IsValid(SimCoarsePipeline) && RHI::IsValid(SimDilatePipeline);
+    }
 
-        return RHI::IsValid(RaymarchPipeline) && RHI::IsValid(DownsamplePipeline)
-            && RHI::IsValid(UpsamplePipeline) && RHI::IsValid(CompositePipeline)
-            && RHI::IsValid(TemporalPipeline) && RHI::IsValid(AtrousPipeline) && RHI::IsValid(ComposePipeline)
-            && RHI::IsValid(SimStepPipeline) && RHI::IsValid(SimCoarsePipeline);
+    bool FRenderer::UploadModels(TSpan<const uint32> Descs, TSpan<const uint32> Cells)
+    {
+        const uint64 DescBytes = Descs.size() * sizeof(uint32);
+        const uint64 CellBytes = Math::Max<uint64>(Cells.size() * sizeof(uint32), 4);
+
+        ModelDescBuffer = RHI::Malloc(DescBytes, RHI::EMemoryType::Default);
+        ModelCellBuffer = RHI::Malloc(CellBytes, RHI::EMemoryType::Default);
+        EntityBuffer = RHI::Malloc(uint64(kMaxRenderEntities) * sizeof(FEntityGpu), RHI::EMemoryType::CPUWrite);
+
+        if (ModelDescBuffer.Gpu == 0 || ModelCellBuffer.Gpu == 0 || EntityBuffer.Gpu == 0
+            || EntityBuffer.Cpu == nullptr)
+        {
+            LOG_ERROR("Grain: failed to allocate the model buffers.");
+            return false;
+        }
+
+        RHI::SetDebugName(ModelDescBuffer.Gpu, "Grain.ModelDescs");
+        RHI::SetDebugName(ModelCellBuffer.Gpu, "Grain.ModelCells");
+        RHI::SetDebugName(EntityBuffer.Gpu, "Grain.Entities");
+
+        const RHI::FGPUAllocation Staging = RHI::Malloc(DescBytes + CellBytes, RHI::EMemoryType::CPUWrite);
+        if (Staging.Cpu == nullptr)
+        {
+            return false;
+        }
+
+        std::memcpy(Staging.Cpu, Descs.data(), size_t(DescBytes));
+        if (!Cells.empty())
+        {
+            std::memcpy(reinterpret_cast<uint8*>(Staging.Cpu) + DescBytes, Cells.data(),
+                        size_t(Cells.size() * sizeof(uint32)));
+        }
+
+        const RHI::FCmdListH CL = RHI::OpenCommandList();
+        RHI::CmdMemcpy(CL, { ModelDescBuffer.Gpu, size_t(DescBytes) }, { Staging.Gpu, size_t(DescBytes) });
+        RHI::CmdMemcpy(CL, { ModelCellBuffer.Gpu, size_t(CellBytes) },
+                       { Staging.Gpu + DescBytes, size_t(CellBytes) });
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
+            RHI::EStageFlags::PixelShader | RHI::EStageFlags::Compute,
+            RHI::EAccessFlags::ShaderRead);
+
+        const uint64 Value = RHI::Submit(RHI::EQueueType::Graphics, TSpan<const RHI::FCmdListH>{&CL, 1});
+        RHI::WaitSemaphore(RHI::GetQueueTimeline(RHI::EQueueType::Graphics), Value);
+
+        RHI::Retire(Staging);
+        return true;
+    }
+
+    void FRenderer::SetEntities(TSpan<const FEntityGpu> InEntities)
+    {
+        EntityCount = uint32(Math::Min<size_t>(InEntities.size(), kMaxRenderEntities));
+
+        EntityBounds = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+        if (EntityBuffer.Cpu == nullptr || EntityCount == 0)
+        {
+            return;
+        }
+
+        // Host visible, so the write lands without a copy and the submit carries its visibility.
+        std::memcpy(EntityBuffer.Cpu, InEntities.data(), size_t(EntityCount) * sizeof(FEntityGpu));
+
+        FVector3 Low = InEntities[0].Position;
+        FVector3 High = InEntities[0].Position;
+
+        for (uint32 i = 0; i < EntityCount; ++i)
+        {
+            const FEntityGpu& Entity = InEntities[i];
+            const float Reach = Math::Max(Entity.Half.x, Math::Max(Entity.Half.y, Entity.Half.z));
+
+            Low = { Math::Min(Low.x, Entity.Position.x - Reach), Math::Min(Low.y, Entity.Position.y - Reach),
+                    Math::Min(Low.z, Entity.Position.z - Reach) };
+            High = { Math::Max(High.x, Entity.Position.x + Reach), Math::Max(High.y, Entity.Position.y + Reach),
+                     Math::Max(High.z, Entity.Position.z + Reach) };
+        }
+
+        const FVector3 Center { (Low.x + High.x) * 0.5f, (Low.y + High.y) * 0.5f, (Low.z + High.z) * 0.5f };
+        const FVector3 Span { High.x - Center.x, High.y - Center.y, High.z - Center.z };
+
+        EntityBounds = MakeVector4(Center, Math::Sqrt(Span.x * Span.x + Span.y * Span.y + Span.z * Span.z));
     }
 
     void FRenderer::ReleaseTargets()
     {
-        for (RHI::FManagedTexture* Target : { &RawIndirect, &RawDirect, &RawAlbedo,
+        for (RHI::FManagedTexture* Target : { &RawDirect, &RawAlbedo, &GiRaw, &GiGeo,
                                              &Accum[0], &Accum[1], &Moment[0], &Moment[1],
-                                             &Scratch[0], &Scratch[1], &SceneTarget })
+                                             &Scratch[0], &Scratch[1], &SceneTarget,
+                                             &History[0], &History[1], &Exposure[0], &Exposure[1] })
         {
             if (Target->IsValid())
             {
@@ -267,33 +373,64 @@ namespace Grain
         RHI::WaitDeviceIdle();
         ReleaseTargets();
 
-        RHI::FManagedTexture* const Full[] =
+        HalfExtent = { Math::Max(Extent.x / 2u, 1u), Math::Max(Extent.y / 2u, 1u) };
+
+        const auto Create = [](RHI::FManagedTexture& Target, const FUIntVector2& Size, const char* Name)
         {
-            &RawIndirect, &RawDirect, &RawAlbedo, &Accum[0], &Accum[1],
-            &Moment[0], &Moment[1], &Scratch[0], &Scratch[1], &SceneTarget,
+            Target = RHI::Textures::Create(RHI::FTexture2DDesc
+            {
+                .Width = Size.x, .Height = Size.y, .Format = kSceneFormat,
+                .bRenderTarget = true, .DebugName = Name,
+            });
         };
 
-        for (RHI::FManagedTexture* Target : Full)
+        for (RHI::FManagedTexture* Target : { &RawDirect, &RawAlbedo, &SceneTarget, &History[0], &History[1] })
         {
-            *Target = RHI::Textures::Create(RHI::FTexture2DDesc
-            {
-                .Width = Extent.x, .Height = Extent.y, .Format = kSceneFormat,
-                .bRenderTarget = true, .DebugName = "Grain.Denoise",
-            });
+            Create(*Target, Extent, "Grain.Scene");
+        }
+
+        for (RHI::FManagedTexture* Target : { &GiRaw, &GiGeo, &Accum[0], &Accum[1],
+                                             &Moment[0], &Moment[1], &Scratch[0], &Scratch[1] })
+        {
+            Create(*Target, HalfExtent, "Grain.Bounce");
+        }
+
+        for (RHI::FManagedTexture* Target : { &Exposure[0], &Exposure[1] })
+        {
+            Create(*Target, FUIntVector2{ 1, 1 }, "Grain.Exposure");
         }
 
         BloomChain.Initialize(Extent, kBloomLevels, kSceneFormat, "Grain.Bloom");
 
         TargetExtent = Extent;
         bHasHistory = false;
+        bHasSceneHistory = false;
+        bHasExposure = false;
     }
 
-    void FRenderer::StepSim(RHI::FCmdListH CL, const FVoxelSim& Sim)
+    void FRenderer::QueueDestroy(const FDestroyRequest& Request)
+    {
+        if (PendingDestroyCount < kMaxDestroyPerFrame)
+        {
+            PendingDestroy[PendingDestroyCount++] = Request;
+        }
+    }
+
+    void FRenderer::StepSim(RHI::FCmdListH CL, const FVoxelSim& Sim, float DeltaTime)
     {
         if (!Sim.IsValid())
         {
             return;
         }
+
+        SimAccumulator += Math::Min(DeltaTime, 0.10f);
+        if (SimAccumulator < kSimTickSeconds)
+        {
+            return;
+        }
+
+        // One tick a frame at most, since catching up on a hitch would only make the next frame worse.
+        SimAccumulator = Math::Min(SimAccumulator - kSimTickSeconds, kSimTickSeconds);
 
         const FVector3 Source = Sim.GetSourceVoxels();
         const uint32 Parity = FrameIndex & 1u;
@@ -342,73 +479,131 @@ namespace Grain
         CoarseArgs.Control[2] = 0u;
         CoarseArgs.Control[3] = 0u;
 
-        RHI::CmdSetPipeline(CL, SimCoarsePipeline);
-        RHI::CmdDispatch(CL, RHI::CopyTransient(CoarseArgs),
-            uint32(kSimCoarseSide / 4), uint32(kSimCoarseSide / 4), uint32(kSimCoarseSide / 4));
-        RHI::CmdBarrier(CL,
-            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
-            RHI::EStageFlags::Compute | RHI::EStageFlags::PixelShader,
-            RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+        const RHI::GPUPtr CoarseBlock = RHI::CopyTransient(CoarseArgs);
+        constexpr uint32 kCoarseGroups = uint32(kSimCoarseSide) / 4u;
+
+        for (RHI::FPipelineH Pipeline : { SimCoarsePipeline, SimDilatePipeline })
+        {
+            RHI::CmdSetPipeline(CL, Pipeline);
+            RHI::CmdDispatch(CL, CoarseBlock, kCoarseGroups, kCoarseGroups, kCoarseGroups);
+            RHI::CmdBarrier(CL,
+                RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+                RHI::EStageFlags::Compute | RHI::EStageFlags::PixelShader,
+                RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+        }
 
         RHI::CmdEndMarker(CL);
     }
 
-    void FRenderer::RunDestroy(RHI::FCmdListH CL, const FVoxelWorld& World, const FVoxelSim& Sim,
-                               const FCamera& Camera)
+    void FRenderer::RunDestroy(RHI::FCmdListH CL, const FVoxelWorld& World, const FVoxelSim& Sim)
     {
-        if (PendingDestroy <= 0.0f)
+        if (PendingDestroyCount == 0)
         {
             return;
         }
 
-        const float Radius = PendingDestroy / kVoxelSize;
-        PendingDestroy = 0.0f;
-
-        const FVector3 Position = Camera.GetPosition();
-        const FVector3 Forward = Camera.Forward();
-
-        FDestroyArgs Args;
-        Args.Nodes     = World.GetNodeAddress();
-        Args.Masks     = World.GetMaskAddress();
-        Args.Prefix    = World.GetPrefixAddress();
-        Args.Children  = World.GetChildAddress();
-        Args.SimGrid   = Sim.GetGridAddress();
-        Args.SimCoarse = Sim.GetCoarseAddress();
-        Args.Pick      = PickBuffer.Gpu;
-
-        Args.Origin    = MakeVector4({ Position.x / kVoxelSize, Position.y / kVoxelSize, Position.z / kVoxelSize }, 0.0f);
-        Args.Direction = MakeVector4(Forward, 0.0f);
-        Args.SimOrigin = MakeVector4(Sim.GetOriginVoxels(), 0.0f);
-        Args.Params    = { Radius, 1400.0f, Sim.IsValid() ? 1.0f : 0.0f, 0.0f };
-
-        const RHI::GPUPtr Block = RHI::CopyTransient(Args);
-
         RHI::CmdBeginMarker(CL, "Grain.Destroy");
 
-        RHI::CmdSetPipeline(CL, PickPipeline);
-        RHI::CmdDispatch(CL, Block, 1, 1, 1);
-        RHI::CmdBarrier(CL,
-            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
-            RHI::EStageFlags::Compute,
-            RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+        for (int32 i = 0; i < PendingDestroyCount; ++i)
+        {
+            const FDestroyRequest& Request = PendingDestroy[i];
+            const float Radius = Request.Radius / kVoxelSize;
 
-        RHI::CmdSetPipeline(CL, DestroyPipeline);
-        RHI::CmdDispatch(CL, Block, 2, 2, 2);
-        RHI::CmdBarrier(CL,
-            RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
-            RHI::EStageFlags::Compute | RHI::EStageFlags::PixelShader,
-            RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+            // The dispatch has to cover the crater, so its half extent follows the radius in cells.
+            const int32 HalfCells = Math::Clamp(int32(Radius / 8.0f) + 1, 1, 16);
+            const uint32 Groups = uint32((HalfCells * 2 + 3) / 4);
+
+            FDestroyArgs Args;
+            Args.Nodes     = World.GetNodeAddress();
+            Args.Masks     = World.GetMaskAddress();
+            Args.Prefix    = World.GetPrefixAddress();
+            Args.Children  = World.GetChildAddress();
+            Args.SimGrid   = Sim.GetGridAddress();
+            Args.SimCoarse = Sim.GetCoarseAddress();
+            Args.Pick      = PickBuffer.Gpu;
+
+            const FVector3 Anchor = Request.bExplicit ? Request.Center : Request.Origin;
+            Args.Origin = MakeVector4({ Anchor.x / kVoxelSize, Anchor.y / kVoxelSize, Anchor.z / kVoxelSize },
+                                      Request.bExplicit ? 1.0f : 0.0f);
+            Args.Direction = MakeVector4(Request.Direction, 0.0f);
+            Args.SimOrigin = MakeVector4(Sim.GetOriginVoxels(), 0.0f);
+            Args.Params    = { Radius, Request.Reach / kVoxelSize, Sim.IsValid() ? 1.0f : 0.0f,
+                               float(HalfCells) };
+
+            const RHI::GPUPtr Block = RHI::CopyTransient(Args);
+
+            if (!Request.bExplicit)
+            {
+                RHI::CmdSetPipeline(CL, PickPipeline);
+                RHI::CmdDispatch(CL, Block, 1, 1, 1);
+                RHI::CmdBarrier(CL,
+                    RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+                    RHI::EStageFlags::Compute,
+                    RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+            }
+
+            RHI::CmdSetPipeline(CL, DestroyPipeline);
+            RHI::CmdDispatch(CL, Block, Groups, Groups, Groups);
+            RHI::CmdBarrier(CL,
+                RHI::EStageFlags::Compute, RHI::EAccessFlags::ShaderWrite,
+                RHI::EStageFlags::Compute | RHI::EStageFlags::PixelShader,
+                RHI::EAccessFlags::ShaderRead | RHI::EAccessFlags::ShaderWrite);
+        }
 
         RHI::CmdEndMarker(CL);
 
-        // The crater invalidates every accumulated pixel that saw the old surface.
-        bHasHistory = false;
+        PendingDestroyCount = 0;
+
+        // The reprojection test already rejects the pixels the crater moved, so only the rest settles.
+        SettleFrames = 14;
+    }
+
+    void FRenderer::FillViewArgs(FViewArgs& Args, const FUIntVector2& Extent, const FVoxelWorld& World,
+                                 const FVoxelSim& Sim, const FCamera& Camera, float RealTime) const
+    {
+        const FVector3 Position = Camera.GetPosition();
+        const float Aspect = float(Extent.x) / float(Math::Max(Extent.y, 1u));
+        const float TanHalfFov = Math::Tan(0.5f * kFieldOfView);
+
+        Args.Nodes    = World.GetNodeAddress();
+        Args.Masks    = World.GetMaskAddress();
+        Args.Prefix   = World.GetPrefixAddress();
+        Args.Children = World.GetChildAddress();
+        Args.Payload  = World.GetPayloadAddress();
+        Args.SimGrid   = Sim.GetGridAddress();
+        Args.SimCoarse = Sim.GetCoarseAddress();
+
+        Args.Entities   = EntityBuffer.Gpu;
+        Args.Models     = ModelDescBuffer.Gpu;
+        Args.ModelCells = ModelCellBuffer.Gpu;
+        Args.EntityCount = EntityCount;
+        Args.EntityBounds = EntityBounds;
+
+        Args.SimOrigin = MakeVector4(Sim.GetOriginVoxels(), 0.0f);
+
+        Args.CameraPos   = MakeVector4({ Position.x / kVoxelSize, Position.y / kVoxelSize,
+                                         Position.z / kVoxelSize }, TanHalfFov);
+        Args.CameraFwd   = MakeVector4(Camera.Forward(), Aspect);
+        Args.CameraRight = MakeVector4(Camera.Right(), RealTime);
+        Args.CameraUp    = MakeVector4(Camera.Up(), Sky.GiScale);
+
+        Args.SunDir    = MakeVector4(Sky.SunDir, Sky.SunIntensity);
+        Args.MoonDir   = MakeVector4(Sky.MoonDir, Sky.MoonIntensity);
+        Args.SunColor  = MakeVector4(Sky.SunColor, Sky.DayFactor);
+        Args.SkyZenith = MakeVector4(Sky.Zenith, Sky.Haze);
+        Args.SkyHorizon = MakeVector4(Sky.Horizon, Sky.CloudCover);
+        Args.SkyGround = MakeVector4(Sky.Ground, Sky.StarIntensity);
+
+        Args.FogParams = { Sky.FogDensity, Sky.FogFalloff, kSeaLevel, 1.0f };
+
+        Args.DebugMode = DebugMode;
+        Args.bSim      = Sim.IsValid() ? 1u : 0u;
     }
 
     void FRenderer::FillViewBasis(FDenoiseArgs& Args, const FUIntVector2& Extent, const FCamera& Camera) const
     {
         const float Aspect = float(Extent.x) / float(Math::Max(Extent.y, 1u));
-        const float TanHalfFov = Math::Tan(0.5f * 1.20f);
+        const float TanHalfFov = Math::Tan(0.5f * kFieldOfView);
 
         const FVector3 Position = Camera.GetPosition();
 
@@ -424,92 +619,93 @@ namespace Grain
         Args.PrevRight = MakeVector4(PrevRight, 0.0f);
         Args.PrevUp    = MakeVector4(PrevUp, 0.0f);
 
-        Args.SunDir = MakeVector4(Math::Normalize(FVector3{ 0.80f, 0.29f, -0.52f }), 0.0f);
+        Args.SunDir     = MakeVector4(Sky.SunDir, Sky.SunIntensity);
+        Args.FogParams  = { Sky.FogDensity, Sky.FogFalloff, kSeaLevel, 1.0f };
+        Args.SkyHorizon = MakeVector4(Sky.Horizon, Sky.CloudCover);
+        Args.SkyZenith  = MakeVector4(Sky.Zenith, Sky.Haze);
     }
 
     void FRenderer::DrawScene(RHI::FCmdListH CL, const FUIntVector2& Extent, const FVoxelWorld& World,
                               const FVoxelSim& Sim, const FCamera& Camera, float RealTime)
     {
-        const FVector3 Position = Camera.GetPosition();
-        const FVector3 Forward  = Camera.Forward();
-        const FVector3 Right    = Camera.Right();
-        const FVector3 Up       = Camera.Up();
-
-        const float Aspect = float(Extent.x) / float(Math::Max(Extent.y, 1u));
-        const float TanHalfFov = Math::Tan(0.5f * 1.20f);
-
-        const FVector3 SunDirection = Math::Normalize(FVector3{ 0.80f, 0.29f, -0.52f });
-
         FViewArgs Args;
-        Args.Nodes    = World.GetNodeAddress();
-        Args.Masks    = World.GetMaskAddress();
-        Args.Prefix   = World.GetPrefixAddress();
-        Args.Children = World.GetChildAddress();
-        Args.Payload  = World.GetPayloadAddress();
-        Args.SimGrid   = Sim.GetGridAddress();
-        Args.SimCoarse = Sim.GetCoarseAddress();
-
-        const FVector3 SimOrigin = Sim.GetOriginVoxels();
-        Args.SimOrigin = MakeVector4(SimOrigin, 0.0f);
-
-        Args.CameraPos   = MakeVector4(Position, TanHalfFov);
-        Args.CameraFwd   = MakeVector4(Forward, Aspect);
-        Args.CameraRight = MakeVector4(Right, RealTime);
-        Args.CameraUp    = MakeVector4(Up, 3.6f);
-        Args.SunDir      = MakeVector4(SunDirection, 1.0f);
-
+        FillViewArgs(Args, Extent, World, Sim, Camera, RealTime);
 
         // Voxels per pixel at unit distance, which is what drives the traversal's level of detail.
-        const float PixelScale = 2.0f * TanHalfFov / float(Math::Max(Extent.y, 1u));
+        const float PixelScale = 2.0f * Math::Tan(0.5f * kFieldOfView) / float(Math::Max(Extent.y, 1u));
         Args.Params = { float(Extent.x), float(Extent.y), float(FrameIndex), PixelScale };
+        Args.Jitter = { Jitter.x / float(Extent.x), Jitter.y / float(Extent.y), 0.0f, 0.0f };
 
-        Args.DebugMode = DebugMode;
-        Args.bSim      = Sim.IsValid() ? 1u : 0u;
-
-        const RHI::FTextureH Targets[] = { RawIndirect.Texture, RawDirect.Texture, RawAlbedo.Texture };
+        const RHI::FTextureH Targets[] = { RawDirect.Texture, RawAlbedo.Texture };
 
         RHI::CmdBeginMarker(CL, "Grain.Raymarch");
-        BeginMultiPass(CL, TSpan<const RHI::FTextureH>(Targets, 3), Extent);
+        BeginMultiPass(CL, TSpan<const RHI::FTextureH>(Targets, 2), Extent);
         RHI::Utils::DrawFullscreen(CL, RaymarchPipeline, RHI::CopyTransient(Args));
         RHI::Utils::EndScreenPass(CL);
         RHI::CmdEndMarker(CL);
         RHI::Barriers::RasterToRead(CL);
     }
 
-    void FRenderer::Accumulate(RHI::FCmdListH CL, const FUIntVector2& Extent, const FCamera& Camera, bool bMoved)
+    void FRenderer::DrawIndirect(RHI::FCmdListH CL, const FVoxelWorld& World, const FVoxelSim& Sim,
+                                 const FCamera& Camera, float RealTime)
     {
+        if (DebugMode != 0)
+        {
+            return;
+        }
+
+        FViewArgs Args;
+        FillViewArgs(Args, HalfExtent, World, Sim, Camera, RealTime);
+
+        const float PixelScale = 2.0f * Math::Tan(0.5f * kFieldOfView) / float(Math::Max(HalfExtent.y, 1u));
+        Args.Params = { float(HalfExtent.x), float(HalfExtent.y), float(FrameIndex), PixelScale };
+        Args.Jitter = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+        const RHI::FTextureH Targets[] = { GiRaw.Texture, GiGeo.Texture };
+
+        RHI::CmdBeginMarker(CL, "Grain.Bounce");
+        BeginMultiPass(CL, TSpan<const RHI::FTextureH>(Targets, 2), HalfExtent);
+        RHI::Utils::DrawFullscreen(CL, GiPipeline, RHI::CopyTransient(Args));
+        RHI::Utils::EndScreenPass(CL);
+        RHI::CmdEndMarker(CL);
+        RHI::Barriers::RasterToRead(CL);
+    }
+
+    void FRenderer::Accumulate(RHI::FCmdListH CL, const FCamera& Camera)
+    {
+        if (DebugMode != 0)
+        {
+            return;
+        }
+
         const int32 ReadIndex = WriteIndex ^ 1;
 
         FDenoiseArgs Args;
-        FillViewBasis(Args, Extent, Camera);
+        FillViewBasis(Args, HalfExtent, Camera);
 
-        Args.IDs[0] = RawIndirect.SampledSlot;
+        Args.IDs[0] = GiRaw.SampledSlot;
         Args.IDs[1] = Accum[ReadIndex].SampledSlot;
         Args.IDs[2] = Moment[ReadIndex].SampledSlot;
 
-        Args.Extra[0] = (bHasHistory && bTemporal && DebugMode == 0) ? 1u : 0u;
+        Args.Extra[0] = (bHasHistory && bTemporal) ? 1u : 0u;
 
-        // A moving camera keeps a shorter history, since reprojection error grows with motion.
-        const float MaxHistory = bMoved ? 12.0f : 48.0f;
-        Args.Params = { float(Extent.x), float(Extent.y), MaxHistory, 0.02f };
+        // A dig leaves light stale rather than missing, so the cap shortens for a moment instead of resetting.
+        const float MaxHistory = SettleFrames > 0 ? 6.0f : 48.0f;
+        Args.Params = { float(HalfExtent.x), float(HalfExtent.y), MaxHistory, 0.02f };
 
         const RHI::FTextureH Targets[] = { Accum[WriteIndex].Texture, Moment[WriteIndex].Texture };
 
         RHI::CmdBeginMarker(CL, "Grain.Temporal");
-        BeginMultiPass(CL, TSpan<const RHI::FTextureH>(Targets, 2), Extent);
+        BeginMultiPass(CL, TSpan<const RHI::FTextureH>(Targets, 2), HalfExtent);
         RHI::Utils::DrawFullscreen(CL, TemporalPipeline, RHI::CopyTransient(Args));
         RHI::Utils::EndScreenPass(CL);
         RHI::CmdEndMarker(CL);
         RHI::Barriers::RasterToRead(CL);
 
-        PrevPosition = Camera.GetPosition();
-        PrevForward  = Camera.Forward();
-        PrevRight    = Camera.Right();
-        PrevUp       = Camera.Up();
-        bHasHistory  = true;
+        bHasHistory = true;
     }
 
-    void FRenderer::FilterIndirect(RHI::FCmdListH CL, const FUIntVector2& Extent)
+    void FRenderer::FilterIndirect(RHI::FCmdListH CL)
     {
         FilterOutput = -1;
 
@@ -527,11 +723,10 @@ namespace Grain
 
             FDenoiseArgs Args;
             Args.IDs[0] = Pass == 0 ? Accum[WriteIndex].SampledSlot : Scratch[Output ^ 1].SampledSlot;
-            Args.IDs[1] = RawIndirect.SampledSlot;
-            Args.IDs[2] = RawDirect.SampledSlot;
-            Args.Params = { float(Extent.x), float(Extent.y), float(1 << Pass), 0.08f };
+            Args.IDs[1] = GiGeo.SampledSlot;
+            Args.Params = { float(HalfExtent.x), float(HalfExtent.y), float(1 << Pass), 0.08f };
 
-            RHI::Utils::BeginScreenPass(CL, { .Target = Scratch[Output].Texture, .Extent = Extent, });
+            RHI::Utils::BeginScreenPass(CL, { .Target = Scratch[Output].Texture, .Extent = HalfExtent, });
             RHI::Utils::DrawFullscreen(CL, AtrousPipeline, RHI::CopyTransient(Args));
             RHI::Utils::EndScreenPass(CL);
             RHI::Barriers::RasterToRead(CL);
@@ -550,9 +745,15 @@ namespace Grain
         Args.IDs[0] = RawDirect.SampledSlot;
         Args.IDs[1] = RawAlbedo.SampledSlot;
         Args.IDs[2] = FilterOutput >= 0 ? Scratch[FilterOutput].SampledSlot : Accum[WriteIndex].SampledSlot;
-        Args.IDs[3] = RawIndirect.SampledSlot;
+        Args.IDs[3] = GiGeo.SampledSlot;
 
         Args.Params = { float(Extent.x), float(Extent.y), 0.0f, 0.0f };
+
+        if (DebugMode != 0)
+        {
+            Args.FogParams.x = 0.0f;
+            Args.IDs[2] = RawDirect.SampledSlot;
+        }
 
         RHI::CmdBeginMarker(CL, "Grain.Compose");
         RHI::Utils::BeginScreenPass(CL, { .Target = SceneTarget.Texture, .Extent = Extent, });
@@ -562,6 +763,51 @@ namespace Grain
         RHI::Barriers::RasterToRead(CL);
     }
 
+    void FRenderer::Resolve(RHI::FCmdListH CL, const FUIntVector2& Extent, const FCamera& Camera)
+    {
+        const int32 ReadIndex = WriteIndex ^ 1;
+
+        FDenoiseArgs Args;
+        FillViewBasis(Args, Extent, Camera);
+
+        Args.IDs[0] = SceneTarget.SampledSlot;
+        Args.IDs[1] = History[ReadIndex].SampledSlot;
+
+        Args.Extra[0] = (bHasSceneHistory && bAntialias && DebugMode == 0) ? 1u : 0u;
+        Args.Params = { float(Extent.x), float(Extent.y), 0.0f, 0.0f };
+        Args.Misc = { 0.11f, 0.0f, 0.0f, 0.0f };
+
+        RHI::CmdBeginMarker(CL, "Grain.Resolve");
+        RHI::Utils::BeginScreenPass(CL, { .Target = History[WriteIndex].Texture, .Extent = Extent, });
+        RHI::Utils::DrawFullscreen(CL, TaaPipeline, RHI::CopyTransient(Args));
+        RHI::Utils::EndScreenPass(CL);
+        RHI::CmdEndMarker(CL);
+        RHI::Barriers::RasterToRead(CL);
+
+        bHasSceneHistory = true;
+    }
+
+    void FRenderer::Adapt(RHI::FCmdListH CL, float DeltaTime)
+    {
+        const int32 ReadIndex = WriteIndex ^ 1;
+
+        FDenoiseArgs Args;
+        Args.IDs[0] = History[WriteIndex].SampledSlot;
+        Args.IDs[1] = Exposure[ReadIndex].SampledSlot;
+        Args.Extra[0] = bHasExposure ? 1u : 0u;
+        Args.Misc = { 0.0f, Math::Min(DeltaTime, 0.25f), 0.0f, 0.0f };
+
+        RHI::CmdBeginMarker(CL, "Grain.Exposure");
+        RHI::Utils::BeginScreenPass(CL, { .Target = Exposure[WriteIndex].Texture,
+            .Extent = FUIntVector2{ 1, 1 } });
+        RHI::Utils::DrawFullscreen(CL, ExposurePipeline, RHI::CopyTransient(Args));
+        RHI::Utils::EndScreenPass(CL);
+        RHI::CmdEndMarker(CL);
+        RHI::Barriers::RasterToRead(CL);
+
+        bHasExposure = true;
+    }
+
     void FRenderer::DrawBloom(RHI::FCmdListH CL)
     {
         RHI::CmdBeginMarker(CL, "Grain.Bloom");
@@ -569,7 +815,7 @@ namespace Grain
         for (int32 Level = 0; Level < kBloomLevels; ++Level)
         {
             const uint32 SourceID = Level == 0
-                ? SceneTarget.SampledSlot
+                ? History[WriteIndex].SampledSlot
                 : BloomChain.SampledSlot(Level - 1);
 
             const FVector2 SourceTexel = Level == 0
@@ -581,7 +827,7 @@ namespace Grain
                 .SourceID        = SourceID,
                 .bFirstPass      = Level == 0 ? 1u : 0u,
                 .SourceTexelSize = SourceTexel,
-                .Threshold       = 1.30f,
+                .Threshold       = 1.15f,
                 .Radius          = 1.0f,
                 .Intensity       = 1.0f,
             };
@@ -620,12 +866,18 @@ namespace Grain
     {
         const FCompositeArgs Args
         {
-            .SceneID        = SceneTarget.SampledSlot,
+            .SceneID        = History[WriteIndex].SampledSlot,
             .BloomID        = BloomChain.SampledSlot(0),
+            .OverlayID      = OverlaySlot,
+            .ExposureID     = Exposure[WriteIndex].SampledSlot,
+            .Flags          = OverlaySlot != 0 ? 1u : 0u,
+            .BloomIntensity = 0.13f,
             .Resolution     = { float(Extent.x), float(Extent.y) },
-            .BloomIntensity = 0.11f,
-            .Exposure       = 1.25f,
+            .ExposureBias   = Sky.Exposure * Tint.ExposureScale,
             .Vignette       = 1.0f,
+            .Saturation     = Tint.Saturation,
+            .Contrast       = Tint.Contrast,
+            .Tint           = MakeVector4(Tint.Color, 0.0f),
         };
 
         RHI::CmdBeginMarker(CL, "Grain.Composite");
@@ -637,7 +889,7 @@ namespace Grain
 
     void FRenderer::Render(RHI::FCmdListH CL, RHI::FTextureH SwapImage, const FUIntVector2& Extent,
                            const FVoxelWorld& World, const FVoxelSim& Sim, const FCamera& Camera,
-                           float RealTime, bool bMoved)
+                           float RealTime, float DeltaTime)
     {
         if (Extent.x == 0 || Extent.y == 0 || !BloomChain.IsValid())
         {
@@ -651,26 +903,44 @@ namespace Grain
             RHI::CmdResetTimestamps(CL, TimerPool, 0, kTimerSlots);
         }
 
+        Jitter = bAntialias ? JitterFor(FrameIndex) : FVector2{ 0.0f, 0.0f };
+
         Mark(CL, 0);
-        StepSim(CL, Sim);
+        StepSim(CL, Sim, DeltaTime);
         Mark(CL, 1);
-        RunDestroy(CL, World, Sim, Camera);
+        RunDestroy(CL, World, Sim);
         Mark(CL, 2);
         DrawScene(CL, Extent, World, Sim, Camera, RealTime);
         Mark(CL, 3);
-        Accumulate(CL, Extent, Camera, bMoved);
+        DrawIndirect(CL, World, Sim, Camera, RealTime);
         Mark(CL, 4);
-        FilterIndirect(CL, Extent);
+        Accumulate(CL, Camera);
         Mark(CL, 5);
-        Compose(CL, Extent, Camera);
+        FilterIndirect(CL);
         Mark(CL, 6);
-        DrawBloom(CL);
+        Compose(CL, Extent, Camera);
         Mark(CL, 7);
-        DrawComposite(CL, SwapImage, Extent);
+        Resolve(CL, Extent, Camera);
         Mark(CL, 8);
+        Adapt(CL, DeltaTime);
+        Mark(CL, 9);
+        DrawBloom(CL);
+        Mark(CL, 10);
+        DrawComposite(CL, SwapImage, Extent);
+        Mark(CL, 11);
+
+        PrevPosition = Camera.GetPosition();
+        PrevForward  = Camera.Forward();
+        PrevRight    = Camera.Right();
+        PrevUp       = Camera.Up();
 
         WriteIndex ^= 1;
         ++FrameIndex;
+
+        if (SettleFrames > 0)
+        {
+            --SettleFrames;
+        }
     }
 
     void FRenderer::EnableGpuTimers()
@@ -719,7 +989,8 @@ namespace Grain
         LOG_INFO("  {:<12} {:6.3f} ms", "total", double(Ticks[kTimerSlots - 1] - Ticks[0]) * Scale);
     }
 
-    bool FRenderer::CaptureToFile(const FUIntVector2& Extent, const char* Path)
+    bool FRenderer::CaptureToFile(const FUIntVector2& Extent, const char* Path,
+                                  const TFunction<void(RHI::FCmdListH, RHI::FTextureH)>& DrawOverlay)
     {
         // The capture list barriers targets the in flight frame is still writing, so it drains first.
         RHI::WaitDeviceIdle();
@@ -745,6 +1016,11 @@ namespace Grain
         RHI::CmdSetTextureHeap(CL, RHI::GetGlobalHeap());
 
         DrawComposite(CL, Capture, Extent);
+
+        if (DrawOverlay)
+        {
+            DrawOverlay(CL, Capture);
+        }
 
         RHI::Barriers::RasterToRead(CL);
         RHI::CmdBarrier(CL,
@@ -793,9 +1069,11 @@ namespace Grain
     {
         ReleaseTargets();
 
-        for (RHI::FPipelineH Pipeline : { RaymarchPipeline, DownsamplePipeline, UpsamplePipeline,
-                                          CompositePipeline, TemporalPipeline, AtrousPipeline,
-                                          ComposePipeline, SimStepPipeline, SimCoarsePipeline,
+        for (RHI::FPipelineH Pipeline : { RaymarchPipeline, GiPipeline, DownsamplePipeline,
+                                          UpsamplePipeline, CompositePipeline, TemporalPipeline,
+                                          AtrousPipeline, ComposePipeline, TaaPipeline,
+                                          ExposurePipeline,
+                                          SimStepPipeline, SimCoarsePipeline, SimDilatePipeline,
                                           PickPipeline, DestroyPipeline })
         {
             if (RHI::IsValid(Pipeline))
@@ -809,10 +1087,14 @@ namespace Grain
             RHI::Retire(TimerPool);
         }
 
-        if (PickBuffer.Gpu != 0)
+        for (RHI::FGPUAllocation* Allocation : { &PickBuffer, &ModelDescBuffer, &ModelCellBuffer,
+                                                &EntityBuffer })
         {
-            RHI::Retire(PickBuffer);
-            PickBuffer = {};
+            if (Allocation->Gpu != 0)
+            {
+                RHI::Retire(*Allocation);
+                *Allocation = {};
+            }
         }
     }
 }

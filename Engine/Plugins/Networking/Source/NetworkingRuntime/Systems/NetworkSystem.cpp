@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "NetworkSystem.h"
 #include "World/ECS/Registry.h"
 
@@ -1034,8 +1034,15 @@ namespace Lumina
         }
     }
 
-    void SNetworkSystem::Update(const FSystemContext& Context) noexcept
+    void SNetworkSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest);
+    }
+
+    void SNetworkSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
         
         ECS::FRegistry& Registry = Context.GetRegistry();

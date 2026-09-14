@@ -2,113 +2,121 @@
 
 #include "World/ECS/Registry.h"
 
-
 #include "SystemContext.h"
 #include "SystemAccess.h"
-#include "Core/Engine/Engine.h"
+#include "Containers/FunctionRef.h"
+#include "Containers/HashTable.h"
+#include "Containers/Vector.h"
+#include "Core/Object/Object.h"
+#include "Core/Object/ObjectHandleTyped.h"
+#include "Core/Object/ObjectMacros.h"
 #include "Core/UpdateStage.h"
-
+#include "EntitySystem.generated.h"
 
 namespace Lumina
 {
+    class CWorld;
 
-    #define ENTITY_SYSTEM( ... )\
-    FUpdatePriorityList PriorityList = FUpdatePriorityList(__VA_ARGS__);
-    
-    using FSystemFn = void(*)(void* Self, const FSystemContext& Context);
-
-    namespace Meta
+    // One stage-scheduled worker over a world's component store, instanced once per world.
+    REFLECT(Scriptable)
+    class RUNTIME_API CEntitySystem : public CObject
     {
-        template<typename TSystem>
-        concept HasStartup = requires(TSystem Sys, const FSystemContext& Context)
-        {
-            { Sys.Startup(Context) } noexcept -> std::same_as<void>;
-        };
+        GENERATED_BODY()
 
-        template<typename TSystem>
-        concept HasUpdate = requires(TSystem Sys, const FSystemContext& Context)
-        {
-            { Sys.Update(Context) } noexcept -> std::same_as<void>;
-        };
-
-        template<typename TSystem>
-        concept HasTeardown = requires(TSystem Sys, const FSystemContext& Context)
-        {
-            { Sys.Teardown(Context) } noexcept -> std::same_as<void>;
-        };
-
-        template<typename TSystem>
-        concept IsSystem = HasStartup<TSystem> || HasUpdate<TSystem> || HasTeardown<TSystem>;
-
-        // Opt-in: a system declares `static inline FSystemAccess Access = ...;` to allow concurrent
-        // execution. Without it the system is treated as exclusive (serial).
-        template<typename TSystem>
-        concept HasAccess = requires { { TSystem::Access } -> std::convertible_to<const FSystemAccess&>; };
-    }
-
-    // One system resolved to raw function pointers once, so the per-frame dispatch is a direct call.
-    struct FNativeSystemDesc
-    {
-        FName               Name;
-        uint64              Hash = 0;
-        FUpdatePriorityList Priorities;
-        FSystemAccess       Access;
-        FSystemFn           Startup  = nullptr;
-        FSystemFn           Update   = nullptr;
-        FSystemFn           Teardown = nullptr;
-    };
-
-    // Process-wide table of native systems, populated by RegisterECSSystem<T>() during startup.
-    class FSystemRegistry
-    {
     public:
 
-        static RUNTIME_API FSystemRegistry& Get();
+        // Answered on the default object before an instance exists, so a system can decline a world.
+        FUNCTION()
+        virtual bool ShouldCreate() { return true; }
 
-        RUNTIME_API void Register(const FNativeSystemDesc& Desc);
-        const TVector<FNativeSystemDesc>& GetNativeSystems() const { return Systems; }
+        // Declares this system's stages and component access, before it is scheduled and before any startup.
+        FUNCTION()
+        virtual void Configure() {}
+
+        // Runs once when the world starts, after every system has been created and configured.
+        FUNCTION()
+        virtual void OnStartup() {}
+
+        // Runs every frame on each stage this system required, possibly on a worker thread.
+        FUNCTION()
+        virtual void OnUpdate() {}
+
+        // Runs once when the world tears down, or when this system is disabled.
+        FUNCTION()
+        virtual void OnTeardown() {}
+
+        // The owning world, valid from Configure onwards.
+        FUNCTION()
+        CWorld* GetWorld() const { return OwningWorld; }
+
+        // The tick context for the stage currently running. Only meaningful inside the callbacks above.
+        const FSystemContext& GetContext() const;
+
+        //~ Begin Configure declarations.
+
+        // Schedules this system in Stage. Lower priority runs first, so Highest is 0 and Low is 192.
+        FUNCTION()
+        void RequireUpdate(EUpdateStage Stage, int32 Priority = (int32)EUpdatePriority::Default);
+
+        void RequireUpdate(EUpdateStage Stage, EUpdatePriority Priority) { RequireUpdate(Stage, (int32)Priority); }
+
+        // Named rather than typed, so a script can declare access to a component it only knows by name.
+        FUNCTION()
+        void DeclareWrite(FName Component);
+
+        FUNCTION()
+        void DeclareRead(FName Component);
+
+        template<typename... Ts>
+        void Writes() { Access.Write<Ts...>(); }
+
+        template<typename... Ts>
+        void Reads() { Access.Read<Ts...>(); }
+
+        //~ End Configure declarations.
+
+        const FUpdatePriorityList& GetPriorities() const { return Priorities; }
+        const FSystemAccess& GetAccess() const { return Access; }
+
+        // Set by the driver before Configure runs.
+        void SetOwningWorld(CWorld* InWorld) { OwningWorld = InWorld; }
+
+        // Runs Configure and settles what it declared into the final access set.
+        void ConfigureSystem();
+
+        bool HasStarted() const { return bStarted; }
+        void MarkStarted() { bStarted = true; }
 
     private:
 
-        TVector<FNativeSystemDesc> Systems;
+        CWorld*             OwningWorld = nullptr;
+        FUpdatePriorityList Priorities;
+        FSystemAccess       Access;
+        bool                bStarted = false;
     };
 
-    namespace Meta
+    // Language agnostic like the world subsystem driver, so a C# system costs nothing beyond its class.
+    namespace EntitySystems
     {
-        template<typename TSystem>
-        void RegisterECSSystem()
-        {
-            FNativeSystemDesc Desc;
-            Desc.Name = FName(TSystem::StaticStruct()->GetName().c_str());
-            Desc.Hash = static_cast<uint64>(ECS::GetComponentTypeID<TSystem>());
+        // Creates and configures any system class not already instanced and not named in Disabled.
+        RUNTIME_API int32 CreateMissing(CWorld& World, const THashSet<FName>& Disabled, TVector<TObjectPtr<CEntitySystem>>& Out);
 
-            // Stateless system: a throwaway instance reads the in-class PriorityList initializer.
-            TSystem Temp{};
-            Desc.Priorities = Temp.PriorityList;
+        // Tears down the systems backed by a script class, so a hot reload can rebuild them.
+        RUNTIME_API void DropScripted(TVector<TObjectPtr<CEntitySystem>>& Systems);
 
-            if constexpr (HasAccess<TSystem>)
-            {
-                Desc.Access = TSystem::Access;
-            }
-            else
-            {
-                Desc.Access = FSystemAccess::Exclusive();
-            }
+        // Tears down the systems the editor just disabled.
+        RUNTIME_API void DropDisabled(const THashSet<FName>& Disabled, TVector<TObjectPtr<CEntitySystem>>& Systems);
 
-            if constexpr (HasStartup<TSystem>)
-            {
-                Desc.Startup = [](void*, const FSystemContext& Context) noexcept { TSystem::Startup(Context); };
-            }
-            if constexpr (HasUpdate<TSystem>)
-            {
-                Desc.Update = [](void*, const FSystemContext& Context) noexcept { TSystem::Update(Context); };
-            }
-            if constexpr (HasTeardown<TSystem>)
-            {
-                Desc.Teardown = [](void*, const FSystemContext& Context) noexcept { TSystem::Teardown(Context); };
-            }
+        // Runs OnStartup on every system that has not had it yet.
+        RUNTIME_API void StartupPending(TVector<TObjectPtr<CEntitySystem>>& Systems);
 
-            FSystemRegistry::Get().Register(Desc);
-        }
+        // Every system class in the process, for the editor's system list. Includes disabled ones.
+        RUNTIME_API void ForEachSystemClass(TFunctionRef<void(CClass*)> Visitor);
+
+        // Runs OnTeardown on each and empties the list.
+        RUNTIME_API void DestroyAll(TVector<TObjectPtr<CEntitySystem>>& Systems);
+
+        // The first system whose class derives from Class, or null.
+        RUNTIME_API CEntitySystem* Find(const TVector<TObjectPtr<CEntitySystem>>& Systems, const CClass* Class);
     }
 }

@@ -59,6 +59,19 @@ LUMINA_DOTNET_EXPORT(const void*, World_GetSystemContext)(uint64 World)
     return W ? &W->GetSystemContext() : nullptr;
 }
 
+// Resolved by class name, so a C# subsystem and a C++ one are found through exactly the same call.
+LUMINA_DOTNET_EXPORT(void*, World_GetSubsystem)(uint64 World, const char* ClassName, int32 NameLen)
+{
+    CWorld* W = AsWorld(World);
+    if (W == nullptr || ClassName == nullptr || NameLen <= 0)
+    {
+        return nullptr;
+    }
+
+    const CClass* Class = FindObject<CClass>(FName(FStringView(ClassName, (size_t)NameLen)));
+    return Class != nullptr ? W->GetSubsystem(Class) : nullptr;
+}
+
 LUMINA_DOTNET_EXPORT(int32, World_IsValidEntity)(uint64 World, uint32 Entity)
 {
     CWorld* W = AsWorld(World);

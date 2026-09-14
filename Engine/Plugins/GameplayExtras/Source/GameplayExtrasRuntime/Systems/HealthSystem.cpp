@@ -8,10 +8,15 @@
 namespace Lumina
 {
     // Heal broadcasts, and a listener may do anything, so this cannot claim a narrow component set.
-    FSystemAccess SHealthSystem::Access = FSystemAccess::Exclusive();
-
-    void SHealthSystem::Update(const FSystemContext& Context) noexcept
+    void SHealthSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Low);
+    }
+
+    void SHealthSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         if (Context.GetWorldType() == EWorldType::Editor)
         {
             return;

@@ -73,6 +73,24 @@ namespace Grain
         // Scans the cave band for an open pocket, so a screenshot can actually stand in one.
         NODISCARD bool FindCavePosition(FVector3& OutPosition) const;
 
+        //~ Collision reads the built tree rather than the generator, so a crater is solid on both sides.
+
+        NODISCARD bool IsSolidVoxel(int32 X, int32 Y, int32 Z) const;
+        NODISCARD uint8 MaterialAtVoxel(int32 X, int32 Y, int32 Z) const;
+
+        // Descends the tree so an empty subtree costs one bit test rather than a walk per voxel.
+        NODISCARD bool OverlapsBox(const int32 Min[3], const int32 Max[3]) const;
+
+        NODISCARD bool IsSolidAt(const FVector3& World) const
+        {
+            return IsSolidVoxel(int32(Math::Floor(World.x / kVoxelSize)),
+                                int32(Math::Floor(World.y / kVoxelSize)),
+                                int32(Math::Floor(World.z / kVoxelSize)));
+        }
+
+        // Mirrors what DestroyCS does on the GPU, so physics never disagrees with what is drawn.
+        void CarveSphere(const FVector3& Center, float Radius);
+
         // The simulation volume seeds itself from the same generator the tree was built from.
         NODISCARD uint32 SampleVoxelPublic(int32 X, int32 Y, int32 Z) const
         {
@@ -82,6 +100,12 @@ namespace Grain
         }
 
     private:
+
+        // Walks to the node owning a voxel, reporting the leaf and its origin when one exists.
+        NODISCARD bool FindLeafNode(int32 X, int32 Y, int32 Z, uint32& OutNode, int32 OutBase[3]) const;
+
+        NODISCARD bool NodeOverlaps(uint32 NodeIndex, const int32 NodeMin[3], int32 NodeSize,
+                                    const int32 Min[3], const int32 Max[3]) const;
 
         uint32 BuildNode(FBuildBuffer& Buffer, int32 Level, int32 BaseX, int32 BaseY, int32 BaseZ) const;
         uint32 BuildLeaf(FBuildBuffer& Buffer, int32 BaseX, int32 BaseY, int32 BaseZ) const;

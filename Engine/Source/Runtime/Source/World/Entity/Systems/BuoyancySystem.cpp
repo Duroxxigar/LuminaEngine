@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "BuoyancySystem.h"
 #include "World/ECS/Registry.h"
 #include "SystemContext.h"
@@ -10,12 +10,17 @@
 
 namespace Lumina
 {
-    FSystemAccess SBuoyancySystem::Access = FSystemAccess{}
-        .Read<SWaterComponent, STransformComponent, SBuoyancyComponent, SRigidBodyComponent>()
-        .Write<SystemResource::PhysicsQuery>();
-
-    void SBuoyancySystem::Startup(const FSystemContext& Context) noexcept
+    void SBuoyancySystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics);
+        Reads<SWaterComponent, STransformComponent, SBuoyancyComponent, SRigidBodyComponent>();
+        Writes<SystemResource::PhysicsQuery>();
+    }
+
+    void SBuoyancySystem::OnStartup()
+    {
+        const FSystemContext& Context = GetContext();
+
         (void)Context.CreateView<SWaterComponent, STransformComponent>();
     }
 
@@ -70,8 +75,10 @@ namespace Lumina
         return Math::Normalize(FVector3(-dHdx, 1.0f, -dHdz));
     }
 
-    void SBuoyancySystem::Update(const FSystemContext& Context) noexcept
+    void SBuoyancySystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         const float Time = (float)Context.GetTime();

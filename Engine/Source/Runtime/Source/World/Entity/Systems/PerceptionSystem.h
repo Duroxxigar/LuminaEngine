@@ -2,7 +2,6 @@
 
 #include "World/ECS/Registry.h"
 
-
 #include "EntitySystem.h"
 #include "Core/Object/ObjectMacros.h"
 #include "Core/Delegates/Delegate.h"
@@ -19,19 +18,19 @@ namespace Lumina
     // Runs every perceiver's senses each tick: a spatial-grid sight scan with FOV + line-of-sight (parallel),
     // event-driven hearing/damage, hysteresis + forgetting, and the perceived/lost events. PrePhysics, ahead
     // of PathFollow, so an AI can react and set a move target the same frame; bodies are stable for LoS rays.
-    REFLECT(System)
-    struct RUNTIME_API SPerceptionSystem
+    REFLECT()
+    class RUNTIME_API SPerceptionSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics, EUpdatePriority::High))
+    public:
 
-        static FSystemAccess Access;
+        void Configure() override;
 
         // Creates the per-world perception singleton once, serially at world init -- Update runs concurrently
         // with sibling systems, so it must never structurally mutate the shared registry context.
-        static void Startup(const FSystemContext& Context) noexcept;
+        void OnStartup() override;
 
-        static void Update(const FSystemContext& Context) noexcept;
+        void OnUpdate() override;
 
         static FOnPerceptionUpdated OnTargetPerceived;
         static FOnPerceptionUpdated OnTargetLost;

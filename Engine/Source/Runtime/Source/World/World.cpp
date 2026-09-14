@@ -64,6 +64,7 @@
 #include "Entity/Events/WorldEvents.h"
 #include "Physics/Physics.h"
 #include "Scene/RenderScene/RenderSceneFactory.h"
+#include "Core/Object/ScriptClass.h"
 #include "Scripting/DotNet/DotNetHost.h"
 #include "Scripting/EntityScript.h"
 #include "World/Entity/Components/LifetimeComponent.h"
@@ -143,12 +144,6 @@ namespace Lumina
         bool NetIsServerMode(ENetMode Mode)
         {
             return Mode == ENetMode::ListenServer || Mode == ENetMode::DedicatedServer;
-        }
-
-        // One shim forwards every managed tick to the right instance via the .NET host.
-        void ManagedSystemUpdate(void* Self, const FSystemContext& Ctx) noexcept
-        {
-            DotNet::TickManagedSystem(Self, &Ctx);
         }
     }
 
@@ -390,16 +385,8 @@ namespace Lumina
             PhysicsScene->Simulate();
         }
         
-        ForEachUniqueSystem([&](const FActiveSystem& System)
-        {
-            if (System.Startup)
-            {
-                System.Startup(System.Self, SystemContext);
-            }
-        });
-
         bSystemsStarted = true;
-        StartupManagedSystems();
+        StartupPendingSystems();
 
         EntityRegistry.GetSignals<FRelationshipComponent>().OnDestroy      .Connect<&ThisClass::OnRelationshipComponentDestroyed>(this);
         EntityRegistry.GetSignals<STransformComponent>().OnConstruct         .Connect<&ThisClass::OnTransformComponentConstruct>(this);
@@ -471,6 +458,9 @@ namespace Lumina
             bPaused = false;
         }
         
+        // Last, so a subsystem's OnInitialize sees a world whose registry, systems and renderer are up.
+        WorldSubsystems::CreateMissing(*this, Subsystems);
+
         bInitializing = false;
     }
     
@@ -478,6 +468,9 @@ namespace Lumina
     {
         // First, so every subscription the managed side drops still disconnects against a live world.
         DotNet::NotifyWorldTeardown(this);
+
+        // Before the systems and the registry go, so a subsystem can still read the world it leaves.
+        WorldSubsystems::DestroyAll(Subsystems);
 
         // No render phase / RHI / audio device in a headless process.
         if (!GIsHeadless)
@@ -492,16 +485,12 @@ namespace Lumina
 
         EntityRegistry.GetSignals<FRelationshipComponent>().OnDestroy.Disconnect<&ThisClass::OnRelationshipComponentDestroyed>(this);
 
-        ForEachUniqueSystem([&](const FActiveSystem& System)
+        EntitySystems::DestroyAll(Systems);
+        for (int32 i = 0; i < (int32)EUpdateStage::Max; ++i)
         {
-            if (System.Teardown)
-            {
-                System.Teardown(System.Self, SystemContext);
-            }
-        });
-
-        // Release this world's C# system instances (OnTeardown + GCHandle free).
-        DestroyManagedSystems();
+            SystemUpdateList[i].clear();
+            SystemBatches[i].clear();
+        }
 
         // Keyed on the scene, since StopSimulate is what disconnects its registry listeners.
         if (PhysicsScene != nullptr)
@@ -538,11 +527,16 @@ namespace Lumina
         // Applied between frames, so a mid-frame toggle never lands inside a running batch.
         ApplyPendingSystemChanges();
 
-        // Rebuild before any tick so the shared shim never dereferences a freed GCHandle.
+        // Rebuilt before any tick, so a retired script class is never the target of a virtual call.
         if (Stage == EUpdateStage::FrameStart && DotNet::IsInitialized()
-            && DotNet::GetScriptGeneration() != ManagedSystemGeneration)
+            && DotNet::GetScriptGeneration() != ScriptGeneration)
         {
+            EntitySystems::DropScripted(Systems);
             RegisterSystems();
+
+            // A reload retires the old script classes, so the scripted subsystems rebuild against the new ones.
+            WorldSubsystems::DropScripted(Subsystems);
+            WorldSubsystems::CreateMissing(*this, Subsystems);
         }
 
         if (Stage == EUpdateStage::FrameStart)
@@ -554,6 +548,12 @@ namespace Lumina
         if ((bPaused && Stage != EUpdateStage::Paused) || (!bPaused && Stage == EUpdateStage::Paused))
         {
             return;
+        }
+
+        // Ahead of the stage lists, so a system reads state a subsystem already settled this frame.
+        if (Stage == EUpdateStage::FrameStart)
+        {
+            WorldSubsystems::Update(Subsystems, (float)DeltaTime);
         }
 
         SystemContext.DeltaTime     = DeltaTime;
@@ -1530,11 +1530,6 @@ namespace Lumina
         return PIEWorld;
     }
 
-    const TVector<CWorld::FStageSlot>& CWorld::GetSystemsForUpdateStage(EUpdateStage Stage)
-    {
-        return SystemUpdateList[static_cast<uint32>(Stage)];
-    }
-
     void CWorld::OnRelationshipComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity)
     {
         Registry.GetSignals<FRelationshipComponent>().OnDestroy.Disconnect<&CWorld::OnRelationshipComponentDestroyed>(this);
@@ -1628,7 +1623,7 @@ namespace Lumina
                     bool bConflicts = false;
                     for (uint16 Member : Batches[b])
                     {
-                        if (FSystemAccess::Conflicts(Systems[s].Access, Systems[Member].Access))
+                        if (FSystemAccess::Conflicts(Systems[s].System->GetAccess(), Systems[Member].System->GetAccess()))
                         {
                             bConflicts = true;
                             break;
@@ -1652,87 +1647,34 @@ namespace Lumina
 
     void CWorld::RegisterSystems()
     {
-        DestroyManagedSystems();
+        ScriptGeneration = DotNet::IsInitialized() ? DotNet::GetScriptGeneration() : -1;
 
-        for (int i = 0; i < (int)EUpdateStage::Max; ++i)
+        EntitySystems::CreateMissing(*this, DisabledSystems, Systems);
+        RebuildSystemSchedule();
+        StartupPendingSystems();
+    }
+
+    void CWorld::RebuildSystemSchedule()
+    {
+        for (int32 i = 0; i < (int32)EUpdateStage::Max; ++i)
         {
             SystemUpdateList[i].clear();
         }
-        ActiveSystems.clear();
 
-        for (const FNativeSystemDesc& Desc : FSystemRegistry::Get().GetNativeSystems())
+        for (const TObjectPtr<CEntitySystem>& System : Systems)
         {
-            if (!Desc.Name.IsNone() && DisabledSystems.count(Desc.Name))
+            if (System == nullptr)
             {
                 continue;
             }
-            
-            bool bAnyStage = false;
+
+            const FUpdatePriorityList& Priorities = System->GetPriorities();
             for (uint8 i = 0; i < (uint8)EUpdateStage::Max; ++i)
             {
-                if (!Desc.Priorities.IsStageEnabled((EUpdateStage)i))
+                if (Priorities.IsStageEnabled((EUpdateStage)i))
                 {
-                    continue;
+                    SystemUpdateList[i].push_back(FStageSlot{ System, Priorities.GetPriorityForStage((EUpdateStage)i) });
                 }
-
-                bAnyStage = true;
-                if (Desc.Update != nullptr)
-                {
-                    SystemUpdateList[i].push_back(FStageSlot{ Desc.Update, nullptr, Desc.Access, Desc.Priorities.GetPriorityForStage((EUpdateStage)i), Desc.Name });
-                }
-            }
-
-            if (bAnyStage)
-            {
-                FActiveSystem& Active = ActiveSystems.emplace_back();
-                Active.Name     = Desc.Name;
-                Active.Hash     = Desc.Hash;
-                Active.Startup  = Desc.Startup;
-                Active.Teardown = Desc.Teardown;
-                Active.Self     = nullptr;
-            }
-        }
-        
-        ManagedSystemGeneration = DotNet::IsInitialized() ? DotNet::GetScriptGeneration() : -1;
-        if (DotNet::IsInitialized())
-        {
-            const int32 Generation = ManagedSystemGeneration;
-            TVector<DotNet::FManagedSystemDesc> Descs;
-            DotNet::GatherManagedSystemDescs(Descs);
-
-            for (const DotNet::FManagedSystemDesc& Desc : Descs)
-            {
-                if (Desc.Stage >= EUpdateStage::Max)
-                {
-                    continue;
-                }
-
-                void* Instance = DotNet::CreateManagedSystem(FStringView(Desc.TypeName.c_str(), Desc.TypeName.size()), reinterpret_cast<uint64>(this));
-                if (Instance == nullptr)
-                {
-                    continue;
-                }
-
-                FManagedSystem& Managed = ManagedSystems.emplace_back();
-                Managed.Instance   = Instance;
-                Managed.Stage      = Desc.Stage;
-                Managed.Priority   = Desc.Priority;
-                Managed.Generation = Generation;
-
-                // A C# system with no declared access stays exclusive, which is the safe default.
-                FSystemAccess Access;
-                if (Desc.Writes.empty() && Desc.Reads.empty())
-                {
-                    Access = FSystemAccess::Exclusive();
-                }
-                else
-                {
-                    Access.Writes = Desc.Writes;
-                    Access.Reads  = Desc.Reads;
-                }
-
-                SystemUpdateList[(int32)Desc.Stage].push_back(
-                    FStageSlot{ &ManagedSystemUpdate, Instance, Access, (uint8)Desc.Priority, FName(Desc.TypeName.c_str()) });
             }
         }
 
@@ -1748,24 +1690,13 @@ namespace Lumina
         {
             SystemBatches[i] = ComputeSystemBatches(SystemUpdateList[i]);
         }
-
-        StartupManagedSystems();
     }
 
-    void CWorld::StartupManagedSystems()
+    void CWorld::StartupPendingSystems()
     {
-        if (!bSystemsStarted)
+        if (bSystemsStarted)
         {
-            return;
-        }
-
-        for (FManagedSystem& Managed : ManagedSystems)
-        {
-            if (Managed.Instance != nullptr && !Managed.bStarted)
-            {
-                Managed.bStarted = true;
-                DotNet::StartupManagedSystem(Managed.Instance, &SystemContext);
-            }
+            EntitySystems::StartupPending(Systems);
         }
     }
 
@@ -1775,46 +1706,28 @@ namespace Lumina
         Out.clear();
         for (uint8 s = 0; s < (uint8)EUpdateStage::Max; ++s)
         {
-            const TVector<FStageSlot>& Systems = SystemUpdateList[s];
+            const TVector<FStageSlot>& Stage = SystemUpdateList[s];
             const TVector<TVector<uint16>>& Batches = SystemBatches[s];
             for (uint8 b = 0; b < (uint8)Batches.size(); ++b)
             {
                 for (uint16 Index : Batches[b])
                 {
-                    const FStageSlot& Slot = Systems[Index];
+                    const CEntitySystem* System = Stage[Index].System;
+                    const FSystemAccess& Access = System->GetAccess();
+
                     FSystemScheduleEntry& Entry = Out.emplace_back();
-                    Entry.Name       = Slot.Name;
+                    Entry.Name       = System->GetClass()->GetName();
                     Entry.Stage      = (uint8)s;
-                    Entry.Priority   = Slot.StagePriority;
+                    Entry.Priority   = Stage[Index].StagePriority;
                     Entry.Batch      = b;
                     Entry.BatchSize  = (uint8)Batches[b].size();
-                    Entry.bExclusive = Slot.Access.bExclusive;
-                    Entry.bManaged   = Slot.Name.IsNone();
-                    Entry.Writes     = Slot.Access.Writes;
-                    Entry.Reads      = Slot.Access.Reads;
+                    Entry.bExclusive = Access.bExclusive;
+                    Entry.bManaged   = Cast<CScriptClass>(System->GetClass()) != nullptr;
+                    Entry.Writes     = Access.Writes;
+                    Entry.Reads      = Access.Reads;
                 }
             }
         }
-    }
-
-    void CWorld::DestroyManagedSystems()
-    {
-        if (ManagedSystems.empty())
-        {
-            return;
-        }
-
-        // A stale-generation instance must be DROPPED, not destroyed, since its handle was freed.
-        const int32 Generation = DotNet::IsInitialized() ? DotNet::GetScriptGeneration() : -1;
-        for (FManagedSystem& Managed : ManagedSystems)
-        {
-            if (Managed.Instance != nullptr && Managed.Generation == Generation)
-            {
-                DotNet::DestroyManagedSystem(Managed.Instance);
-            }
-            Managed.Instance = nullptr;
-        }
-        ManagedSystems.clear();
     }
 
     void CWorld::ApplyPendingSystemChanges()
@@ -1831,64 +1744,41 @@ namespace Lumina
             return;
         }
 
-        // Snapshot the currently-active unique systems so we can tell which are newly removed/added.
-        THashSet<uint64> BeforeHashes;
-        ForEachUniqueSystem([&](const FActiveSystem& System)
-        {
-            BeforeHashes.insert(System.Hash);
-        });
-
-        // Teardown native systems about to be disabled while their entries are still live (before rebuild).
-        ForEachUniqueSystem([&](const FActiveSystem& System)
-        {
-            if (!System.Name.IsNone() && PendingDisabledSystems.count(System.Name) && !DisabledSystems.count(System.Name))
-            {
-                if (System.Teardown)
-                {
-                    System.Teardown(System.Self, SystemContext);
-                }
-            }
-        });
-
         DisabledSystems = PendingDisabledSystems;
-        RegisterSystems();
 
-        // Startup systems that are newly present (were not active before the rebuild).
-        ForEachUniqueSystem([&](const FActiveSystem& System)
-        {
-            if (BeforeHashes.count(System.Hash) == 0)
-            {
-                if (System.Startup)
-                {
-                    System.Startup(System.Self, SystemContext);
-                }
-            }
-        });
+        // Torn down before the rebuild, so a disabled system still sees a schedule it belongs to.
+        EntitySystems::DropDisabled(DisabledSystems, Systems);
+
+        // Creates whatever was just re-enabled and starts only what has not started yet.
+        RegisterSystems();
     }
 
     void CWorld::GetAllSystems(TVector<FSystemInfo>& Out) const
     {
         Out.clear();
 
-        for (const FNativeSystemDesc& Desc : FSystemRegistry::Get().GetNativeSystems())
+        // Read off the default object, so a disabled system still reports the stages it would tick in.
+        EntitySystems::ForEachSystemClass([&](CClass* Class)
         {
-            if (Desc.Name.IsNone())
+            CEntitySystem* Defaults = Class->GetDefaultObject<CEntitySystem>();
+            if (Defaults == nullptr || !Defaults->ShouldCreate())
             {
-                continue;
+                return;
             }
+            Defaults->ConfigureSystem();
 
             FSystemInfo& Info = Out.emplace_back();
-            Info.Name     = Desc.Name;
+            Info.Name     = Class->GetName();
             Info.bEnabled = PendingDisabledSystems.count(Info.Name) == 0;
 
             for (uint8 i = 0; i < (uint8)EUpdateStage::Max; ++i)
             {
-                if (Desc.Priorities.IsStageEnabled((EUpdateStage)i))
+                if (Defaults->GetPriorities().IsStageEnabled((EUpdateStage)i))
                 {
                     Info.Stages.push_back((EUpdateStage)i);
                 }
             }
-        }
+        });
     }
 
     bool CWorld::IsSystemEnabled(FName System) const
@@ -2191,12 +2081,12 @@ namespace Lumina
     {
         LUMINA_PROFILE_SCOPE();
 
-        TVector<FStageSlot>& Systems = SystemUpdateList[(uint32)Context.GetUpdateStage()];
+        TVector<FStageSlot>& Stage = SystemUpdateList[(uint32)Context.GetUpdateStage()];
         
         auto RunOne = [&](FStageSlot& S)
         {
-            SetExecutingSystemAccess(&S.Access);
-            S.Update(S.Self, Context);
+            SetExecutingSystemAccess(&S.System->GetAccess());
+            S.System->OnUpdate();
             SetExecutingSystemAccess(nullptr);
         };
         
@@ -2210,14 +2100,14 @@ namespace Lumina
 
             if (Batch.size() == 1)
             {
-                RunOne(Systems[Batch[0]]);
+                RunOne(Stage[Batch[0]]);
             }
             else
             {
                 // Create every declared pool before going wide, since view() writes the shared pool map.
                 for (uint16 Index : Batch)
                 {
-                    for (void (*Assure)(ECS::FRegistry&) : Systems[Index].Access.PoolAssurers)
+                    for (void (*Assure)(ECS::FRegistry&) : Stage[Index].System->GetAccess().PoolAssurers)
                     {
                         Assure(EntityRegistry);
                     }
@@ -2225,8 +2115,8 @@ namespace Lumina
 
                 Task::ParallelFor(static_cast<uint32>(Batch.size()), [&](uint32 Index)
                 {
-                    DEBUG_ASSERT(!Systems[Batch[Index]].Access.bExclusive); // batched implies not exclusive
-                    RunOne(Systems[Batch[Index]]);
+                    DEBUG_ASSERT(!Stage[Batch[Index]].System->GetAccess().bExclusive); // batched implies not exclusive
+                    RunOne(Stage[Batch[Index]]);
                 }, 1);
             }
         }

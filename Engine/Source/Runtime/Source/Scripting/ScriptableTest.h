@@ -3,6 +3,9 @@
 #include "Containers/Name.h"
 #include "Core/Object/Object.h"
 #include "Scripting/EntityScript.h"
+#include "World/Entity/Components/TransformComponent.h"
+#include "World/Entity/Systems/EntitySystem.h"
+#include "World/Subsystems/WorldSubsystem.h"
 #include "ScriptableTest.generated.h"
 
 namespace Lumina
@@ -65,5 +68,82 @@ namespace Lumina
         int32 FixedUpdateCount = 0;
         int32 DetachCount = 0;
         float AccumulatedTime = 0.0f;
+    };
+
+    // Throwaway world subsystem, gated off so discovery never puts one in a real world. The test flips the
+    // gate to prove CreateMissing honors ShouldCreate and runs the lifecycle in order.
+    REFLECT()
+    class RUNTIME_API CWorldSubsystemTest : public CWorldSubsystem
+    {
+        GENERATED_BODY()
+    public:
+
+        bool ShouldCreate() override { return bAllowCreation; }
+
+        void OnInitialize() override  { ++InitializeCount; }
+        void OnWorldReady() override  { ++ReadyCount; bReadySawInitialize = InitializeCount > 0; }
+        void OnUpdate(float Dt) override { ++UpdateCount; AccumulatedTime += Dt; }
+        void OnTeardown() override    { ++TeardownCount; }
+
+        static inline bool bAllowCreation = false;
+
+        int32 InitializeCount = 0;
+        int32 ReadyCount = 0;
+        int32 UpdateCount = 0;
+        int32 TeardownCount = 0;
+        float AccumulatedTime = 0.0f;
+        bool  bReadySawInitialize = false;
+    };
+
+    // Never created, so a test can prove a declining class is skipped in the same pass that creates another.
+    REFLECT()
+    class RUNTIME_API CWorldSubsystemDeclineTest : public CWorldSubsystem
+    {
+        GENERATED_BODY()
+    public:
+
+        bool ShouldCreate() override { return false; }
+    };
+
+    // Throwaway entity system, gated off so discovery never puts one in a real world.
+    REFLECT()
+    class RUNTIME_API CEntitySystemTest : public CEntitySystem
+    {
+        GENERATED_BODY()
+    public:
+
+        static inline bool bAllowCreation = false;
+
+        bool ShouldCreate() override { return bAllowCreation; }
+
+        void Configure() override
+        {
+            ++ConfigureCount;
+            RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::High);
+            RequireUpdate(EUpdateStage::FrameEnd);
+            Writes<STransformComponent>();
+            DeclareRead("SStaticMeshComponent");
+        }
+
+        void OnStartup() override  { ++StartupCount; }
+        void OnUpdate() override   { ++UpdateCount; }
+        void OnTeardown() override { ++TeardownCount; }
+
+        int32 ConfigureCount = 0;
+        int32 StartupCount = 0;
+        int32 UpdateCount = 0;
+        int32 TeardownCount = 0;
+    };
+
+    // Declares no access, so a test can prove the driver falls back to running it alone.
+    REFLECT()
+    class RUNTIME_API CEntitySystemExclusiveTest : public CEntitySystem
+    {
+        GENERATED_BODY()
+    public:
+
+        bool ShouldCreate() override { return CEntitySystemTest::bAllowCreation; }
+
+        void Configure() override { RequireUpdate(EUpdateStage::FrameStart); }
     };
 }

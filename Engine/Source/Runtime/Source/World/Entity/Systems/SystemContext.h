@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "World/ECS/Registry.h"
 #include "World/ECS/EventDispatcher.h"
@@ -29,7 +29,6 @@ namespace Lumina
     struct FSystemContext : INonCopyable
     {
         friend class CWorld;
-        friend struct SScriptSystem;
         
         FSystemContext(CWorld* InWorld);
         ~FSystemContext() = default;

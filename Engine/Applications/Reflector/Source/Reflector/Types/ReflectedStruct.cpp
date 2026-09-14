@@ -1,4 +1,4 @@
-﻿#include "ReflectedType.h"
+#include "ReflectedType.h"
 
 #include "Reflector/CodeGeneration/CodeWriter.h"
 #include "Reflector/CodeGeneration/ReflectionNames.h"
@@ -209,10 +209,6 @@ namespace Lumina::Reflection
                 if (Data.Key == "Component")
                 {
                     Writer.Linef("::Lumina::Meta::RegisterComponentMeta<%s>();", Struct.EmittedCppQualifiedName().c_str());
-                }
-                else if (Data.Key == "System")
-                {
-                    Writer.Linef("::Lumina::Meta::RegisterECSSystem<%s>();", Struct.EmittedCppQualifiedName().c_str());
                 }
             }
         }

@@ -83,6 +83,14 @@ namespace Lumina
     {
         if (ClassDefaultObject == nullptr)
         {
+            // A bare StaticClass() call hands back a class whose properties the deferred pass has not
+            // attached yet, and CreateDefaultObject links it, so the empty layout would latch for good.
+            SettleDeferredRegistrations();
+        }
+
+        // Re-checked, since settling the pass builds this class's own default object on the way past.
+        if (ClassDefaultObject == nullptr)
+        {
             CClass* MutableThis = const_cast<CClass*>(this);
             MutableThis->CreateDefaultObject();
         }
@@ -120,7 +128,7 @@ namespace Lumina
     CObject* CClass::CreateDefaultObject()
     {
         DEBUG_ASSERT(ClassDefaultObject == nullptr);
-        
+
         Link();
         
         FString DefaultObjectName = GetName().c_str();

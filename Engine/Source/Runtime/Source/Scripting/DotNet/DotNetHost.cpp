@@ -3,7 +3,6 @@
 #include "Scripting/ManagedTypeRegistry.h"
 #include "Scripting/ScriptSchemaCodec.h"
 #include "World/ECS/Registry.h"
-#include "ManagedRenderScene.h"
 
 #include "Platform/Filesystem/PlatformFilesystem.h"
 #include <fstream>

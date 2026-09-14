@@ -1,20 +1,17 @@
-﻿#pragma once
+#pragma once
 
 #include "Scripting/ManagedTypeRegistry.h"
 
 #include "Containers/Vector.h"
 #include "Containers/String.h"
 #include "Platform/GenericPlatform.h"
-#include "Core/UpdateStage.h"
 
 namespace Lumina
 {
-    struct FSystemContext;
     struct FInputActionState;
     class CObject;
     class CScriptStruct;
     class CWorld;
-    enum class EUpdateStage : uint8;
     namespace Scripting { struct FScriptExportSchema; struct FScriptPropertyEntry; struct FScriptButton; }
 }
 
@@ -27,8 +24,8 @@ namespace Lumina::DotNet
     // v5: native->managed exports resolved by name (ResolveManagedExport) instead of a mirrored struct/hash.
     // v6: managed system-descriptor sink carries declared read/write component-ops tokens (parallel C# systems).
     // v7: delegate properties replace hardcoded collision/perception dispatch; adds OnNativeDelegateDestroyed.
-    // v8: managed RenderScene bridge (C# world renderers via RenderSceneFactory).
-    inline constexpr int32 GAbiVersion = 11;
+    // v13 dropped the C# entity system bridge, since a C# system is now a CEntitySystem subclass.
+    inline constexpr int32 GAbiVersion = 13;
 
     // Boots the embedded runtime and runs the managed handshake.
     RUNTIME_API void Initialize();
@@ -229,50 +226,6 @@ namespace Lumina::DotNet
     /** Runs a script type's declared [Property] initializers into its class default object. Once per type at
      *  mint, after the CDO exists; every instance is then copied from it. */
     RUNTIME_API void ApplyScriptableDefaults(FStringView TypeName, void* DefaultObject);
-
-    struct FManagedSystemDesc
-    {
-        FString         TypeName;
-        EUpdateStage    Stage = EUpdateStage::PrePhysics;
-        int32           Priority = 128;
-        TVector<uint32> Writes;   // Component type ids written (empty => exclusive system)
-        TVector<uint32> Reads;    // Component type ids read
-    };
-
-    RUNTIME_API void GatherManagedSystemDescs(TVector<FManagedSystemDesc>& Out);
-
-
-    RUNTIME_API void* CreateManagedSystem(FStringView TypeName, uint64 World);
-
-    RUNTIME_API void StartupManagedSystem(void* Handle, const FSystemContext* Context);
-
-    RUNTIME_API void DestroyManagedSystem(void* Handle);
-
-    RUNTIME_API void TickManagedSystem(void* Handle, const FSystemContext* Context);
-
-    //~ Managed RenderScene bridge: a C# subclass of LuminaSharp's RenderScene drives a world's rendering
-    //  through the FManagedRenderScene proxy (see ManagedRenderScene.h). Create runs the managed ctor +
-    //  OnInit; Destroy runs OnShutdown and frees the GCHandle. Extract/GetExtent run on the game thread,
-    //  Render/GetDisplayTexture during the render phase (the CLR attaches threads on demand).
-
-    RUNTIME_API void GatherManagedRenderSceneTypes(TVector<FString>& Out);
-
-    RUNTIME_API void* CreateManagedRenderScene(FStringView TypeName, uint64 World);
-
-    RUNTIME_API void DestroyManagedRenderScene(void* Handle);
-
-    // View is a const FManagedSceneView* (blittable camera snapshot, see ManagedRenderScene.h).
-    RUNTIME_API void ManagedRenderSceneExtract(void* Handle, const void* View);
-
-    RUNTIME_API void ManagedRenderSceneRender(void* Handle, int32 FrameIndex);
-
-    RUNTIME_API void ManagedRenderSceneResize(void* Handle, uint32 Width, uint32 Height);
-
-    RUNTIME_API uint64 ManagedRenderSceneGetDisplayTexture(void* Handle);
-
-    RUNTIME_API uint32 ManagedRenderSceneGetDisplayResourceID(void* Handle);
-
-    RUNTIME_API void ManagedRenderSceneGetExtent(void* Handle, uint32* OutWidth, uint32* OutHeight);
 
     // Feeds a script's InputAction / InputAxis bindings this frame's evaluated action states. No-op for a
     // C++ script, which has no managed instance. States points into the owning FInputContext.

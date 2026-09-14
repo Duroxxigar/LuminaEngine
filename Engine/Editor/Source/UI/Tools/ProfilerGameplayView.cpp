@@ -1,4 +1,4 @@
-﻿#include "ProfilerEditorTool.h"
+#include "ProfilerEditorTool.h"
 #include "ProfilerViewCommon.h"
 
 #include <cfloat>
@@ -117,15 +117,11 @@ namespace Lumina
                 return AccessList(Shared);
             }
 
-            FString SystemLabel(const FSystemScheduleEntry& Entry, int32 Index)
+            // Decorated for display only; the profiler stat is keyed on the undecorated class name.
+            FString SystemLabel(const FSystemScheduleEntry& Entry)
             {
-                if (!Entry.bManaged)
-                {
-                    return Entry.Name.ToString();
-                }
-                char Buffer[48] = {};
-                snprintf(Buffer, sizeof(Buffer), LE_ICON_LANGUAGE_CSHARP " C# system %d", Index);
-                return FString(Buffer);
+                const FString Name = Entry.Name.ToString();
+                return Entry.bManaged ? FString(LE_ICON_LANGUAGE_CSHARP " ") + Name : Name;
             }
 
             // Measured with the font and size it will be drawn at, so boxes stay clean at any zoom.
@@ -615,8 +611,8 @@ namespace Lumina
             const float BodyMaxW  = NodeW - InnerPad * 2.0f;
             float TextY = Min.y + PadY;
 
-            const FString Label = InsightsDetail::SystemLabel(Entry, Index);
-            const FGameplayProfileEntry* Stat = Entry.bManaged ? nullptr : FindStat(Label.c_str());
+            const FString Label = InsightsDetail::SystemLabel(Entry);
+            const FGameplayProfileEntry* Stat = FindStat(Entry.Name.ToString().c_str());
 
             // Measured first so the title can reserve room instead of running underneath it.
             char Badge[40] = {};
@@ -714,11 +710,6 @@ namespace Lumina
                     ImGui::Separator();
                     ImGui::TextColored(EditorColors::TextDim(), "%.3f ms over %d call%s", Stat->InclusiveMs,
                                        (int32)Stat->Calls, Stat->Calls == 1 ? "" : "s");
-                }
-                if (Entry.bManaged)
-                {
-                    ImGui::Separator();
-                    ImGui::TextColored(EditorColors::TextMuted(), "C# systems schedule without a native name; find this one\nby its type name in the Stats tab.");
                 }
                 ImGui::EndTooltip();
             }
@@ -888,7 +879,7 @@ namespace Lumina
         }
 
         const FSystemScheduleEntry& Entry = Schedule[Selection];
-        const FString Label     = InsightsDetail::SystemLabel(Entry, Selection);
+        const FString Label     = InsightsDetail::SystemLabel(Entry);
         const ImVec4  StageTint = InsightsDetail::StageColor(Entry.Stage);
 
         ImGui::PushStyleColor(ImGuiCol_Text, StageTint);
@@ -980,7 +971,7 @@ namespace Lumina
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
                     ImGui::PushID(Index);
-                    if (ImGui::Selectable(InsightsDetail::SystemLabel(Other, Index).c_str(), false, ImGuiSelectableFlags_SpanAllColumns))
+                    if (ImGui::Selectable(InsightsDetail::SystemLabel(Other).c_str(), false, ImGuiSelectableFlags_SpanAllColumns))
                     {
                         SelectedIndex = Index;
                         SelectedName  = Other.Name;
@@ -1007,7 +998,7 @@ namespace Lumina
             }
         }
 
-        if (const FGameplayProfileEntry* Stat = Entry.bManaged ? nullptr : FindStat(Label.c_str()))
+        if (const FGameplayProfileEntry* Stat = FindStat(Entry.Name.ToString().c_str()))
         {
             ImGui::Spacing();
             ImGui::SeparatorText("Timing (last frame)");

@@ -3,13 +3,7 @@ using Lumina;
 
 namespace LuminaSharp;
 
-/// <summary>
-/// The per-tick context handed to an <see cref="EntitySystem"/>, wrapping the native
-/// <c>const FSystemContext*</c> as an <see cref="IntPtr"/>. The native stage scheduler passes the
-/// pointer through the shared system shim each frame; it is only valid for the duration of the OnUpdate
-/// call. Every member is a <c>[NativeCall] partial</c> forwarding to a flat <c>LuminaSharp_SystemContext_*</c>
-/// shim in the Runtime module (DotNetGameplay.cpp), with the context Handle passed first.
-/// </summary>
+// The native FSystemContext an EntitySystem reads from its world, restamped each stage.
 public readonly unsafe partial struct SystemContext
 {
     internal readonly IntPtr Handle;
@@ -28,6 +22,11 @@ public readonly unsafe partial struct SystemContext
 
     // The world's component store, mirroring C++ ECS::FRegistry. Author typed views with Registry.View.
     public EntityRegistry Registry => new(World);
+
+    // The world this system ticks in, so a system reaches the same subsystems a script does.
+    public CWorld? OwningWorld => World == 0 ? null : Wrapper<CWorld>.ForObject((IntPtr)World);
+
+    public T? GetSubsystem<T>() where T : NativeObject => OwningWorld?.GetSubsystem<T>();
 
     /// <summary>Seconds since the previous frame.</summary>
     public float DeltaTime => GetDeltaTime();

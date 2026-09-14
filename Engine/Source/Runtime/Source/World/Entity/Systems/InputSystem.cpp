@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "InputSystem.h"
 #include "World/ECS/Registry.h"
 #include "World/Entity/Components/InputComponent.h"
@@ -10,10 +10,15 @@
 namespace Lumina
 {
     // Exclusive like STimerSystem, since dispatch runs user script code and calls into managed.
-    FSystemAccess SInputSystem::Access = FSystemAccess::Exclusive();
-
-    void SInputSystem::Update(const FSystemContext& Context) noexcept
+    void SInputSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest);
+    }
+
+    void SInputSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = Context.GetRegistry();
