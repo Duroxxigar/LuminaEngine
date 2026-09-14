@@ -641,7 +641,9 @@ namespace Grain::Shaders
         float SkyVisibility(FScene S, float3 Point, float3 Normal)
         {
             const float3 Up = normalize(Normal + float3(0.0, 2.2, 0.0));
-            return MarchOccluded(S, Point + Normal * 0.14, Up, 64.0, 18, 0.075) ? 0.0 : 1.0;
+
+            // A small floor, so a fresh pit reads as a hole rather than a hole in the render.
+            return MarchOccluded(S, Point + Normal * 0.14, Up, 64.0, 18, 0.075) ? 0.10 : 1.0;
         }
 
         // A secondary hit never traces its own bounce, so reflections and the light cache stay cheap.
