@@ -3,6 +3,7 @@
 #include "Containers/Name.h"
 #include "Core/Object/Object.h"
 #include "Scripting/EntityScript.h"
+#include "World/Subsystems/WorldSubsystem.h"
 #include "ScriptableTest.generated.h"
 
 namespace Lumina
@@ -65,5 +66,40 @@ namespace Lumina
         int32 FixedUpdateCount = 0;
         int32 DetachCount = 0;
         float AccumulatedTime = 0.0f;
+    };
+
+    // Throwaway world subsystem, gated off so discovery never puts one in a real world. The test flips the
+    // gate to prove CreateMissing honors ShouldCreate and runs the lifecycle in order.
+    REFLECT()
+    class RUNTIME_API CWorldSubsystemTest : public CWorldSubsystem
+    {
+        GENERATED_BODY()
+    public:
+
+        bool ShouldCreate() override { return bAllowCreation; }
+
+        void OnInitialize() override  { ++InitializeCount; }
+        void OnWorldReady() override  { ++ReadyCount; bReadySawInitialize = InitializeCount > 0; }
+        void OnUpdate(float Dt) override { ++UpdateCount; AccumulatedTime += Dt; }
+        void OnTeardown() override    { ++TeardownCount; }
+
+        static inline bool bAllowCreation = false;
+
+        int32 InitializeCount = 0;
+        int32 ReadyCount = 0;
+        int32 UpdateCount = 0;
+        int32 TeardownCount = 0;
+        float AccumulatedTime = 0.0f;
+        bool  bReadySawInitialize = false;
+    };
+
+    // Never created, so a test can prove a declining class is skipped in the same pass that creates another.
+    REFLECT()
+    class RUNTIME_API CWorldSubsystemDeclineTest : public CWorldSubsystem
+    {
+        GENERATED_BODY()
+    public:
+
+        bool ShouldCreate() override { return false; }
     };
 }

@@ -471,6 +471,9 @@ namespace Lumina
             bPaused = false;
         }
         
+        // Last, so a subsystem's OnInitialize sees a world whose registry, systems and renderer are up.
+        WorldSubsystems::CreateMissing(*this, Subsystems);
+
         bInitializing = false;
     }
     
@@ -478,6 +481,9 @@ namespace Lumina
     {
         // First, so every subscription the managed side drops still disconnects against a live world.
         DotNet::NotifyWorldTeardown(this);
+
+        // Before the systems and the registry go, so a subsystem can still read the world it leaves.
+        WorldSubsystems::DestroyAll(Subsystems);
 
         // No render phase / RHI / audio device in a headless process.
         if (!GIsHeadless)
@@ -543,6 +549,10 @@ namespace Lumina
             && DotNet::GetScriptGeneration() != ManagedSystemGeneration)
         {
             RegisterSystems();
+
+            // A reload retires the old script classes, so the scripted subsystems rebuild against the new ones.
+            WorldSubsystems::DropScripted(Subsystems);
+            WorldSubsystems::CreateMissing(*this, Subsystems);
         }
 
         if (Stage == EUpdateStage::FrameStart)
@@ -554,6 +564,12 @@ namespace Lumina
         if ((bPaused && Stage != EUpdateStage::Paused) || (!bPaused && Stage == EUpdateStage::Paused))
         {
             return;
+        }
+
+        // Ahead of the stage lists, so a system reads state a subsystem already settled this frame.
+        if (Stage == EUpdateStage::FrameStart)
+        {
+            WorldSubsystems::Update(Subsystems, (float)DeltaTime);
         }
 
         SystemContext.DeltaTime     = DeltaTime;

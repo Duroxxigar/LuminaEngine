@@ -16,6 +16,7 @@
 #include "Scene/RenderScene/TexturePaintTypes.h"
 #include "UI/WorldUIContext.h"
 #include "Subsystems/TimerManager.h"
+#include "Subsystems/WorldSubsystem.h"
 #include "Subsystems/TweenManager.h"
 #include "Physics/Ray/RayCast.h"
 #include "Renderer/PrimitiveDrawInterface.h"
@@ -702,6 +703,28 @@ namespace Lumina
 
         template<typename T>
         void EraseSingleton() { EntityRegistry.Ctx().Erase<T>(); }
+
+
+        //~ World subsystems. One CObject per subsystem class per world, so a C++ and a C# one are the same
+        //~ thing to the world and to the details panel.
+
+        // The subsystem of this class, or null when the world has none. Matches a derived class too.
+        NODISCARD CWorldSubsystem* GetSubsystem(const CClass* Class) const
+        {
+            return WorldSubsystems::Find(Subsystems, Class);
+        }
+
+        template<typename T>
+        NODISCARD T* GetSubsystem() const
+        {
+            return static_cast<T*>(GetSubsystem(T::StaticClass()));
+        }
+
+        NODISCARD const TVector<TObjectPtr<CWorldSubsystem>>& GetSubsystems() const { return Subsystems; }
+
+        // Runtime state rather than map data, but reflected so the hot reload reinstancer reaches it.
+        PROPERTY(NoSerialize)
+        TVector<TObjectPtr<CWorldSubsystem>>               Subsystems;
 
     private:
 

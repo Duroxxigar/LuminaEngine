@@ -28,6 +28,16 @@ public unsafe partial class CWorld
     public Tweens Tweens => new(WorldHandle);
     public LuminaSharp.Animation Animation => new(WorldHandle);
 
+    // The subsystem of type T in this world, or null when none was created. Finds a C++ one just the same.
+    public T? GetSubsystem<T>() where T : NativeObject
+    {
+        IntPtr Found = GetSubsystemRaw(typeof(T).Name);
+        return Found == IntPtr.Zero ? null : Wrapper<T>.ForObject(Found);
+    }
+
+    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_World_GetSubsystem")]
+    private partial IntPtr GetSubsystemRaw(string ClassName);
+
     public float DeltaTime => (float)GetWorldDeltaTime();
     public double ElapsedTime => GetTimeSinceWorldCreation();
 
