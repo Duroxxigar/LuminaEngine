@@ -396,8 +396,8 @@ namespace Grain
     {
         Delta = Math::Min(Delta, 0.05f);
 
-        // A full cycle in eight minutes, which is long enough to play in and short enough to see.
-        TimeOfDay += Delta / 480.0f;
+        // Long enough to play inside one hour of it, short enough that the cycle is visible.
+        TimeOfDay += Delta / DayLength;
         TimeOfDay -= Math::Floor(TimeOfDay);
         Sky = EvaluateSky(TimeOfDay);
 
@@ -1093,17 +1093,28 @@ namespace Grain
 
         const FVector3 Back { -Look.x, -Look.y, -Look.z };
 
-        // The boom pulls in against anything solid, so the view never ends up inside a hill.
-        const float Wanted = 4.6f;
+        // Marched rather than raycast, so an eye that starts buried still resolves to a clear boom.
+        constexpr float kWantedBoom = 4.6f;
+        constexpr int32 kBoomSteps = 18;
 
-        float Allowed = Wanted;
-        if (!Physics.OverlapsSolid(Eye, { 0.12f, 0.12f, 0.12f }))
+        const FVector3 Probe { 0.16f, 0.16f, 0.16f };
+        float Allowed = 0.0f;
+
+        for (int32 Step = 1; Step <= kBoomSteps; ++Step)
         {
-            const FVoxelRayHit Hit = Physics.Raycast(Eye, Back, Wanted + 0.4f);
-            if (Hit.bHit)
+            const float Reach = kWantedBoom * float(Step) / float(kBoomSteps);
+            const FVector3 Candidate
             {
-                Allowed = Math::Max(Hit.Distance - 0.30f, 1.6f);
+                Eye.x + Back.x * Reach,
+                Eye.y + Back.y * Reach + 0.30f * (Reach / kWantedBoom),
+                Eye.z + Back.z * Reach,
+            };
+
+            if (Physics.OverlapsSolid(Candidate, Probe))
+            {
+                break;
             }
+            Allowed = Reach;
         }
 
         // Pushing out slowly and pulling in at once keeps a wall from clipping the view for a frame.
@@ -1111,12 +1122,17 @@ namespace Grain
             ? Allowed
             : Math::Lerp(CameraBoom, Allowed, 1.0f - Math::Exp(-7.0f * Delta));
 
-        CameraPosition =
-        {
-            Eye.x + Back.x * CameraBoom,
-            Eye.y + Back.y * CameraBoom + 0.30f,
-            Eye.z + Back.z * CameraBoom,
-        };
+        // Below this the view would sit inside the delver, so it drops to first person instead.
+        bFirstPerson = CameraBoom < 1.5f;
+
+        CameraPosition = bFirstPerson
+            ? Eye
+            : FVector3
+              {
+                  Eye.x + Back.x * CameraBoom,
+                  Eye.y + Back.y * CameraBoom + 0.30f * (CameraBoom / kWantedBoom),
+                  Eye.z + Back.z * CameraBoom,
+              };
     }
 
     void FGame::DamagePlayer(float Amount)

@@ -1466,7 +1466,7 @@ namespace Grain::Shaders
             Color += SampleLevel0(Args.BloomID, Input.UV).rgb * Args.BloomIntensity;
 
             const float Average = SampleLevel0(Args.ExposureID, float2(0.5, 0.5)).x;
-            const float Exposure = clamp(0.23 / max(Average, 1e-4), 0.10, 30.0) * Args.ExposureBias;
+            const float Exposure = clamp(0.23 / max(Average, 1e-4), 0.10, 11.0) * Args.ExposureBias;
 
             Color *= Exposure * Args.Tint.rgb;
 

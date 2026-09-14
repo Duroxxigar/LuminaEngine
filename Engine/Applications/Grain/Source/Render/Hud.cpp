@@ -322,7 +322,7 @@ namespace Grain
         //~ Objectives, top right.
 
         {
-            const float PanelWidth = Unit * 124.0f;
+            const float PanelWidth = Unit * 132.0f;
             const float X = Width - PanelWidth - Unit * 6.0f;
             const float Y = Unit * 6.0f;
 

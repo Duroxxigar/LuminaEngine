@@ -62,7 +62,7 @@ namespace Grain
         Out.SunColor = SkyLerp(Noon, Dusk, Golden);
         Out.SunIntensity = Day * Day * 2.6f;
 
-        Out.MoonIntensity = Night * Night * 0.40f;
+        Out.MoonIntensity = Night * Night * 0.22f;
         Out.StarIntensity = Math::Clamp((Night - 0.35f) * 2.0f, 0.0f, 1.0f);
 
         const FVector3 ZenithDay { 0.065f, 0.165f, 0.44f };
@@ -84,9 +84,9 @@ namespace Grain
         Out.FogDensity = Math::Lerp(0.0075f, 0.0016f, Day) + Golden * 0.0040f;
         Out.FogFalloff = 0.021f;
 
-        // A darker sky is not a darker image, so exposure opens up once the sun is down.
-        Out.Exposure = Math::Lerp(1.30f, 0.95f, Day);
-        Out.GiScale = Math::Lerp(1.35f, 1.15f, Day);
+        // Adaptation would erase the night outright, so the bias pulls it back down.
+        Out.Exposure = Math::Lerp(0.42f, 0.95f, Day);
+        Out.GiScale = Math::Lerp(1.10f, 1.15f, Day);
 
         return Out;
     }

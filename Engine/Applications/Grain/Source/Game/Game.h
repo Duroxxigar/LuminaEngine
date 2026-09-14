@@ -122,6 +122,8 @@ namespace Grain
     public:
 
         void Initialize(FVoxelWorld& InWorld, uint32 Seed);
+        void SetTimeOfDay(float Phase) { TimeOfDay = Phase; Sky = EvaluateSky(Phase); }
+        void SetDayLength(float Seconds) { DayLength = Math::Max(Seconds, 1.0f); }
         void Update(float Delta, const FGameInput& Input, FRenderer& Renderer);
 
         NODISCARD const FPlayerState& GetPlayer() const { return Player; }
@@ -139,6 +141,7 @@ namespace Grain
 
         // Where the third person boom lands after it is pulled in past anything solid.
         NODISCARD FVector3 GetCameraPosition() const { return CameraPosition; }
+        NODISCARD bool IsFirstPerson() const { return bFirstPerson; }
         NODISCARD FVector3 GetEyePosition() const;
         NODISCARD FVector3 GetLookDirection() const;
 
@@ -188,8 +191,10 @@ namespace Grain
 
         FVector3 CameraPosition { 0.0f, 0.0f, 0.0f };
         float    CameraBoom = 4.2f;
+        bool     bFirstPerson = false;
 
         float TimeOfDay = 0.24f;
+        float DayLength = 480.0f;
         float SpawnTimer = 3.0f;
         float ShardTimer = 0.0f;
         uint32 RandomState = 1u;

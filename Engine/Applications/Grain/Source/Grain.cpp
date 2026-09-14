@@ -153,6 +153,15 @@ int main(int ArgC, char** ArgV)
     FGame Game;
     Game.Initialize(World, Seed);
 
+    if (const auto Phase = ParsedCommandLine.GetInt("time"))
+    {
+        Game.SetTimeOfDay(float(*Phase) * 0.01f);
+    }
+    if (const auto Length = ParsedCommandLine.GetInt("daylength"))
+    {
+        Game.SetDayLength(float(*Length));
+    }
+
     FVoxelSim Sim;
     if (bUploaded && !ParsedCommandLine.Has("nosim"))
     {
@@ -355,7 +364,7 @@ int main(int ArgC, char** ArgV)
             };
 
             const FPlayerState& Player = Game.GetPlayer();
-            if (Player.bAlive && !bFreeCamera)
+            if (Player.bAlive && !bFreeCamera && !Game.IsFirstPerson())
             {
                 const float Flash = Player.HurtTimer > 0.0f ? 1.0f + Player.HurtTimer * 3.0f : 1.0f;
                 Push(Player.Body.Position, Player.Yaw - 1.5707963f, 1.0f, EModel::Delver,
