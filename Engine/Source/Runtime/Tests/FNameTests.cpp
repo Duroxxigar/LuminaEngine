@@ -110,10 +110,10 @@ TEST(FNameTests, EnumConversion)
     EXPECT_TRUE(a.IsNone());
 }
 
-TEST(FNameTests, UInt64Constructor)
+TEST(FNameTests, IdConstructorRoundTrips)
 {
     FName a("Test");
-    uint64 id = a.GetID();
+    const uint32 id = a.GetID();
 
     FName b(id);
 
