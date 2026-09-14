@@ -1462,6 +1462,15 @@ namespace Lumina
         FFrameData*                             ExtractFrame = nullptr;  // non-null while Extract runs
         FFrameData*                             RenderFrame  = nullptr;  // non-null while RenderView runs
 
+        // Frames that reached Submit in RenderView, so Output holds a real image rather than undefined memory.
+        uint64                                  FramesComposited = 0;
+        bool                                    bWarnedNoComposite = false;
+        bool                                    bWarnedFallbackMaterial = false;
+
+        // A resize destroys Output, and only a ticking world can repaint it. Held until Extract runs.
+        FUIntVector2                            PendingPrimarySize = FUIntVector2(0);
+        bool                                    bHasPendingPrimarySize = false;
+
 #if USING(WITH_EDITOR)
         static constexpr uint32                 PickerReadbackRingSize = RHI::kFramesInFlight + 1;
         static constexpr uint32                 PickerRegionExtent = 64;
@@ -1477,15 +1486,6 @@ namespace Lumina
         };
         mutable TArray<FPickerReadbackSlot,     PickerReadbackRingSize> PickerReadbackRing;
         uint64                                  PickerReadbackFrame = 0;
-
-        // Frames that reached Submit in RenderView, so Output holds a real image rather than undefined memory.
-        uint64                                  FramesComposited = 0;
-        bool                                    bWarnedNoComposite = false;
-        bool                                    bWarnedFallbackMaterial = false;
-
-        // A resize destroys Output, and only a ticking world can repaint it. Held until Extract runs.
-        FUIntVector2                            PendingPrimarySize = FUIntVector2(0);
-        bool                                    bHasPendingPrimarySize = false;
         uint32                                  PickerReadbackWriteIndex = 0;
 
         TAtomic<uint64>                         PickerCursorPacked = 0;
