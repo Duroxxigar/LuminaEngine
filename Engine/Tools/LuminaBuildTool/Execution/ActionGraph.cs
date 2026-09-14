@@ -40,12 +40,10 @@ public sealed class ActionGraph
         List<BuildAction> Actions = new();
         Dictionary<string, List<BuildAction>> CompileActionsByModule = new(StringComparer.OrdinalIgnoreCase);
 
-        // Blobs are written before any action is created so a compile input is always a file that
-        // exists, with no generation step for the executor to order against.
+        // Blobs are written before any action is created, so a compile input is always a file that already exists.
         UnityBuildStep.Prepare(Target);
 
-        // One generator run covers every reflected module in the target; the shards it produces
-        // become compile inputs, so ordering falls out of the file-level edges.
+        // One generator run covers every reflected module, so ordering falls out of the file edges its shards create.
         ReflectionStep.ReflectionActions? Reflection = ReflectionStep.CreateActions(Target);
         BuildAction? GenerateReflection = Reflection?.Generate;
 
@@ -55,8 +53,7 @@ public sealed class ActionGraph
             Actions.Add(Reflection.Generate);
         }
 
-        // Modules are already topologically ordered, so a module's dependencies have their link
-        // actions registered before anything that needs to order against them.
+        // Modules are already topologically ordered, so a module's dependencies register their link actions first.
         Dictionary<string, BuildAction> LinkActionsByModule = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (BuildModule Module in Target.Modules)
@@ -65,8 +62,7 @@ public sealed class ActionGraph
             CompileActionsByModule[Module.Name] = CompileActions;
             Actions.AddRange(CompileActions);
 
-            // Generated headers are undeclared generator outputs, so any TU that can reach one waits for it.
-            // Not only reflected modules: dependencies' generated headers arrive via their public include paths.
+            // Generated headers are undeclared outputs, so any TU that can reach one waits for it, dependencies included.
             if (GenerateReflection is not null
                 && Module.EnumerateDependencyClosure().Any(M => M.Rules.bEnableReflection))
             {
@@ -152,8 +148,7 @@ public sealed class ActionGraph
                     throw new BuildException($"Runtime dependency '{Dependency.SourcePath}' does not exist.");
                 }
 
-                // Warning, not Verbose: bOptional covers a DLL held open, not a source that is absent entirely.
-                // A missing slang-glslang.dll fails no build and surfaces only as skipped SPIR-V optimisation.
+                // Warning rather than Verbose, since bOptional covers a DLL held open, not a source absent entirely.
                 Log.Warning("Runtime dependency '{0}' does not exist; it will be missing from {1}. " +
                             "Anything that loads it at run time will fail.",
                             Dependency.SourcePath, Target.BinariesDirectory);

@@ -25,7 +25,7 @@ public static class ScriptProjectGenerator
 {
     public const string ProjectSuffix = ".Scripts.csproj";
 
-    // Mirrors BuildScriptUnits in DotNetHost.cpp: every enabled plugin, the game, the engine library.
+    // Mirrors BuildScriptUnits in DotNetHost.cpp, every enabled plugin, the game, the engine library.
     public static IReadOnlyList<ScriptProject> Discover(
         BuildDirectories Directories,
         IReadOnlyList<ProjectTargetInfo> Targets,
@@ -108,7 +108,7 @@ public static class ScriptProjectGenerator
         return Discovered;
     }
 
-    // Bootstrap only: the editor owns these files and rewrites them on load, so an existing one is left alone.
+    // Bootstrap only, since the editor owns these files and rewrites them on load, so an existing one is left alone.
     public static int EnsureProjectFiles(
         BuildDirectories Directories,
         IReadOnlyList<ScriptProject> ScriptProjects,

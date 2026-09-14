@@ -27,7 +27,7 @@ public static class ProfileMode
 
     private const string ExportToolName = "tracy-csvexport";
 
-    // Not a comma: a zone name is a C++ signature and template arguments carry their own.
+    // Not a comma, since a zone name is a C++ signature and template arguments carry their own.
     private const string FieldSeparator = ";";
 
     // Printed by Benchmark::Tick once the warmup frames are done and the requested map is confirmed loaded.
@@ -182,8 +182,7 @@ public static class ProfileMode
         return Path_;
     }
 
-    // One run, several captures. Restarting the process between passes would put each capture at a
-    // different point in startup, which is what made the repeats incomparable.
+    // One run, several captures, since restarting between passes puts each capture at a different point in startup.
     private static List<List<ProfileEntry>> CaptureRepeatedly(
         string Executable,
         BuildTarget Target,
@@ -280,8 +279,7 @@ public static class ProfileMode
                 Log.Info("Warmup done, the world has settled.");
             }
 
-            // On-demand recording starts when the capture connects, so a delay is how startup and level
-            // load stay out of the trace.
+            // On-demand recording starts when the capture connects, so a delay keeps startup out of the trace.
             if (Delay > 0)
             {
                 Log.Info("Letting it settle for {0}s before connecting", Delay);
@@ -366,8 +364,7 @@ public static class ProfileMode
             return false;
         }
 
-        // It retries the connection forever, so a workload that ended before the connect landed would
-        // leave it spinning with nothing to attach to.
+        // It retries the connection forever, so a workload ending before the connect landed leaves it spinning.
         int BudgetSeconds = Delay + Seconds + 30;
 
         if (!Capture_.WaitForExit(BudgetSeconds * 1000))
@@ -406,8 +403,7 @@ public static class ProfileMode
             RedirectStandardOutput = true,
         };
 
-        // Self time, which is what attributes cost to a zone rather than to everything it calls. The GPU
-        // export has no such option, so nesting is resolved here instead.
+        // Self time attributes cost to a zone rather than what it calls, and the GPU export resolves nesting here.
         Info.ArgumentList.Add(bGpu ? "-g" : "-e");
         Info.ArgumentList.Add("-s");
         Info.ArgumentList.Add(FieldSeparator);
@@ -483,8 +479,7 @@ public static class ProfileMode
         return Entries;
     }
 
-    // Median across the repeats, keeping only zones every pass saw. A zone that appears in some runs
-    // and not others is not something a delta can be read from.
+    // Median across the repeats, keeping only zones every pass saw, since a partial zone yields no delta.
     private static List<ProfileEntry> Merge(List<List<ProfileEntry>> Runs)
     {
         if (Runs.Count == 1)
@@ -564,8 +559,7 @@ public static class ProfileMode
         return Builder.ToString();
     }
 
-    // The GPU export is one row per event with no parent link, so nesting is rebuilt from the intervals
-    // and self time is the part of a pass not spent inside something nested in it.
+    // The GPU export is one row per event with no parent link, so nesting is rebuilt from the intervals.
     private static List<ProfileEntry> ParseGpuZones(string Csv)
     {
         string[] Lines = Csv.Split('\n', StringSplitOptions.RemoveEmptyEntries);
@@ -604,8 +598,7 @@ public static class ProfileMode
                 ParseNumber(Fields, DurationColumn)));
         }
 
-        // A parent opens no later than its child and closes no earlier, so this ordering makes the stack
-        // walk see every parent before the zones inside it.
+        // A parent opens no later than its child and closes no earlier, so the stack walk sees every parent first.
         Events.Sort((A, B) => A.Start != B.Start ? A.Start.CompareTo(B.Start) : B.Duration.CompareTo(A.Duration));
 
         double[] ChildTime = new double[Events.Count];

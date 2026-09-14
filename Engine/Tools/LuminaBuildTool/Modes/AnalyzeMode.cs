@@ -61,8 +61,7 @@ public static class AnalyzeMode
         List<ModuleClosures> Closures = Scope.ToList();
         int Total = Closures.Sum(C => C.TranslationUnits.Count);
 
-        // Counted once per translation unit, not once per appearance: a header pulled in through
-        // five different paths still only costs one recompile of that object.
+        // Counted once per translation unit rather than per appearance, so a header reached five ways costs one recompile.
         Dictionary<string, int> FanIn = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (ModuleClosures Closure in Closures)
@@ -71,8 +70,7 @@ public static class AnalyzeMode
             {
                 foreach (string Header in Includes.Distinct(StringComparer.OrdinalIgnoreCase))
                 {
-                    // Toolchain and SDK headers dominate the ranking and cannot be changed, so
-                    // they are off by default; -All puts them back for the curious.
+                    // Toolchain and SDK headers dominate and cannot be changed, so -All puts them back.
                     if (!bAll && !Context.HeaderOwners.ContainsKey(Header))
                     {
                         continue;
@@ -148,8 +146,7 @@ public static class AnalyzeMode
                         continue;
                     }
 
-                    // Reaching into a module counts once for the translation unit, however many
-                    // of its headers that unit opened.
+                    // Reaching into a module counts once for the translation unit, however many of its headers it opened.
                     Owners.Add(Owner);
 
                     if (!HeaderCount.TryGetValue(Owner, out HashSet<string>? Headers))
@@ -217,8 +214,7 @@ public static class AnalyzeMode
                 }
             }
 
-            // Build-order dependencies are neither linked nor included, so they belong in neither
-            // column; naming one is a statement about ordering, not about code.
+            // Build-order dependencies are neither linked nor included, so naming one states ordering, not code.
             List<BuildModule> Declared = Module.AllDependencies.Distinct().ToList();
 
             foreach (BuildModule Dependency in Declared.Where(D => !Reached.Contains(D)).OrderBy(D => D.Name, StringComparer.OrdinalIgnoreCase))
@@ -232,8 +228,7 @@ public static class AnalyzeMode
 
             foreach (BuildModule Dependency in Reached.Where(R => !Declared.Contains(R)).OrderBy(D => D.Name, StringComparer.OrdinalIgnoreCase))
             {
-                // Name the direct dependency that re-exports it, because that is the edge whose
-                // removal would break this module.
+                // Name the direct dependency that re-exports it, since that is the edge whose removal would break this.
                 BuildModule? Through = Declared.FirstOrDefault(D => D.EnumerateDependencyClosure().Contains(Dependency));
 
                 Undeclared.Add($"  {Module.Name} -> {Dependency.Name}"

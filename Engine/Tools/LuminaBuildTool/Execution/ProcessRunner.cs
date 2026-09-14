@@ -39,7 +39,7 @@ public static class ProcessRunner
         {
             foreach ((string Key, string Value) in EnvironmentOverrides)
             {
-                // An empty value removes the variable: a list-parsing tool reads "" as one empty entry.
+                // An empty value removes the variable, since a list-parsing tool reads "" as one empty entry.
                 if (Value.Length == 0)
                 {
                     StartInfo.Environment.Remove(Key);

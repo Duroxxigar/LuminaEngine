@@ -48,8 +48,7 @@ public static class ModuleLayerCheck
         throw new BuildException(Message.ToString());
     }
 
-    // Host type is deliberately unchecked: a Build.cs is evaluated per target type, so an editor-only
-    // dependency simply does not exist in a Game resolution. ResolveModule rejects the real case.
+    // Host type is deliberately unchecked, since a Build.cs is evaluated per target type. ResolveModule rejects the rest.
 
     /// <summary>Vendored code must not depend on ours.</summary>
     private static void CheckVendoredIndependence(BuildModule Module, BuildModule Dependency, List<string> Violations)
@@ -72,8 +71,7 @@ public static class ModuleLayerCheck
             BuildModule? Module = Target.Modules
                 .FirstOrDefault(M => string.Equals(M.Name, Rule.ModuleName, StringComparison.OrdinalIgnoreCase));
 
-            // A rule naming a module this target does not build is satisfied, not broken. Rules are
-            // declared once for every target and each one builds a different subset.
+            // A rule naming a module this target does not build is satisfied, not broken, since each target builds a subset.
             if (Module is null)
             {
                 continue;

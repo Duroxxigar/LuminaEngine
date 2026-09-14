@@ -3,7 +3,7 @@ using LuminaBuildTool.Core;
 
 namespace LuminaBuildTool.Graph;
 
-/// <summary>A module resolved against one target: rules, sources, graph position, compile and link setup.</summary>
+/// <summary>A module resolved against one target, with rules, sources, graph position, compile and link setup.</summary>
 public sealed class BuildModule
 {
     public BuildModule(ModuleRules Rules, ModuleSourceSet Sources)
@@ -73,7 +73,7 @@ public sealed class BuildModule
     /// <summary>Directory holding this module's linked output.</summary>
     public string OutputDirectory { get; set; } = string.Empty;
 
-    /// <summary>Primary linked output: the .dll, .lib or .exe. Empty for header-only modules.</summary>
+    /// <summary>Primary linked output, the .dll, .lib or .exe. Empty for header-only modules.</summary>
     public string OutputFile { get; set; } = string.Empty;
 
     /// <summary>Import library produced alongside a shared library, or empty.</summary>

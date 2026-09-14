@@ -30,8 +30,7 @@ public sealed class CopyFileOperation : BuildOperation
 
     public override void Execute()
     {
-        // Vendored dependencies commonly arrive read-only from an archive, and the attribute
-        // travels with the copy, so a second build cannot overwrite its own staged output.
+        // Vendored dependencies often arrive read-only and the attribute travels with the copy, blocking a second build.
         ClearReadOnly(Destination);
 
         File.Copy(Source, Destination, overwrite: true);
@@ -89,7 +88,7 @@ public sealed class WriteFileOperation : BuildOperation
 
     public string Contents { get; }
 
-    // The content is the identity: rewriting the same bytes is not work worth doing.
+    // The content is the identity, so rewriting the same bytes is not work worth doing.
     public override string GetIdentity() => $"write:{Destination}:{ContentHash.OfString(Contents)}";
 
     public override void Execute()

@@ -3,7 +3,7 @@ using LuminaBuildTool.Core;
 
 namespace LuminaBuildTool.Toolchain.Windows;
 
-/// <summary>A located MSVC toolset: compiler, linker, archiver, and their include and library paths.</summary>
+/// <summary>A located MSVC toolset, with compiler, linker, archiver, and their include and library paths.</summary>
 public sealed class MsvcInstallation
 {
     public required string InstallationPath { get; init; }

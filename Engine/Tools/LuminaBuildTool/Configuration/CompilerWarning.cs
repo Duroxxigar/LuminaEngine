@@ -9,10 +9,8 @@ public enum WarningSeverity
     Fatal,
 }
 
-/// <summary>
-/// Every warning the engine has an opinion about, named once so rules files never spell a raw
-/// -Wname or C#### again. <see cref="CompilerWarningInfo"/> maps each one to its per-toolchain spelling.
-/// </summary>
+/// <summary>Every warning the engine has an opinion about, named so rules never spell a raw -Wname or C#### again.</summary>
+/// <remarks><see cref="CompilerWarningInfo"/> maps each one to its per-toolchain spelling.</remarks>
 public enum CompilerWarning
 {
     // Correctness. These describe code that is a bug, not code that is untidy.
@@ -35,7 +33,7 @@ public enum CompilerWarning
     MaybeUninitialized,
     SubobjectLinkage,
 
-    // Lifetime and allocation: an object touched outside its lifetime, or freed through the wrong path.
+    // Lifetime and allocation, covering an object touched outside its lifetime or freed through the wrong path.
     ReturnLocalAddr,
     UseAfterFree,
     MismatchedNewDelete,
@@ -81,8 +79,7 @@ public enum CompilerWarning
     ConversionLoss,
     ConversionSizeT,
 
-    // Shadowing. GCC's -Wshadow is far broader than MSVC's three codes, so these stay MSVC-only
-    // until the engine has been through a shadowing pass on GCC.
+    // Shadowing, MSVC-only until the engine has had a GCC shadowing pass, since -Wshadow is far broader.
     Shadow,
     ShadowLocal,
     ShadowParameter,
@@ -125,11 +122,8 @@ public sealed class CompilerWarningInfo
     /// <summary>MSVC warning number without the C prefix, or null when MSVC has no equivalent.</summary>
     public string? MsvcCode { get; init; }
 
-    /// <summary>
-    /// True when the compiler leaves this warning off until it is asked for. Promoting one of these
-    /// to Fatal does not merely change severity, it turns the warning on, so a codebase that has
-    /// never seen it can acquire a wall of new errors at once.
-    /// </summary>
+    /// <summary>True when the compiler leaves this warning off until it is asked for.</summary>
+    /// <remarks>Promoting one to Fatal turns it on, so a codebase can acquire a wall of new errors at once.</remarks>
     public bool bOffByDefault { get; init; }
 }
 
@@ -235,10 +229,8 @@ public static class CompilerWarnings
     }
 }
 
-/// <summary>
-/// A warning-name to level map. Rules files write <c>Warnings[CompilerWarning.Switch] = WarningSeverity.Fatal</c>
-/// and each toolchain turns that into whichever flag it understands.
-/// </summary>
+/// <summary>A warning-name to level map, which each toolchain turns into whichever flag it understands.</summary>
+/// <remarks>Rules files write <c>Warnings[CompilerWarning.Switch] = WarningSeverity.Fatal</c>.</remarks>
 public sealed class WarningSettings
 {
     private readonly Dictionary<CompilerWarning, WarningSeverity> Levels = new();

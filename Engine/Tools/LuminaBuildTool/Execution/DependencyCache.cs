@@ -43,8 +43,7 @@ public sealed class DependencyCache
 
         foreach ((string Output, List<int> Indices) in Data.Dependencies)
         {
-            // An output no longer on disk is rebuilt anyway, so this never affected freshness -- but orphaned
-            // entries accumulate until they outnumber the live ones.
+            // An output no longer on disk is rebuilt anyway, so freshness is unaffected, but orphaned entries accumulate.
             if (!File.Exists(Output))
             {
                 Dropped++;
@@ -75,8 +74,7 @@ public sealed class DependencyCache
 
         if (Dropped > 0)
         {
-            // Marked dirty so the pruned form is what gets written back, rather than the orphans
-            // being reloaded and re-dropped on every build from here on.
+            // Marked dirty so the pruned form is written back, rather than orphans being reloaded and re-dropped each build.
             Cache.bDirty = true;
             Log.Verbose("Dropped header dependencies for {0} outputs that no longer exist", Dropped);
         }

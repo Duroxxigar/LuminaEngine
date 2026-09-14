@@ -38,8 +38,7 @@ public static class SourceFileScanner
         "Intermediates", "Binaries", "Saved", "obj", "bin", ".git", ".vs",
     };
 
-    /// <param name="bFormsOwnImage">True when the module links into its own image, which decides
-    /// whether its per-image sources compile here or in whichever image absorbs it.</param>
+    /// <param name="bFormsOwnImage">True when the module links into its own image, which places per-image sources.</param>
     public static ModuleSourceSet Scan(ModuleRules Rules, bool bFormsOwnImage)
     {
         ModuleSourceSet Result = new();
@@ -68,8 +67,7 @@ public static class SourceFileScanner
         }
         else
         {
-            // Headers are still discovered so reflection and the IDE see the whole tree; only
-            // compilation is restricted to the explicit list.
+            // Headers are still discovered so reflection and the IDE see the whole tree, with only compilation restricted.
             CollectHeadersOnly(Rules.ModuleDirectory, Rules, Result, Seen, bIsSourceRoot: true);
         }
 
@@ -78,8 +76,7 @@ public static class SourceFileScanner
             AddExplicitSource(Rules.ModulePath(Extra), Rules, Result, Seen);
         }
 
-        // An empty module builds an image from per-image sources alone that links and then has no module
-        // registration at run time. Checked before per-image sources so they cannot mask it.
+        // An empty module builds an image from per-image sources alone, checked first so they cannot mask it.
         if (Rules.BinaryType != ModuleBinaryType.HeaderOnly && !Result.AllFiles.Any())
         {
             throw new BuildException(
@@ -110,8 +107,7 @@ public static class SourceFileScanner
     {
         HashSet<string> Known = new(Result.AllFiles.Select(F => F.Name), StringComparer.OrdinalIgnoreCase);
 
-        // Included whether or not this module compiles them: whether it forms its own image is a
-        // property of the link layout, not a statement about which files the rules may name.
+        // Included whether or not this module compiles them, since forming an image is a link-layout property.
         foreach (string PerImageSource in PerImageSources)
         {
             Known.Add(Path.GetFileName(PerImageSource));

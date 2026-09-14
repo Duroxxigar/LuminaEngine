@@ -69,8 +69,7 @@ public static class PathUtils
     }
 
     /// <summary>Writes only when content differs, so generated files keep stable timestamps.</summary>
-    /// <param name="bByteOrderMark">On for project files, which MSBuild writes with one. Off for JSON,
-    /// whose grammar has no place for it and whose strict parsers stop at the first character.</param>
+    /// <param name="bByteOrderMark">On for project files, off for JSON, whose strict parsers stop at it.</param>
     public static bool WriteFileIfChanged(string FilePath, string Content, bool bByteOrderMark = true)
     {
         string Normalized = Normalize(FilePath);

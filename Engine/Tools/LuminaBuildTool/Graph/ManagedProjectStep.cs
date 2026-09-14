@@ -36,12 +36,10 @@ public static class ManagedProjectStep
                     PathUtils.Quote($"-p:OutputPath={Path.GetDirectoryName(Project.OutputAssembly)}{Path.DirectorySeparatorChar}"),
                 }),
 
-                // MSBuild already parallelizes internally and holds a NuGet lock; two concurrent
-                // restores of the same project deadlock more often than they help.
+                // MSBuild parallelizes internally and holds a NuGet lock, so concurrent restores deadlock more than help.
                 bCanExecuteInParallel = false,
 
-                // The C# compiler reads LIB and warns per bogus entry (CS1668), and a Developer Command Prompt seeds
-                // it with ATL/MFC paths that may not exist. Dropped so this build inherits no opinion from the shell.
+                // The C# compiler warns per bogus LIB entry (CS1668), so no ATL/MFC paths are inherited from the shell.
                 EnvironmentOverrides = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["LIB"] = string.Empty,

@@ -55,8 +55,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
         // Module projects browse only; giving them the build command ran one tool instance per module.
         Dictionary<string, GeneratedProject> ProjectsByModule = new(StringComparer.OrdinalIgnoreCase);
 
-        // A target is named after its launch module, so that module is already represented by the
-        // target's own project. Emitting both would put two projects at the same path.
+        // A target is named after its launch module, so emitting both would put two projects at the same path.
         HashSet<string> TakenNames = new(Targets.Select(T => T.TargetName), StringComparer.OrdinalIgnoreCase);
 
         foreach (ProjectTargetInfo Target in Targets)
@@ -283,8 +282,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
             Xml.AppendLine($"    <OutDir>{Escape(MsBuildScratch)}\\</OutDir>");
             Xml.AppendLine($"    <IntDir>{Escape(MsBuildScratch)}\\</IntDir>");
 
-            // The IDE's own up-to-date check knows nothing about what this build actually reads,
-            // so left on it will decide a source edit changed nothing and never invoke the tool.
+            // The IDE's up-to-date check knows nothing about what this build reads, so left on it never invokes the tool.
             Xml.AppendLine("    <DisableFastUpToDateCheck>true</DisableFastUpToDateCheck>");
 
             if (Project.bBuildable)
@@ -295,8 +293,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
             }
             else
             {
-                // Source and IntelliSense only. Building this project would run a second copy of
-                // the same target's build; the target's own project is the one to build.
+                // Source and IntelliSense only, since building this would run a second copy of the same target's build.
                 Xml.AppendLine(
                     "    <NMakeBuildCommandLine>"
                     + Escape($"echo {Project.ProjectName} is built as part of the {Project.OwningTargetName} target.")
@@ -321,7 +318,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
                 Xml.AppendLine($"    <NMakeForcedIncludes>{Escape(string.Join(';', VariantModule.ForceIncludeFiles))}</NMakeForcedIncludes>");
             }
 
-            // Matches the compile: USING(flag) expands differently under the legacy preprocessor.
+            // Matches the compile, since USING(flag) expands differently under the legacy preprocessor.
             Xml.AppendLine($"    <AdditionalOptions>/std:{Variant.Rules.CppStandard} /Zc:__cplusplus /Zc:preprocessor</AdditionalOptions>");
 
             if (Project.bBuildable)
@@ -415,8 +412,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
 
         if (Module is null)
         {
-            // A target with no launch module still needs its rules file listed so the project is
-            // not empty in the IDE.
+            // A target with no launch module still needs its rules file listed so the project is not empty in the IDE.
             Xml.AppendLine("  <ItemGroup>");
             Xml.AppendLine($"""    <None Include="{Escape(Project.Target.PrimaryVariant.Rules.RulesFile)}" />""");
             Xml.AppendLine("  </ItemGroup>");
@@ -656,7 +652,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
             }
         }
 
-        // Left out of the build: the engine compiles scripts at run time, and an IDE build would race its emit.
+        // Left out of the build, since the engine compiles scripts at run time and an IDE build would race its emit.
         foreach (ScriptProject Project in ScriptProjects)
         {
             string Identifier = "{" + ScriptProjectGuid(Project).ToString().ToUpperInvariant() + "}";
@@ -670,7 +666,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
 
         if (RulesProjectPath.Length > 0)
         {
-            // Left out of the build: the build system compiles these rules files itself.
+            // Left out of the build, since the build system compiles these rules files itself.
             string RulesProjectGuid = "{" + RulesGuid.ToString().ToUpperInvariant() + "}";
 
             foreach (ProjectConfiguration Configuration in Configurations)
@@ -763,7 +759,7 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
 
         string Test = $"if not exist \"{ToolPath}\" ";
 
-        // Rebuild first: a stale tool fails the rules against an API that does not exist yet, and blocks Clean.
+        // Rebuild first, since a stale tool fails the rules against an API that does not exist yet, and blocks Clean.
         return $"dotnet build \"{ToolProject}\" -v quiet --nologo"
             + Environment.NewLine
             + "if errorlevel 1 echo error: LuminaBuildTool failed to build; the engine tree and the build"

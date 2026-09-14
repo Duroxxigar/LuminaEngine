@@ -277,8 +277,7 @@ public sealed class ClangToolchain : IToolchain
 
         Arguments.Add("-fPIC");
 
-        // Classes whose vtable crosses a module boundary carry LUMINA_VISIBLE_TYPE. -fvisibility-ms-compat
-        // does not cover them: it relaxes typeinfo, but vtables still follow the class's own visibility.
+        // Classes whose vtable crosses a module boundary carry LUMINA_VISIBLE_TYPE, which -fvisibility-ms-compat misses.
         Arguments.Add("-fvisibility=hidden");
         Arguments.Add("-fvisibility-inlines-hidden");
 
@@ -384,8 +383,7 @@ public sealed class ClangToolchain : IToolchain
             Arguments.Add("-I" + PathUtils.QuoteUnix(IncludePath));
         }
 
-        // Third-party headers reach first-party translation units through these, and -isystem is what
-        // stops their diagnostics from being reported against our code.
+        // Third-party headers reach first-party units through these, and -isystem stops their diagnostics being ours.
         foreach (string IncludePath in Module.SystemIncludePaths)
         {
             Arguments.Add("-isystem");
@@ -688,7 +686,7 @@ public sealed class ClangToolchain : IToolchain
                 ? Installation.StacktraceLibrary
                 : Library;
 
-            // Null is the libc++ case: the header saw no __cpp_lib_stacktrace, so there is nothing to link.
+            // Null is the libc++ case, where the header saw no __cpp_lib_stacktrace, so there is nothing to link.
             if (Substituted is null || Resolved.Contains(Substituted))
             {
                 continue;

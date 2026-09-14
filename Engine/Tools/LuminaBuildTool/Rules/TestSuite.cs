@@ -72,15 +72,13 @@ public sealed class TestSuite
         Rules.bEnableReflection = Tested.bEnableTestReflection;
         Rules.bRootSourceFiles = true;
 
-        // A test file has to compile on its own. Unity would let one borrow a neighbor's includes and
-        // would collide the using-directives independent test files are entitled to write.
+        // A test file has to compile on its own, since unity would let one borrow a neighbor's includes and collide usings.
         Rules.bUseUnityBuild = false;
 
         // A template may declare a precompiled header the suite has no source to create it from.
         Rules.PrecompiledHeader = null;
 
-        // The suite's own directory, then the tested module's, so a test reaches an internal header
-        // by the same path the module's own sources use.
+        // The suite's own directory, then the tested module's, so a test reaches an internal header the same way.
         Rules.PrivateIncludePaths.Add(".");
         Rules.PrivateIncludePaths.Add(Tested.ResolveSourceRoot());
 

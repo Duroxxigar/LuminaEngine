@@ -74,7 +74,7 @@ public static class ReflectionStep
         }
     }
 
-    /// <summary>Planned reflection step: the generator, its input actions, and the downstream manifest.</summary>
+    /// <summary>Planned reflection step, with the generator, its input actions, and the downstream manifest.</summary>
     public sealed class ReflectionActions
     {
         public required BuildAction Generate { get; init; }
@@ -119,8 +119,7 @@ public static class ReflectionStep
 
         List<BuildAction> InputActions = new();
 
-        // Decided by where the Target.cs lives, not by -Project: a game solution builds the engine target
-        // with -Project set, which used to make the engine's own build publish no manifest.
+        // Decided by where the Target.cs lives rather than by -Project, since a game solution builds the engine target too.
         bool bIsEngineTarget = Target.Directories.IsEngineOwned(Target.Rules.RulesDirectory);
 
         if (bIsEngineTarget)
@@ -135,8 +134,7 @@ public static class ReflectionStep
             AppendEngineReferenceProjects(Target, Document);
         }
 
-        // Per target: an Editor and a Game build reflect different module sets, and a shared file
-        // would make each one look like a changed input to the other.
+        // Per target, since an Editor and a Game build reflect different module sets and a shared file would look changed.
         string InputFile = Path.Combine(Target.IntermediateDirectory, "Reflection_Files.json");
 
         BuildAction WriteInput = new(ActionType.Generate, "Reflection")
@@ -156,8 +154,7 @@ public static class ReflectionStep
             Arguments = PathUtils.Quote(InputFile) + " -strict-parse",
             WorkingDirectory = Target.Directories.OutputRoot,
 
-            // The generator holds every header in memory at once; running one is already
-            // internally parallel and a second instance would fight it for cores.
+            // The generator holds every header in memory and is already internally parallel, so a second instance fights it.
             bCanExecuteInParallel = false,
 
             // The per-type headers, sources and C# bindings are written too but not declared.

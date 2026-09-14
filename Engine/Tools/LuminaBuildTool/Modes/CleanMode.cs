@@ -21,8 +21,7 @@ public static class CleanMode
 
             bool bCleaned = CleanRoot(Directories.OutputRoot, bFull, bDryRun);
 
-            // A project build leaves output in both trees, so stopping at the project would regenerate
-            // against a stale engine.
+            // A project build leaves output in both trees, so stopping at the project regenerates against a stale engine.
             if (bFull && Directories.ProjectRoot is not null)
             {
                 bCleaned &= CleanRoot(Directories.EngineRoot, bFull: true, bDryRun);
@@ -60,7 +59,7 @@ public static class CleanMode
     /// <summary>Deletes one tree's intermediates, plus its binaries and solution files when full.</summary>
     private static bool CleanRoot(string Root, bool bFull, bool bDryRun)
     {
-        // Generated code goes with the objects: a .generated.h for a deleted type stays includable.
+        // Generated code goes with the objects, since a .generated.h for a deleted type stays includable.
         bool bDeleted = DeleteDirectory(Path.Combine(Root, "Intermediates"), bDryRun);
 
         if (bFull)
@@ -225,8 +224,7 @@ public static class CleanMode
 
         foreach (BuildModule Module in Target.Modules)
         {
-            // Asked per module: engine modules share one intermediate set across targets, so deleting only the
-            // target's own directory would leave them behind.
+            // Asked per module, since engine modules share one intermediate set across targets.
             DeleteDirectory(Module.IntermediateDirectory, bDryRun: false);
             DeleteDirectory(Module.GeneratedCodeDirectory, bDryRun: false);
 

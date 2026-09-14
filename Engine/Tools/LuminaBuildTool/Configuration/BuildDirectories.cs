@@ -61,7 +61,7 @@ public sealed class BuildDirectories
             $"{Type}-{Configuration}");
     }
 
-    /// <summary>Where build records live: what each output was built from, and which headers it included.</summary>
+    /// <summary>Where build records live, holding what each output was built from and which headers it included.</summary>
     public string BuildRecordDirectory(BuildPlatform Platform, BuildConfiguration Configuration, TargetType Type)
     {
         return Path.Combine(
@@ -94,7 +94,7 @@ public sealed class BuildDirectories
 
     public string ThirdPartyPath(string RelativePath) => PathUtils.Combine(ThirdPartyDirectory, RelativePath);
 
-    /// <summary>Locates the engine root: explicit override, then LUMINA_DIR, then a walk up from this exe.</summary>
+    /// <summary>Locates the engine root, an explicit override, then LUMINA_DIR, then a walk up from this exe.</summary>
     public static BuildDirectories Discover(string? EngineRootOverride, string? ProjectRootOverride)
     {
         string? Root = EngineRootOverride;

@@ -39,8 +39,7 @@ public static class ProjectFileStamp
 
         ProjectFileStampData? Stamp = JsonStore.Load<ProjectFileStampData>(GetPath(Directories));
 
-        // No stamp beside existing project files means they predate this check, so they are
-        // treated as stale once and stamped on the way through.
+        // No stamp beside existing project files means they predate this check, so they are stale once and stamped.
         return Stamp is null
             || Stamp.RulesHash != Assembly.SourceHash
             || Stamp.ToolVersion != RulesCompiler.GetToolVersion();

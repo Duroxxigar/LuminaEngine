@@ -2,7 +2,7 @@ using LuminaBuildTool.Configuration;
 
 namespace LuminaBuildTool.Graph;
 
-/// <summary>A fully resolved target: every module it needs, in build order, with output paths assigned.</summary>
+/// <summary>A fully resolved target, with every module it needs, in build order, with output paths assigned.</summary>
 public sealed class BuildTarget
 {
     public BuildTarget(TargetRules Rules, TargetInfo Info, BuildDirectories Directories)

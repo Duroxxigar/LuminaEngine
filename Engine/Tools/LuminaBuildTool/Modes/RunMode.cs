@@ -21,8 +21,7 @@ public static class RunMode
 
         BuildPlatform PlatformValue = Arguments.GetEnum("Platform", BuildPlatformRegistry.HostPlatform);
 
-        // A cross-compiled binary is not something this host can execute, and the failure it
-        // produces otherwise is an exec format error naming nothing useful.
+        // A cross-compiled binary is not something this host can execute, and the failure names nothing useful.
         if (PlatformValue != BuildPlatformRegistry.HostPlatform)
         {
             throw new BuildException(
@@ -39,8 +38,7 @@ public static class RunMode
         TargetInfo Info = new(TargetName, TypeValue, PlatformValue, ConfigurationValue, Directories, Options);
         BuildTarget Target = new TargetAssembler(Assembly, Directories, PlatformSupport).Assemble(TargetName, Info);
 
-        // The same fields the IDE's Run button reads. A game target's launch module is the .so the editor
-        // loads, so its rules point Run at the editor with --Project set.
+        // The same fields the IDE's Run button reads, so a game target's rules point Run at the editor with --Project.
         string Executable = Target.Rules.DebuggerCommand.Length > 0
             ? Target.Rules.DebuggerCommand
             : Target.LaunchModule?.OutputFile ?? string.Empty;
@@ -58,8 +56,7 @@ public static class RunMode
                 + $"  {HostScriptName("LuminaBuild")} Build {TargetName} -TargetType={TypeValue} -Configuration={ConfigurationValue}");
         }
 
-        // Target arguments first so anything forwarded after "--" can override them, which is the
-        // usual precedence for a command line read left to right.
+        // Target arguments first so anything forwarded after "--" can override them, reading left to right.
         List<string> LaunchArguments = new();
 
         if (Target.Rules.DebuggerArguments.Length > 0)
@@ -133,8 +130,7 @@ public static class RunMode
             UseShellExecute = false,
         };
 
-        // Only when the rules asked for one; the engine finds its root from the executable, so otherwise the
-        // caller's directory stands and relative forwarded paths mean what they look like.
+        // Only when the rules asked for one, since the engine finds its root from the executable.
         if (WorkingDirectory.Length > 0 && Directory.Exists(WorkingDirectory))
         {
             StartInfo.WorkingDirectory = WorkingDirectory;
@@ -157,8 +153,7 @@ public static class RunMode
 
             Runner.WaitForExit();
 
-            // Reported rather than swallowed: a target that dies on startup is the common case this
-            // mode is used to diagnose, and a zero here would say it ran fine.
+            // Reported rather than swallowed, since a target that dies on startup is what this mode diagnoses.
             if (Runner.ExitCode != 0)
             {
                 Log.Error("{0} exited with code {1}.", Path.GetFileName(Executable), Runner.ExitCode);

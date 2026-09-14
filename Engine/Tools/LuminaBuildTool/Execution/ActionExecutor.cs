@@ -110,8 +110,7 @@ public sealed class ActionExecutor
             Queue.Writer.TryWrite(Action);
         }
 
-        // A remaining count of zero marks an action as retired, so it is never counted twice.
-        // Runs under Gate.
+        // A remaining count of zero marks an action as retired, so it is never counted twice. Runs under Gate.
         void RetireLocked(BuildAction Action, bool bSucceeded)
         {
             Unfinished--;
@@ -125,8 +124,7 @@ public sealed class ActionExecutor
 
                 if (!bSucceeded)
                 {
-                    // A failed dependency permanently blocks its dependents, which is what stops
-                    // a broken build from linking against stale outputs.
+                    // A failed dependency blocks its dependents, which stops a broken build linking against stale outputs.
                     RemainingDependencies[Dependent] = 0;
                     RetireLocked(Dependent, bSucceeded: false);
                     continue;
@@ -351,8 +349,7 @@ public sealed class ActionExecutor
         }
         catch (Exception Ex) when (Ex is IOException or UnauthorizedAccessException or FileNotFoundException)
         {
-            // Recording success on an unverified output would freeze a stale file: the stamp advances and the
-            // build never retries.
+            // Recording success on an unverified output freezes a stale file, since the stamp advances and never retries.
             if (Action.bIgnoreExitCode && Operation is CopyFileOperation Copy && Copy.IsAlreadyStaged())
             {
                 Log.Verbose(
@@ -366,8 +363,7 @@ public sealed class ActionExecutor
 
             if (Action.bIgnoreExitCode)
             {
-                // Deliberately not recorded, so the next build retries rather than trusting
-                // whatever happens to be on disk.
+                // Deliberately not recorded, so the next build retries rather than trusting whatever is on disk.
                 Log.Warning("{0} did not complete: {1}", DescribeAction(Action), Ex.Message);
                 return true;
             }
@@ -398,8 +394,7 @@ public sealed class ActionExecutor
 
             History.RecordCommand(PrimaryOutput, Action.GetCommandKey());
 
-            // Headers first: they are part of what this object was built from, so the fingerprint
-            // has to see the list the compiler just reported rather than the previous build's.
+            // Headers first, since the fingerprint must see the list the compiler just reported, not the previous build's.
             if (Action.DependencyListFile is not null)
             {
                 Dependencies.RecordFromCompilerOutput(PrimaryOutput, Action.DependencyListFile, Action.DependencyListFormat);

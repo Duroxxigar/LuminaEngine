@@ -47,7 +47,7 @@ public static class ProjectFilesMode
             Dictionary<ProjectConfiguration, BuildTarget> Variants = new();
             BuildTarget? Primary = null;
 
-            // First failure only: total resolution failure usually throws the same diagnostic per configuration.
+            // First failure only, since total resolution failure usually throws the same diagnostic per configuration.
             string? FirstFailure = null;
             string? FirstFailureConfiguration = null;
 
@@ -74,7 +74,7 @@ public static class ProjectFilesMode
 
             if (Primary is null)
             {
-                // Warning, not Verbose: the throwing rules file usually reports a fixable setup problem.
+                // Warning rather than Verbose, since the throwing rules file usually reports a fixable setup problem.
                 Log.Warning("Target '{0}' could not be resolved in any configuration; skipping. {1} failed: {2}",
                     TargetName, FirstFailureConfiguration ?? "No configuration", FirstFailure ?? "no reason reported.");
 
@@ -95,8 +95,7 @@ public static class ProjectFilesMode
             throw new BuildException("No targets could be resolved, so there is nothing to generate.");
         }
 
-        // Written first so the solution can reference it. It is what gives the IDE syntax
-        // highlighting and completion on Build.cs and Target.cs files.
+        // Written first so the solution can reference it, giving the IDE completion on Build.cs and Target.cs files.
         bool bRulesProjectChanged = RulesProjectGenerator.Generate(Directories, Assembly);
         string RulesProjectPath = RulesProjectGenerator.GetProjectPath(Directories);
 
@@ -113,8 +112,7 @@ public static class ProjectFilesMode
             Changed += Generator.Generate(Directories, Targets, Configurations, RulesProjectPath);
         }
 
-        // Missing targets is a failure, not partial success. Thrown after the write but before the stamp,
-        // so the next build retries instead of trusting an incomplete generation.
+        // Missing targets is a failure, thrown after the write but before the stamp so the next build retries.
         if (SkippedTargets.Count > 0)
         {
             throw new BuildException(
@@ -123,8 +121,7 @@ public static class ProjectFilesMode
                 + "See the warning logged for each one above.");
         }
 
-        // Written after the files it describes, so an interrupted generation leaves the stamp
-        // pointing at the previous rules and the next build tries again.
+        // Written after the files it describes, so an interrupted generation leaves the stamp on the previous rules.
         ProjectFileStamp.Write(Directories, Assembly);
 
         Log.Info("{0} project files changed.", Changed);
