@@ -81,7 +81,7 @@ namespace Lumina::Scripting
         static void* Dispatcher = nullptr;
         if (Dispatcher == nullptr)
         {
-            Dispatcher = DotNet::ResolveManagedExport("__InvokeScriptFunction");
+            Dispatcher = DotNet::ResolveManagedExport("InvokeScriptFunction");
         }
 
         if (Dispatcher == nullptr)

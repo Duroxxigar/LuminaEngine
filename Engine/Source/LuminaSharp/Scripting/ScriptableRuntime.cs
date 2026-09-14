@@ -192,10 +192,7 @@ internal sealed class ScriptableRuntime
         }
     }
 
-    // Bit i is set when the user subclass overrides the ScriptEvent the wrapper declared with [ScriptEvent(i)].
-    // An override moves the method's DeclaringType out of the engine assembly (LuminaSharp.dll) into user code.
-    // The ScriptEvents this subclass actually overrides, semicolon joined. An override moves the method's
-    // DeclaringType out of the engine assembly (LuminaSharp.dll) into user code, which is what identifies one.
+    // An override moves the method's DeclaringType out of LuminaSharp.dll, which is what identifies one.
     private string GetOverriddenEvents(Type Type)
     {
         if (OverriddenEventsByType.TryGetValue(Type, out string? Cached))
