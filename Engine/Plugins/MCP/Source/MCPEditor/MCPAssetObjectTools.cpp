@@ -18,7 +18,7 @@ namespace Lumina::MCP
 {
     namespace
     {
-        constexpr const char* GSaveHint = " Save with assets.save to persist.";
+        constexpr const char* GAssetSaveHint = " Save with assets.save to persist.";
 
         SAssetInfo DescribeAssetData(const FAssetData& Data)
         {
@@ -157,7 +157,7 @@ namespace Lumina::MCP
                 });
         }
 
-        void RegisterDescribe(FStringView Owner)
+        void RegisterDescribeAsset(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SDescribeAssetParams, SDescribeAssetResult>(
                 Owner, "assets.describe",
@@ -196,7 +196,7 @@ namespace Lumina::MCP
                 });
         }
 
-        void RegisterSetProperty(FStringView Owner)
+        void RegisterSetAssetProperty(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SSetAssetPropertyParams, SAssetPropertyResult>(
                 Owner, "assets.set_property",
@@ -231,7 +231,7 @@ namespace Lumina::MCP
                     Out.bUndoable = Edit.bUndoable;
 
                     return Agent::FToolResult::Ok(Lumina::Format("{}.{} is now {}.{}{}",
-                        Asset->GetName(), In.Path, Out.Current, GSaveHint,
+                        Asset->GetName(), In.Path, Out.Current, GAssetSaveHint,
                         Edit.bUndoable ? "" : " Applied without undo (no editor open for this asset)."));
                 });
         }
@@ -286,8 +286,8 @@ namespace Lumina::MCP
     {
         RegisterListClasses(Owner);
         RegisterCreate(Owner);
-        RegisterDescribe(Owner);
-        RegisterSetProperty(Owner);
+        RegisterDescribeAsset(Owner);
+        RegisterSetAssetProperty(Owner);
         RegisterDelete(Owner);
     }
 }

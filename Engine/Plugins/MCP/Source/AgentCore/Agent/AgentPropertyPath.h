@@ -17,6 +17,6 @@ namespace Lumina::Agent
     };
 
     // Walks a path such as "LightColor.X" or "Materials[2].Slot" from a struct instance to one value.
-    NODISCARD EDITOR_API bool ResolvePropertyPath(CStruct* Root, void* RootData, FStringView Path,
+    NODISCARD AGENTCORE_API bool ResolvePropertyPath(CStruct* Root, void* RootData, FStringView Path,
         FResolvedProperty& Out, FString& OutError);
 }

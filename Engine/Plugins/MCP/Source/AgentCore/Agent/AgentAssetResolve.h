@@ -9,7 +9,7 @@
 namespace Lumina::Agent
 {
     // Loads the asset a GUID string names; false with a reason when it is malformed or names nothing.
-    NODISCARD EDITOR_API bool ResolveAssetObject(FStringView Guid, CObject*& OutObject, FString& OutError);
+    NODISCARD AGENTCORE_API bool ResolveAssetObject(FStringView Guid, CObject*& OutObject, FString& OutError);
 
     // Loads the asset a GUID string names; false with a reason when it is malformed or names nothing.
     template<typename T>
@@ -32,5 +32,5 @@ namespace Lumina::Agent
     }
 
     // Finds a reflected class by name, optionally requiring it to derive from Base.
-    NODISCARD EDITOR_API CClass* FindClassByName(FStringView Name, CClass* Base, FString& OutError);
+    NODISCARD AGENTCORE_API CClass* FindClassByName(FStringView Name, CClass* Base, FString& OutError);
 }

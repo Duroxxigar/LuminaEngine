@@ -8,7 +8,7 @@
 namespace Lumina::Agent
 {
     // Opaque name an agent holds for an entity between calls, since a raw handle is a recycled slot.
-    class EDITOR_API FEntityTokens
+    class AGENTCORE_API FEntityTokens
     {
     public:
 

@@ -1,4 +1,4 @@
-#include "EditorPCH.h"
+#include "AgentCorePCH.h"
 #include "Agent/AgentToolRegistry.h"
 
 #include "Agent/AgentToolSchema.h"

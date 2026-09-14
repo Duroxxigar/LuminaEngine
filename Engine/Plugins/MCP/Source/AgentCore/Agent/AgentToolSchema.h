@@ -19,8 +19,8 @@ namespace Lumina::Agent
     };
 
     // One unsupported field rejects the whole struct, so a tool never advertises a shape it cannot parse.
-    EDITOR_API FSchemaResult GenerateSchema(CStruct* Struct);
+    AGENTCORE_API FSchemaResult GenerateSchema(CStruct* Struct);
 
     // The same for a single property, which is what a per-property view of a component needs.
-    EDITOR_API FSchemaResult GeneratePropertySchema(FProperty* Property);
+    AGENTCORE_API FSchemaResult GeneratePropertySchema(FProperty* Property);
 }

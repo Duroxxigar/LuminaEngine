@@ -70,7 +70,7 @@ namespace Lumina::Agent
     };
 
     // Holds one reflected struct in aligned storage, so no caller has to remember to destroy it.
-    class EDITOR_API FStructInstance
+    class AGENTCORE_API FStructInstance
     {
     public:
 

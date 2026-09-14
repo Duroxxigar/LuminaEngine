@@ -16,7 +16,7 @@ namespace Lumina::MCP
 {
     namespace
     {
-        constexpr const char* GSaveHint = " Save with assets.save to persist.";
+        constexpr const char* GDataTableSaveHint = " Save with assets.save to persist.";
 
         struct FRowTarget
         {
@@ -77,7 +77,7 @@ namespace Lumina::MCP
             }
         }
 
-        void RegisterDescribe(FStringView Owner)
+        void RegisterDescribeDataTable(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SDescribeDataTableParams, SDescribeDataTableResult>(
                 Owner, "datatable.describe",
@@ -208,7 +208,7 @@ namespace Lumina::MCP
                     Out.bUndoable = Edit.bUndoable;
 
                     return Agent::FToolResult::Ok(Lumina::Format("{}.{} is now {}.{}{}",
-                        In.Row, In.Path, Out.Current, GSaveHint,
+                        In.Row, In.Path, Out.Current, GDataTableSaveHint,
                         Edit.bUndoable ? "" : " Applied without undo (no editor open for this table)."));
                 });
         }
@@ -279,7 +279,7 @@ namespace Lumina::MCP
 
                     MarkDirty(Table);
 
-                    return Agent::FToolResult::Ok(Lumina::Format("Added row '{}' at {}.{}{}", Out.Row, Out.Index, Applied, GSaveHint));
+                    return Agent::FToolResult::Ok(Lumina::Format("Added row '{}' at {}.{}{}", Out.Row, Out.Index, Applied, GDataTableSaveHint));
                 });
         }
 
@@ -305,7 +305,7 @@ namespace Lumina::MCP
                     Out.RemainingCount = Target.Table->GetRowCount();
 
                     return Agent::FToolResult::Ok(Lumina::Format("Removed '{}'; {} row(s) remain.{}",
-                        In.Row, Out.RemainingCount, GSaveHint));
+                        In.Row, Out.RemainingCount, GDataTableSaveHint));
                 });
         }
 
@@ -338,7 +338,7 @@ namespace Lumina::MCP
                     MarkDirty(Target.Table);
 
                     Out.Row = In.NewName;
-                    return Agent::FToolResult::Ok(Lumina::Format("Renamed '{}' to '{}'.{}", In.Row, In.NewName, GSaveHint));
+                    return Agent::FToolResult::Ok(Lumina::Format("Renamed '{}' to '{}'.{}", In.Row, In.NewName, GDataTableSaveHint));
                 });
         }
 
@@ -373,7 +373,7 @@ namespace Lumina::MCP
                     MarkDirty(Table);
 
                     return Agent::FToolResult::Ok(Lumina::Format("Imported {} row(s), skipped {}, {} cell problem(s).{}",
-                        Out.RowCount, Out.Skipped, Out.Errors.size(), GSaveHint));
+                        Out.RowCount, Out.Skipped, Out.Errors.size(), GDataTableSaveHint));
                 });
         }
 
@@ -400,7 +400,7 @@ namespace Lumina::MCP
 
     void RegisterDataTableTools(FStringView Owner)
     {
-        RegisterDescribe(Owner);
+        RegisterDescribeDataTable(Owner);
         RegisterGetRow(Owner);
         RegisterSetRowProperty(Owner);
         RegisterAddRow(Owner);

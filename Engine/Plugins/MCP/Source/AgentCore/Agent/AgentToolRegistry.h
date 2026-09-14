@@ -7,7 +7,7 @@
 namespace Lumina::Agent
 {
     // Every tool an external agent can call. Editor only, and it knows nothing about MCP or any transport.
-    class EDITOR_API FToolRegistry
+    class AGENTCORE_API FToolRegistry
     {
     public:
 

@@ -24,9 +24,9 @@ namespace Lumina::Agent
     };
 
     /// Sets one field by dotted path on data owned by Owner, transacted through its open editor when there is one.
-    NODISCARD EDITOR_API FObjectEditResult SetObjectProperty(CStruct* Root, void* RootData, CObject* Owner,
+    NODISCARD AGENTCORE_API FObjectEditResult SetObjectProperty(CStruct* Root, void* RootData, CObject* Owner,
         FStringView Path, const nlohmann::json& Value, FName Label);
 
     /// Property paths whose type the marshaler cannot write, so a caller can list them before trying.
-    EDITOR_API void CollectUnwritableFields(CStruct* Root, FStringView Prefix, TVector<FString>& OutPaths);
+    AGENTCORE_API void CollectUnwritableFields(CStruct* Root, FStringView Prefix, TVector<FString>& OutPaths);
 }

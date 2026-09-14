@@ -6,6 +6,7 @@
 #include "Agent/AgentToolMarshal.h"
 #include "Agent/AgentToolRegistry.h"
 #include "MCPTextMatch.h"
+#include "MCPWorldEditor.h"
 #include "Core/Engine/Engine.h"
 #include "LuminaEditor.h"
 #include "Scene/SceneOps.h"
@@ -20,18 +21,7 @@ namespace Lumina::MCP
 {
     namespace
     {
-        constexpr const char* GNoWorldEditor = "No world editor is open, so there is no scene to work on.";
-
-        FWorldEditorTool* FindWorldEditor()
-        {
-            if (GEditorEngine == nullptr)
-            {
-                return nullptr;
-            }
-
-            FEditorUI* UI = static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI());
-            return UI != nullptr ? UI->FindTool<FWorldEditorTool>() : nullptr;
-        }
+        constexpr const char* GNoWorldEditorScene = "No world editor is open, so there is no scene to work on.";
 
         FString NameOf(const ECS::FRegistry& Registry, ECS::FEntity Entity)
         {
@@ -119,7 +109,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
@@ -164,7 +154,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
@@ -202,13 +192,13 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     CWorld* World = Tool->GetSceneWorld();
                     if (World == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     // Resolved before the transaction opens, so an unknown name costs no snapshot.
@@ -274,7 +264,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
@@ -315,7 +305,7 @@ namespace Lumina::MCP
                 });
         }
 
-        void RegisterSetProperty(FStringView Owner)
+        void RegisterSetEntityProperty(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SSetPropertyParams, SSetPropertyResult>(
                 Owner, "entity.set_property",
@@ -326,7 +316,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     ECS::FRegistry& Registry = Tool->GetSceneEntityRegistry();
@@ -420,7 +410,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     if (Tool->HasSimulatingWorld())
@@ -469,7 +459,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorScene);
                     }
 
                     if (Tool->HasSimulatingWorld())
@@ -527,7 +517,7 @@ namespace Lumina::MCP
         RegisterDescribeEntity(Owner);
         RegisterCreateEntity(Owner);
         RegisterAddComponent(Owner);
-        RegisterSetProperty(Owner);
+        RegisterSetEntityProperty(Owner);
         RegisterRemoveComponent(Owner);
         RegisterDestroyEntities(Owner);
     }

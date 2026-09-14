@@ -10,6 +10,7 @@
 #include "Core/Object/Package/Package.h"
 #include "LuminaEditor.h"
 #include "MCPTextMatch.h"
+#include "MCPWorldEditor.h"
 #include "UI/EditorUI.h"
 #include "UI/Tools/WorldEditorTool.h"
 #include "World/ECS/Registry.h"
@@ -23,17 +24,6 @@ namespace Lumina::MCP
 {
     namespace
     {
-        FWorldEditorTool* FindWorldEditor()
-        {
-            if (GEditorEngine == nullptr)
-            {
-                return nullptr;
-            }
-
-            FEditorUI* UI = static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI());
-            return UI != nullptr ? UI->FindTool<FWorldEditorTool>() : nullptr;
-        }
-
         // Class names in the registry are strings, so each distinct one is resolved once per call.
         bool IsPrefabClassName(const FName& ClassName, THashMap<FName, bool>& Cache)
         {
@@ -96,7 +86,7 @@ namespace Lumina::MCP
                 });
         }
 
-        void RegisterDescribe(FStringView Owner)
+        void RegisterDescribePrefab(FStringView Owner)
         {
             Agent::FToolRegistry::Get().Register<SDescribePrefabParams, SDescribePrefabResult>(
                 Owner, "prefab.describe",
@@ -239,7 +229,7 @@ namespace Lumina::MCP
     void RegisterPrefabTools(FStringView Owner)
     {
         RegisterList(Owner);
-        RegisterDescribe(Owner);
+        RegisterDescribePrefab(Owner);
         RegisterSpawn(Owner);
     }
 }

@@ -9,6 +9,7 @@
 #include "Log/Log.h"
 #include "LuminaEditor.h"
 #include "MCPTextMatch.h"
+#include "MCPWorldEditor.h"
 #include "Tools/Screenshot/ScreenshotCapture.h"
 #include "UI/EditorUI.h"
 #include "UI/Tools/EditorTool.h"
@@ -19,18 +20,7 @@ namespace Lumina::MCP
 {
     namespace
     {
-        constexpr const char* GNoWorldEditor = "No world editor is open.";
-
-        FWorldEditorTool* FindWorldEditor()
-        {
-            if (GEditorEngine == nullptr)
-            {
-                return nullptr;
-            }
-
-            FEditorUI* UI = static_cast<FEditorUI*>(GEditorEngine->GetDevelopmentToolsUI());
-            return UI != nullptr ? UI->FindTool<FWorldEditorTool>() : nullptr;
-        }
+        constexpr const char* GNoWorldEditorSession = "No world editor is open.";
 
         void FillPlayState(FWorldEditorTool* Tool, SPlayState& Out)
         {
@@ -83,7 +73,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
                     if (Tool->HasSimulatingWorld())
@@ -117,7 +107,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
                     if (Tool->HasSimulatingWorld())
@@ -154,7 +144,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
                     FillPlayState(Tool, Out);
@@ -172,7 +162,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
                     if (!Tool->StartPlayInEditor())
@@ -195,7 +185,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
                     if (!Tool->HasSimulatingWorld())
@@ -219,7 +209,7 @@ namespace Lumina::MCP
                     FWorldEditorTool* Tool = FindWorldEditor();
                     if (Tool == nullptr)
                     {
-                        return Agent::FToolResult::Error(GNoWorldEditor);
+                        return Agent::FToolResult::Error(GNoWorldEditorSession);
                     }
 
                     if (!Tool->HasSimulatingWorld())

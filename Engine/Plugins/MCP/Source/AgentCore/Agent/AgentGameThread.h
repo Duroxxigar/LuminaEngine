@@ -17,7 +17,7 @@ namespace Lumina::Agent
     };
 
     // Runs work on the game thread so a transport thread can touch the world without racing it.
-    class EDITOR_API FGameThreadGate
+    class AGENTCORE_API FGameThreadGate
     {
     public:
 
