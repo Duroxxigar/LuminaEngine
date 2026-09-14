@@ -5,6 +5,7 @@
 #include "World/VoxelSim.h"
 #include "World/VoxelWorld.h"
 
+#include "Containers/Function.h"
 #include "Renderer/RHI.h"
 #include "Renderer/RHITexture.h"
 #include "Renderer/RHIUtils.h"
@@ -14,6 +15,7 @@ namespace Grain
     inline constexpr int32 kBloomLevels = 5;
     inline constexpr int32 kAtrousPasses = 4;
     inline constexpr int32 kMaxDestroyPerFrame = 8;
+    inline constexpr int32 kMaxRenderEntities = 96;
 
     struct FViewArgs
     {
@@ -24,7 +26,10 @@ namespace Grain
         RHI::GPUPtr Payload   = 0;
         RHI::GPUPtr SimGrid   = 0;
         RHI::GPUPtr SimCoarse = 0;
-        RHI::GPUPtr Entities  = 0;
+
+        RHI::GPUPtr Entities   = 0;
+        RHI::GPUPtr Models     = 0;
+        RHI::GPUPtr ModelCells = 0;
 
         FVector4 CameraPos;
         FVector4 CameraFwd;
@@ -40,6 +45,7 @@ namespace Grain
         FVector4 Jitter;
         FVector4 FogParams;
         FVector4 SimOrigin;
+        FVector4 EntityBounds;
 
         uint32 EntityCount = 0;
         uint32 Unused0     = 0;
@@ -47,7 +53,7 @@ namespace Grain
         uint32 bSim        = 0;
     };
 
-    static_assert(sizeof(FViewArgs) == 304, "The Slang mirror expects a packed 304 byte block.");
+    static_assert(sizeof(FViewArgs) == 336, "The Slang mirror expects a packed 336 byte block.");
 
     // Shared by the temporal, a trous, compose and antialiasing passes, since they need the same basis.
     struct FDenoiseArgs
@@ -105,6 +111,19 @@ namespace Grain
         bool     bExplicit = false;
     };
 
+    // Mirrored by FEntityGpu in the scene module.
+    struct FEntityGpu
+    {
+        FVector3 Position { 0.0f, 0.0f, 0.0f };
+        float    Yaw = 0.0f;
+        FVector3 Half { 0.0f, 0.0f, 0.0f };
+        uint32   Model = 0;
+        FVector3 Tint { 1.0f, 1.0f, 1.0f };
+        float    Emissive = 0.0f;
+    };
+
+    static_assert(sizeof(FEntityGpu) == 48, "The Slang mirror expects a packed 48 byte block.");
+
     struct FFrameTint
     {
         FVector3 Color { 1.0f, 1.0f, 1.0f };
@@ -133,6 +152,11 @@ namespace Grain
         NODISCARD bool IsAntialiasingEnabled() const { return bAntialias; }
 
         void SetSky(const FSkyState& InSky) { Sky = InSky; }
+
+        // Uploaded once, since a model library never changes after the game starts.
+        bool UploadModels(TSpan<const uint32> Descs, TSpan<const uint32> Cells);
+        void SetEntities(TSpan<const FEntityGpu> InEntities);
+
         void SetTint(const FFrameTint& InTint) { Tint = InTint; }
         void SetOverlay(uint32 SampledSlot) { OverlaySlot = SampledSlot; }
 
@@ -143,7 +167,9 @@ namespace Grain
                     const FVoxelWorld& World, const FVoxelSim& Sim, const FCamera& Camera,
                     float RealTime, float DeltaTime);
 
-        bool CaptureToFile(const FUIntVector2& Extent, const char* Path);
+        // The overlay draws itself, so the capture takes a callback rather than a texture.
+        bool CaptureToFile(const FUIntVector2& Extent, const char* Path,
+                           const TFunction<void(RHI::FCmdListH, RHI::FTextureH)>& DrawOverlay = {});
 
         void EnableGpuTimers();
         void ReportGpuTimers() const;
@@ -199,6 +225,11 @@ namespace Grain
         bool             bTimers = false;
 
         RHI::FGPUAllocation PickBuffer;
+        RHI::FGPUAllocation ModelDescBuffer;
+        RHI::FGPUAllocation ModelCellBuffer;
+        RHI::FGPUAllocation EntityBuffer;
+        uint32              EntityCount = 0;
+        FVector4            EntityBounds;
 
         RHI::FManagedTexture RawDirect;
         RHI::FManagedTexture RawAlbedo;

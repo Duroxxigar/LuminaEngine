@@ -4,3 +4,4 @@
 #include "ShaderCommon.h"
 #include "ShaderScene.h"
 #include "ShaderSim.h"
+#include "ShaderHud.h"

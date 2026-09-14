@@ -888,6 +888,343 @@ namespace Grain
             double(Stats.ChildBytes) / 1048576.0, double(Stats.PayloadBytes) / 1048576.0);
     }
 
+    bool FVoxelWorld::IsSolidVoxel(int32 X, int32 Y, int32 Z) const
+    {
+        if (X < 0 || Y < 0 || Z < 0 || X >= kWorldVoxelsX || Y >= kWorldVoxelsY || Z >= kWorldVoxelsZ)
+        {
+            return false;
+        }
+
+        if (Nodes.empty())
+        {
+            return false;
+        }
+
+        const int32 RootX = X >> 9;
+        const int32 RootY = Y >> 9;
+        const int32 RootZ = Z >> 9;
+
+        uint32 NodeIndex = uint32((RootY * kRootCountZ + RootZ) * kRootCountX + RootX);
+        FVoxNode Node = Nodes[NodeIndex];
+
+        if ((Node.Flags & kFlagPresent) == 0u)
+        {
+            return false;
+        }
+
+        int32 BaseX = RootX << 9;
+        int32 BaseY = RootY << 9;
+        int32 BaseZ = RootZ << 9;
+        int32 NodeSize = kVoxelsPerRoot;
+
+        for (int32 Level = 0; Level < 3; ++Level)
+        {
+            if ((Node.Flags & kFlagSolid) != 0u)
+            {
+                return true;
+            }
+
+            const int32 ChildSize = NodeSize >> 3;
+            const int32 LocalX = (X - BaseX) / ChildSize;
+            const int32 LocalY = (Y - BaseY) / ChildSize;
+            const int32 LocalZ = (Z - BaseZ) / ChildSize;
+            const uint32 Slot = SlotIndex(LocalX, LocalY, LocalZ);
+
+            const uint32* Mask = Masks.data() + size_t(NodeIndex) * size_t(kMaskWords);
+            if (!TestBit(Mask, Slot))
+            {
+                return false;
+            }
+
+            if ((Node.Flags & kFlagLeaf) != 0u)
+            {
+                return true;
+            }
+
+            NodeIndex = ChildIndices[Node.ChildBase + PopcountBefore(Mask, Slot)];
+            Node = Nodes[NodeIndex];
+
+            BaseX += LocalX * ChildSize;
+            BaseY += LocalY * ChildSize;
+            BaseZ += LocalZ * ChildSize;
+            NodeSize = ChildSize;
+        }
+
+        return true;
+    }
+
+    bool FVoxelWorld::FindLeafNode(int32 X, int32 Y, int32 Z, uint32& OutNode, int32 OutBase[3]) const
+    {
+        if (X < 0 || Y < 0 || Z < 0 || X >= kWorldVoxelsX || Y >= kWorldVoxelsY || Z >= kWorldVoxelsZ
+            || Nodes.empty())
+        {
+            return false;
+        }
+
+        const int32 RootX = X >> 9;
+        const int32 RootY = Y >> 9;
+        const int32 RootZ = Z >> 9;
+
+        uint32 NodeIndex = uint32((RootY * kRootCountZ + RootZ) * kRootCountX + RootX);
+        FVoxNode Node = Nodes[NodeIndex];
+
+        if ((Node.Flags & kFlagPresent) == 0u)
+        {
+            return false;
+        }
+
+        int32 BaseX = RootX << 9;
+        int32 BaseY = RootY << 9;
+        int32 BaseZ = RootZ << 9;
+        int32 NodeSize = kVoxelsPerRoot;
+
+        for (int32 Level = 0; Level < 3; ++Level)
+        {
+            if ((Node.Flags & kFlagLeaf) != 0u)
+            {
+                OutNode = NodeIndex;
+                OutBase[0] = BaseX;
+                OutBase[1] = BaseY;
+                OutBase[2] = BaseZ;
+                return true;
+            }
+
+            if ((Node.Flags & kFlagSolid) != 0u)
+            {
+                return false;
+            }
+
+            const int32 ChildSize = NodeSize >> 3;
+            const int32 LocalX = (X - BaseX) / ChildSize;
+            const int32 LocalY = (Y - BaseY) / ChildSize;
+            const int32 LocalZ = (Z - BaseZ) / ChildSize;
+            const uint32 Slot = SlotIndex(LocalX, LocalY, LocalZ);
+
+            const uint32* Mask = Masks.data() + size_t(NodeIndex) * size_t(kMaskWords);
+            if (!TestBit(Mask, Slot))
+            {
+                return false;
+            }
+
+            NodeIndex = ChildIndices[Node.ChildBase + PopcountBefore(Mask, Slot)];
+            Node = Nodes[NodeIndex];
+
+            BaseX += LocalX * ChildSize;
+            BaseY += LocalY * ChildSize;
+            BaseZ += LocalZ * ChildSize;
+            NodeSize = ChildSize;
+        }
+
+        return false;
+    }
+
+    uint8 FVoxelWorld::MaterialAtVoxel(int32 X, int32 Y, int32 Z) const
+    {
+        if (!IsSolidVoxel(X, Y, Z))
+        {
+            return uint8(EMaterial::Air);
+        }
+
+        uint32 LeafNode = 0;
+        int32 LeafBase[3] = { 0, 0, 0 };
+        if (!FindLeafNode(X, Y, Z, LeafNode, LeafBase))
+        {
+            // A collapsed interior node carries one material across its whole span.
+            return uint8(EMaterial::Stone);
+        }
+
+        const FVoxNode& Node = Nodes[LeafNode];
+        const uint32 Slot = SlotIndex(X - LeafBase[0], Y - LeafBase[1], Z - LeafBase[2]);
+
+        if ((Node.Flags & kFlagUniform) != 0u)
+        {
+            return uint8(Node.Palette & 0xFFu);
+        }
+
+        const uint32 Word = Payload[Node.PayloadBase + (Slot >> 4)];
+        const uint32 Index = (Word >> ((Slot & 15u) * 2u)) & 3u;
+        return uint8((Node.Palette >> (Index * 8u)) & 0xFFu);
+    }
+
+    bool FVoxelWorld::NodeOverlaps(uint32 NodeIndex, const int32 NodeMin[3], int32 NodeSize,
+                                   const int32 Min[3], const int32 Max[3]) const
+    {
+        const FVoxNode& Node = Nodes[NodeIndex];
+
+        if ((Node.Flags & kFlagPresent) == 0u)
+        {
+            return false;
+        }
+
+        if ((Node.Flags & kFlagSolid) != 0u)
+        {
+            return true;
+        }
+
+        const int32 ChildSize = NodeSize >> 3;
+        const uint32* Mask = Masks.data() + size_t(NodeIndex) * size_t(kMaskWords);
+        const bool bLeaf = (Node.Flags & kFlagLeaf) != 0u;
+
+        int32 Low[3];
+        int32 High[3];
+        for (int32 Axis = 0; Axis < 3; ++Axis)
+        {
+            Low[Axis]  = Math::Clamp((Min[Axis] - NodeMin[Axis]) / ChildSize, 0, kNodeSide - 1);
+            High[Axis] = Math::Clamp((Max[Axis] - NodeMin[Axis]) / ChildSize, 0, kNodeSide - 1);
+        }
+
+        for (int32 Y = Low[1]; Y <= High[1]; ++Y)
+        {
+            for (int32 Z = Low[2]; Z <= High[2]; ++Z)
+            {
+                for (int32 X = Low[0]; X <= High[0]; ++X)
+                {
+                    const uint32 Slot = SlotIndex(X, Y, Z);
+                    if (!TestBit(Mask, Slot))
+                    {
+                        continue;
+                    }
+
+                    if (bLeaf)
+                    {
+                        return true;
+                    }
+
+                    const int32 ChildMin[3] =
+                    {
+                        NodeMin[0] + X * ChildSize,
+                        NodeMin[1] + Y * ChildSize,
+                        NodeMin[2] + Z * ChildSize,
+                    };
+
+                    const uint32 Child = ChildIndices[Node.ChildBase + PopcountBefore(Mask, Slot)];
+                    if (NodeOverlaps(Child, ChildMin, ChildSize, Min, Max))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    bool FVoxelWorld::OverlapsBox(const int32 Min[3], const int32 Max[3]) const
+    {
+        if (Nodes.empty())
+        {
+            return false;
+        }
+
+        const int32 Limit[3] = { kWorldVoxelsX - 1, kWorldVoxelsY - 1, kWorldVoxelsZ - 1 };
+
+        int32 Low[3];
+        int32 High[3];
+        for (int32 Axis = 0; Axis < 3; ++Axis)
+        {
+            if (Max[Axis] < 0 || Min[Axis] > Limit[Axis])
+            {
+                return false;
+            }
+            Low[Axis]  = Math::Clamp(Min[Axis], 0, Limit[Axis]);
+            High[Axis] = Math::Clamp(Max[Axis], 0, Limit[Axis]);
+        }
+
+        const int32 RootLow[3]  = { Low[0] >> 9, Low[1] >> 9, Low[2] >> 9 };
+        const int32 RootHigh[3] = { High[0] >> 9, High[1] >> 9, High[2] >> 9 };
+
+        for (int32 RY = RootLow[1]; RY <= RootHigh[1]; ++RY)
+        {
+            for (int32 RZ = RootLow[2]; RZ <= RootHigh[2]; ++RZ)
+            {
+                for (int32 RX = RootLow[0]; RX <= RootHigh[0]; ++RX)
+                {
+                    const int32 NodeMin[3] = { RX << 9, RY << 9, RZ << 9 };
+                    const uint32 Root = uint32((RY * kRootCountZ + RZ) * kRootCountX + RX);
+
+                    if (NodeOverlaps(Root, NodeMin, kVoxelsPerRoot, Low, High))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    void FVoxelWorld::CarveSphere(const FVector3& Center, float Radius)
+    {
+        if (Nodes.empty() || Radius <= 0.0f)
+        {
+            return;
+        }
+
+        const float CenterX = Center.x / kVoxelSize;
+        const float CenterY = Center.y / kVoxelSize;
+        const float CenterZ = Center.z / kVoxelSize;
+        const float VoxelRadius = Radius / kVoxelSize;
+        const float RadiusSquared = VoxelRadius * VoxelRadius;
+
+        const int32 MaxCellX = (kWorldVoxelsX >> 3) - 1;
+        const int32 MaxCellY = (kWorldVoxelsY >> 3) - 1;
+        const int32 MaxCellZ = (kWorldVoxelsZ >> 3) - 1;
+
+        // Whole leaf cells at a time, so the tree walk runs once per cell instead of once per voxel.
+        const int32 CellX0 = Math::Clamp(int32(Math::Floor((CenterX - VoxelRadius) / 8.0f)), 0, MaxCellX);
+        const int32 CellX1 = Math::Clamp(int32(Math::Floor((CenterX + VoxelRadius) / 8.0f)), 0, MaxCellX);
+        const int32 CellY0 = Math::Clamp(int32(Math::Floor((CenterY - VoxelRadius) / 8.0f)), 0, MaxCellY);
+        const int32 CellY1 = Math::Clamp(int32(Math::Floor((CenterY + VoxelRadius) / 8.0f)), 0, MaxCellY);
+        const int32 CellZ0 = Math::Clamp(int32(Math::Floor((CenterZ - VoxelRadius) / 8.0f)), 0, MaxCellZ);
+        const int32 CellZ1 = Math::Clamp(int32(Math::Floor((CenterZ + VoxelRadius) / 8.0f)), 0, MaxCellZ);
+
+        for (int32 CellY = CellY0; CellY <= CellY1; ++CellY)
+        {
+            for (int32 CellZ = CellZ0; CellZ <= CellZ1; ++CellZ)
+            {
+                for (int32 CellX = CellX0; CellX <= CellX1; ++CellX)
+                {
+                    uint32 LeafNode = 0;
+                    int32 LeafBase[3] = { 0, 0, 0 };
+                    if (!FindLeafNode(CellX * 8 + 4, CellY * 8 + 4, CellZ * 8 + 4, LeafNode, LeafBase))
+                    {
+                        continue;
+                    }
+
+                    uint32* Mask = Masks.data() + size_t(LeafNode) * size_t(kMaskWords);
+                    bool bCleared = false;
+
+                    for (int32 Y = 0; Y < kNodeSide; ++Y)
+                    {
+                        const float DY = float(LeafBase[1] + Y) + 0.5f - CenterY;
+                        for (int32 Z = 0; Z < kNodeSide; ++Z)
+                        {
+                            const float DZ = float(LeafBase[2] + Z) + 0.5f - CenterZ;
+                            for (int32 X = 0; X < kNodeSide; ++X)
+                            {
+                                const float DX = float(LeafBase[0] + X) + 0.5f - CenterX;
+                                if (DX * DX + DY * DY + DZ * DZ >= RadiusSquared)
+                                {
+                                    continue;
+                                }
+
+                                const uint32 Slot = SlotIndex(X, Y, Z);
+                                Mask[Slot >> 5] &= ~(1u << (Slot & 31u));
+                                bCleared = true;
+                            }
+                        }
+                    }
+
+                    if (bCleared)
+                    {
+                        // A solid leaf ignores its mask, so it has to stop being solid to show the hole.
+                        Nodes[LeafNode].Flags &= ~kFlagSolid;
+                    }
+                }
+            }
+        }
+    }
+
     bool FVoxelWorld::Upload()
     {
         if (Nodes.empty())

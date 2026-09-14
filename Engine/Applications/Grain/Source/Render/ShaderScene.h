@@ -14,6 +14,24 @@ namespace Grain::Shaders
             return gTextures2D[TextureID].SampleLevel(gSamplers[SAMPLER_LINEAR_CLAMP], UV, 0.0);
         }
 
+        struct FEntityGpu
+        {
+            float3 Position;
+            float  Yaw;
+            float3 Half;
+            uint   Model;
+            float3 Tint;
+            float  Emissive;
+        };
+
+        struct FModelDesc
+        {
+            uint SizeX;
+            uint SizeY;
+            uint SizeZ;
+            uint Base;
+        };
+
         struct FViewArgs
         {
             FVoxNode* Nodes;
@@ -23,7 +41,10 @@ namespace Grain::Shaders
             uint*     Payload;
             uint*     SimGrid;
             uint*     SimCoarse;
-            uint64_t  Entities;
+
+            FEntityGpu* Entities;
+            FModelDesc* Models;
+            uint*       ModelCells;
 
             float4 CameraPos;
             float4 CameraFwd;
@@ -39,6 +60,7 @@ namespace Grain::Shaders
             float4 Jitter;
             float4 FogParams;
             float4 SimOrigin;
+            float4 EntityBounds;
 
             uint4 IDs;
         };
@@ -225,7 +247,7 @@ namespace Grain::Shaders
 
             switch (Id)
             {
-            case MAT_GRASS:  M.Albedo = float3(0.17, 0.29, 0.11); M.Variation = 0.26; break;
+            case MAT_GRASS:  M.Albedo = float3(0.17, 0.29, 0.11); M.Variation = 0.16; break;
             case MAT_DIRT:   M.Albedo = float3(0.25, 0.17, 0.11); M.Variation = 0.20; break;
             case MAT_STONE:  M.Albedo = float3(0.32, 0.32, 0.34); M.Variation = 0.16; break;
             case MAT_ROCK:   M.Albedo = float3(0.37, 0.35, 0.33); M.Variation = 0.20; break;
@@ -233,10 +255,10 @@ namespace Grain::Shaders
             case MAT_SNOW:   M.Albedo = float3(0.84, 0.88, 0.96); M.Gloss = 0.25; M.Variation = 0.05; break;
             case MAT_WATER:  M.Albedo = float3(0.03, 0.10, 0.16); M.Gloss = 1.0; break;
             case MAT_WOOD:   M.Albedo = float3(0.26, 0.16, 0.09); M.Variation = 0.22; break;
-            case MAT_LEAVES: M.Albedo = float3(0.14, 0.30, 0.12); M.Variation = 0.34; break;
+            case MAT_LEAVES: M.Albedo = float3(0.14, 0.30, 0.12); M.Variation = 0.24; break;
             case MAT_GRAVEL: M.Albedo = float3(0.36, 0.34, 0.31); M.Variation = 0.24; break;
             case MAT_CLAY:   M.Albedo = float3(0.55, 0.31, 0.20); M.Variation = 0.16; break;
-            case MAT_MOSS:   M.Albedo = float3(0.15, 0.28, 0.13); M.Variation = 0.30; break;
+            case MAT_MOSS:   M.Albedo = float3(0.15, 0.28, 0.13); M.Variation = 0.20; break;
             case MAT_SLATE:  M.Albedo = float3(0.20, 0.21, 0.25); M.Gloss = 0.15; M.Variation = 0.14; break;
             case MAT_THATCH: M.Albedo = float3(0.52, 0.41, 0.20); M.Variation = 0.26; break;
             case MAT_ORE:
@@ -312,7 +334,7 @@ namespace Grain::Shaders
             // Two scales of variation, so a wide field reads as terrain rather than one flat sheet.
             const float Fine = HashVoxel(VoxelPos);
             const float Coarse = ValueNoise3(VoxelPos * 0.055);
-            const float Shift = (Fine - 0.5) * M.Variation + (Coarse - 0.5) * M.Variation * 1.7;
+            const float Shift = (Fine - 0.5) * M.Variation + (Coarse - 0.5) * M.Variation * 1.1;
 
             M.Albedo *= saturate(1.0 + Shift);
 
@@ -423,7 +445,197 @@ namespace Grain::Shaders
             return frac(R2 + PixelRotation(Pixel));
         }
 
+        //~ Entities are small voxel grids in their own rotated box, marched after the terrain.
+
+        struct FEntityHit
+        {
+            bool   bHit;
+            float  T;
+            uint   Material;
+            float3 Normal;
+            float3 Position;
+            float3 Tint;
+            float  Emissive;
+        };
+
+        float3 RotateY(float3 V, float CosA, float SinA)
+        {
+            return float3(V.x * CosA - V.z * SinA, V.y, V.x * SinA + V.z * CosA);
+        }
+
+        uint ModelCellAt(FViewArgs V, FModelDesc Desc, int3 Cell)
+        {
+            const uint Index = uint((Cell.y * int(Desc.SizeZ) + Cell.z) * int(Desc.SizeX) + Cell.x);
+            const uint Word = V.ModelCells[Desc.Base + (Index >> 2u)];
+            return (Word >> ((Index & 3u) * 8u)) & 0xFFu;
+        }
+
+        bool TraceEntity(FViewArgs V, uint Index, float3 Origin, float3 Dir, float MaxT,
+                         bool bAnyHit, inout FEntityHit Out)
+        {
+            const FEntityGpu E = V.Entities[Index];
+
+            const float CosA = cos(-E.Yaw);
+            const float SinA = sin(-E.Yaw);
+
+            const float3 LocalOrigin = RotateY(Origin - E.Position, CosA, SinA);
+            const float3 LocalDir = RotateY(Dir, CosA, SinA);
+            const float3 InvDir = SafeInverse(LocalDir);
+
+            const float3 A = (-E.Half - LocalOrigin) * InvDir;
+            const float3 B = ( E.Half - LocalOrigin) * InvDir;
+            const float3 Near = min(A, B);
+            const float3 Far = max(A, B);
+
+            const float TEnter = max(max(Near.x, Near.y), max(Near.z, 0.0));
+            const float TExit = min(Far.x, min(Far.y, Far.z));
+
+            if (TExit <= TEnter || TEnter >= MaxT)
+            {
+                return false;
+            }
+
+            const FModelDesc Desc = V.Models[E.Model];
+            const float3 Size = float3(float(Desc.SizeX), float(Desc.SizeY), float(Desc.SizeZ));
+            const float3 CellSize = (E.Half * 2.0) / max(Size, float3(1.0));
+
+            const float3 Entry = LocalOrigin + LocalDir * (TEnter + 1e-4);
+            int3 Cell = int3(floor((Entry + E.Half) / CellSize));
+            Cell = clamp(Cell, int3(0), int3(Size) - 1);
+
+            const int3 Stride = int3(LocalDir.x > 0.0 ? 1 : -1,
+                                     LocalDir.y > 0.0 ? 1 : -1,
+                                     LocalDir.z > 0.0 ? 1 : -1);
+
+            const float3 Advance = abs(CellSize * InvDir);
+            const float3 Plane = (float3(Cell) + max(float3(Stride), float3(0.0))) * CellSize - E.Half;
+
+            float3 Next = (Plane - LocalOrigin) * InvDir;
+
+            float T = TEnter;
+            int Axis = Near.x > Near.y ? (Near.x > Near.z ? 0 : 2) : (Near.y > Near.z ? 1 : 2);
+
+            for (int Step = 0; Step < 96; ++Step)
+            {
+                const uint Material = ModelCellAt(V, Desc, Cell);
+
+                if (Material != MAT_AIR)
+                {
+                    if (bAnyHit)
+                    {
+                        return true;
+                    }
+
+                    float3 LocalNormal = float3(0.0, 0.0, 0.0);
+                    LocalNormal[Axis] = float(-Stride[Axis]);
+
+                    Out.bHit = true;
+                    Out.T = T;
+                    Out.Material = Material;
+                    Out.Normal = RotateY(LocalNormal, CosA, -SinA);
+                    Out.Position = Origin + Dir * T;
+                    Out.Tint = E.Tint;
+                    Out.Emissive = E.Emissive;
+                    return true;
+                }
+
+                Axis = Next.x < Next.y ? (Next.x < Next.z ? 0 : 2) : (Next.y < Next.z ? 1 : 2);
+
+                T = Next[Axis];
+                if (T > TExit || T >= MaxT)
+                {
+                    return false;
+                }
+
+                Cell[Axis] += Stride[Axis];
+                if (Cell[Axis] < 0 || Cell[Axis] >= int(Size[Axis]))
+                {
+                    return false;
+                }
+
+                Next[Axis] += Advance[Axis];
+            }
+
+            return false;
+        }
+
+        bool MissesEntityBounds(FViewArgs V, float3 Origin, float3 Dir, float MaxT)
+        {
+            if (V.IDs.x == 0u)
+            {
+                return true;
+            }
+
+            const float3 Center = V.EntityBounds.xyz - Origin;
+            const float Radius = V.EntityBounds.w;
+
+            const float Along = dot(Center, Dir);
+            if (Along < -Radius || Along - Radius > MaxT)
+            {
+                return true;
+            }
+
+            return dot(Center, Center) - Along * Along > Radius * Radius;
+        }
+
+        FEntityHit MarchEntities(FViewArgs V, float3 Origin, float3 Dir, float MaxT)
+        {
+            FEntityHit Out;
+            Out.bHit = false;
+            Out.T = MaxT;
+            Out.Material = MAT_AIR;
+            Out.Normal = float3(0.0, 1.0, 0.0);
+            Out.Position = Origin;
+            Out.Tint = float3(1.0);
+            Out.Emissive = 0.0;
+
+            if (MissesEntityBounds(V, Origin, Dir, MaxT))
+            {
+                return Out;
+            }
+
+            for (uint i = 0; i < V.IDs.x; ++i)
+            {
+                TraceEntity(V, i, Origin, Dir, Out.T, false, Out);
+            }
+
+            return Out;
+        }
+
+        bool EntitiesOcclude(FViewArgs V, float3 Origin, float3 Dir, float MaxT)
+        {
+            FEntityHit Ignored;
+            Ignored.bHit = false;
+            Ignored.T = MaxT;
+            Ignored.Material = MAT_AIR;
+            Ignored.Normal = float3(0.0, 1.0, 0.0);
+            Ignored.Position = Origin;
+            Ignored.Tint = float3(1.0);
+            Ignored.Emissive = 0.0;
+
+            if (MissesEntityBounds(V, Origin, Dir, MaxT))
+            {
+                return false;
+            }
+
+            for (uint i = 0; i < V.IDs.x; ++i)
+            {
+                if (TraceEntity(V, i, Origin, Dir, MaxT, true, Ignored))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         //~ Shading.
+
+        // Past the stopping cell, since a fixed offset lands back inside the surface at grazing angles.
+        float3 SurfaceOrigin(FHit Hit, float Footprint)
+        {
+            return Hit.Position + Hit.Normal * max(0.16, Footprint * 2.2);
+        }
 
         // One short probe upward, which is what stops a secondary hit underground collecting sky light.
         float SkyVisibility(FScene S, float3 Point, float3 Normal)
@@ -436,7 +648,7 @@ namespace Grain::Shaders
         float3 ShadeSecondary(FScene S, FViewArgs V, FHit Hit)
         {
             const FSurfaceMaterial M = MaterialOf(Hit.Material, Hit.Position);
-            const float3 Point = Hit.Position + Hit.Normal * 0.12;
+            const float3 Point = SurfaceOrigin(Hit, Hit.T * 0.045);
 
             float3 Lit = M.Emissive;
 
@@ -460,10 +672,10 @@ namespace Grain::Shaders
         }
 
         // Returns irradiance rather than radiance, so albedo can be divided out before denoising.
-        float3 GatherBounce(FScene S, FViewArgs V, float3 Origin, float3 Normal, uint2 Pixel, uint Frame)
+        float3 GatherBounce(FScene S, FViewArgs V, FHit Hit, float Footprint, uint2 Pixel, uint Frame)
         {
-            const float3 Dir = CosineDirection(Normal, Random2(Pixel, Frame));
-            const FHit Bounce = March(S, Origin + Normal * 0.12, Dir, 4000.0, 56, 0.050);
+            const float3 Dir = CosineDirection(Hit.Normal, Random2(Pixel, Frame));
+            const FHit Bounce = March(S, SurfaceOrigin(Hit, Footprint), Dir, 4000.0, 56, 0.050);
 
             float3 Radiance = float3(0.0);
             if (Bounce.bHit)
@@ -482,15 +694,17 @@ namespace Grain::Shaders
         }
 
         // The direct term carries no Monte Carlo noise, so it bypasses the denoiser entirely.
-        float3 ShadeDirect(FScene S, FViewArgs V, FHit Hit, float3 RayDir, FSurfaceMaterial M)
+        float3 ShadeDirect(FScene S, FViewArgs V, FHit Hit, float3 RayDir, FSurfaceMaterial M,
+                           float Footprint)
         {
-            const float3 Point = Hit.Position + Hit.Normal * 0.12;
+            const float3 Point = SurfaceOrigin(Hit, Footprint);
 
             float3 Color = M.Emissive;
 
             const float NdotL = saturate(dot(Hit.Normal, V.SunDir.xyz));
             if (NdotL > 0.0 && V.SunDir.w > 0.001
-                && !MarchOccluded(S, Point, V.SunDir.xyz, 3000.0, 128, 0.012))
+                && !MarchOccluded(S, Point, V.SunDir.xyz, 3000.0, 128, 0.012)
+                && !EntitiesOcclude(V, Point, V.SunDir.xyz, 240.0))
             {
                 Color += M.Albedo * SunRadiance(V) * NdotL;
 
@@ -566,7 +780,7 @@ namespace Grain::Shaders
             const float3 Normal = normalize(Surface + float3(Ripple.x, 0.0, Ripple.y));
             const float3 Reflected = reflect(Dir, Normal);
 
-            const FHit Mirror = March(S, Hit.Position + Normal * 0.05, Reflected, 700.0, 64, 0.024);
+            const FHit Mirror = March(S, Hit.Position + Normal * 0.08, Reflected, 700.0, 64, 0.024);
             const float3 Reflection = Mirror.bHit
                 ? ShadeSecondary(S, V, Mirror)
                 : (Mirror.bExhausted ? V.SkyHorizon.rgb * 0.5 : SkyRadiance(V, Reflected));
@@ -621,7 +835,11 @@ namespace Grain::Shaders
             const float3 Dir = RayThrough(V, Input.UV + V.Jitter.xy);
             const float3 Origin = V.CameraPos.xyz;
 
-            const FHit Hit = March(S, Origin, Dir, 4000.0, 256, V.Params.w);
+            float3 EntityTint = float3(1.0);
+            float EntityEmissive = 0.0;
+
+            const FHit Terrain = March(S, Origin, Dir, 4000.0, 256, V.Params.w);
+            const FHit Hit = ResolveEntity(V, Terrain, Origin, Dir, EntityTint, EntityEmissive);
 
             FRaymarchOut Out;
             Out.Direct = float4(0.0, 0.0, 0.0, 7.0);
@@ -657,10 +875,38 @@ namespace Grain::Shaders
                 return Out;
             }
 
-            const FSurfaceMaterial M = MaterialOf(Hit.Material, Hit.Position);
+            FSurfaceMaterial M = MaterialOf(Hit.Material, Hit.Position);
+            M.Albedo *= EntityTint;
+            M.Emissive *= 1.0 + EntityEmissive * 2.0;
 
-            Out.Direct.rgb = ShadeDirect(S, V, Hit, Dir, M);
+            Out.Direct.rgb = ShadeDirect(S, V, Hit, Dir, M, Hit.T * V.Params.w);
             Out.Albedo.rgb = M.Albedo;
+            return Out;
+        }
+
+        // Shared by the primary pass and the bounce pass, so a figure shades the same way in both.
+        FHit ResolveEntity(FViewArgs V, FHit Hit, float3 Origin, float3 Dir,
+                           out float3 OutTint, out float OutEmissive)
+        {
+            OutTint = float3(1.0);
+            OutEmissive = 0.0;
+
+            const FEntityHit Entity = MarchEntities(V, Origin, Dir, Hit.bHit ? Hit.T : 4000.0);
+            if (!Entity.bHit)
+            {
+                return Hit;
+            }
+
+            OutTint = Entity.Tint;
+            OutEmissive = Entity.Emissive;
+
+            FHit Out;
+            Out.bHit = true;
+            Out.bExhausted = false;
+            Out.T = Entity.T;
+            Out.Material = Entity.Material;
+            Out.Normal = Entity.Normal;
+            Out.Position = Entity.Position;
             return Out;
         }
 
@@ -682,7 +928,12 @@ namespace Grain::Shaders
             const uint2 Pixel = uint2(Input.UV * V.Params.xy);
 
             const float3 Dir = RayThrough(V, Input.UV);
-            const FHit Hit = March(S, V.CameraPos.xyz, Dir, 4000.0, 192, V.Params.w);
+
+            float3 EntityTint = float3(1.0);
+            float EntityEmissive = 0.0;
+
+            const FHit Terrain = March(S, V.CameraPos.xyz, Dir, 4000.0, 192, V.Params.w);
+            const FHit Hit = ResolveEntity(V, Terrain, V.CameraPos.xyz, Dir, EntityTint, EntityEmissive);
 
             FGiOut Out;
             Out.Irradiance = float4(0.0, 0.0, 0.0, 1e5);
@@ -695,7 +946,7 @@ namespace Grain::Shaders
 
             Out.Irradiance.w = Hit.T;
             Out.Geometry = float4(Hit.T, EncodeNormal(Hit.Normal), 0.0, 0.0);
-            Out.Irradiance.rgb = GatherBounce(S, V, Hit.Position, Hit.Normal, Pixel, Frame) * V.CameraUp.w;
+            Out.Irradiance.rgb = GatherBounce(S, V, Hit, Hit.T * V.Params.w, Pixel, Frame) * V.CameraUp.w;
             return Out;
         }
 

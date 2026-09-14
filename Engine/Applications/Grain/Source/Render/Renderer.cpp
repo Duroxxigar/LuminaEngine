@@ -265,6 +265,89 @@ namespace Grain
             && RHI::IsValid(SimCoarsePipeline) && RHI::IsValid(SimDilatePipeline);
     }
 
+    bool FRenderer::UploadModels(TSpan<const uint32> Descs, TSpan<const uint32> Cells)
+    {
+        const uint64 DescBytes = Descs.size() * sizeof(uint32);
+        const uint64 CellBytes = Math::Max<uint64>(Cells.size() * sizeof(uint32), 4);
+
+        ModelDescBuffer = RHI::Malloc(DescBytes, RHI::EMemoryType::Default);
+        ModelCellBuffer = RHI::Malloc(CellBytes, RHI::EMemoryType::Default);
+        EntityBuffer = RHI::Malloc(uint64(kMaxRenderEntities) * sizeof(FEntityGpu), RHI::EMemoryType::CPUWrite);
+
+        if (ModelDescBuffer.Gpu == 0 || ModelCellBuffer.Gpu == 0 || EntityBuffer.Gpu == 0
+            || EntityBuffer.Cpu == nullptr)
+        {
+            LOG_ERROR("Grain: failed to allocate the model buffers.");
+            return false;
+        }
+
+        RHI::SetDebugName(ModelDescBuffer.Gpu, "Grain.ModelDescs");
+        RHI::SetDebugName(ModelCellBuffer.Gpu, "Grain.ModelCells");
+        RHI::SetDebugName(EntityBuffer.Gpu, "Grain.Entities");
+
+        const RHI::FGPUAllocation Staging = RHI::Malloc(DescBytes + CellBytes, RHI::EMemoryType::CPUWrite);
+        if (Staging.Cpu == nullptr)
+        {
+            return false;
+        }
+
+        std::memcpy(Staging.Cpu, Descs.data(), size_t(DescBytes));
+        if (!Cells.empty())
+        {
+            std::memcpy(reinterpret_cast<uint8*>(Staging.Cpu) + DescBytes, Cells.data(),
+                        size_t(Cells.size() * sizeof(uint32)));
+        }
+
+        const RHI::FCmdListH CL = RHI::OpenCommandList();
+        RHI::CmdMemcpy(CL, { ModelDescBuffer.Gpu, size_t(DescBytes) }, { Staging.Gpu, size_t(DescBytes) });
+        RHI::CmdMemcpy(CL, { ModelCellBuffer.Gpu, size_t(CellBytes) },
+                       { Staging.Gpu + DescBytes, size_t(CellBytes) });
+        RHI::CmdBarrier(CL,
+            RHI::EStageFlags::Transfer, RHI::EAccessFlags::TransferWrite,
+            RHI::EStageFlags::PixelShader | RHI::EStageFlags::Compute,
+            RHI::EAccessFlags::ShaderRead);
+
+        const uint64 Value = RHI::Submit(RHI::EQueueType::Graphics, TSpan<const RHI::FCmdListH>{&CL, 1});
+        RHI::WaitSemaphore(RHI::GetQueueTimeline(RHI::EQueueType::Graphics), Value);
+
+        RHI::Retire(Staging);
+        return true;
+    }
+
+    void FRenderer::SetEntities(TSpan<const FEntityGpu> InEntities)
+    {
+        EntityCount = uint32(Math::Min<size_t>(InEntities.size(), kMaxRenderEntities));
+
+        EntityBounds = { 0.0f, 0.0f, 0.0f, 0.0f };
+
+        if (EntityBuffer.Cpu == nullptr || EntityCount == 0)
+        {
+            return;
+        }
+
+        // Host visible, so the write lands without a copy and the submit carries its visibility.
+        std::memcpy(EntityBuffer.Cpu, InEntities.data(), size_t(EntityCount) * sizeof(FEntityGpu));
+
+        FVector3 Low = InEntities[0].Position;
+        FVector3 High = InEntities[0].Position;
+
+        for (uint32 i = 0; i < EntityCount; ++i)
+        {
+            const FEntityGpu& Entity = InEntities[i];
+            const float Reach = Math::Max(Entity.Half.x, Math::Max(Entity.Half.y, Entity.Half.z));
+
+            Low = { Math::Min(Low.x, Entity.Position.x - Reach), Math::Min(Low.y, Entity.Position.y - Reach),
+                    Math::Min(Low.z, Entity.Position.z - Reach) };
+            High = { Math::Max(High.x, Entity.Position.x + Reach), Math::Max(High.y, Entity.Position.y + Reach),
+                     Math::Max(High.z, Entity.Position.z + Reach) };
+        }
+
+        const FVector3 Center { (Low.x + High.x) * 0.5f, (Low.y + High.y) * 0.5f, (Low.z + High.z) * 0.5f };
+        const FVector3 Span { High.x - Center.x, High.y - Center.y, High.z - Center.z };
+
+        EntityBounds = MakeVector4(Center, Math::Sqrt(Span.x * Span.x + Span.y * Span.y + Span.z * Span.z));
+    }
+
     void FRenderer::ReleaseTargets()
     {
         for (RHI::FManagedTexture* Target : { &RawDirect, &RawAlbedo, &GiRaw, &GiGeo,
@@ -489,6 +572,12 @@ namespace Grain
         Args.Payload  = World.GetPayloadAddress();
         Args.SimGrid   = Sim.GetGridAddress();
         Args.SimCoarse = Sim.GetCoarseAddress();
+
+        Args.Entities   = EntityBuffer.Gpu;
+        Args.Models     = ModelDescBuffer.Gpu;
+        Args.ModelCells = ModelCellBuffer.Gpu;
+        Args.EntityCount = EntityCount;
+        Args.EntityBounds = EntityBounds;
 
         Args.SimOrigin = MakeVector4(Sim.GetOriginVoxels(), 0.0f);
 
@@ -900,7 +989,8 @@ namespace Grain
         LOG_INFO("  {:<12} {:6.3f} ms", "total", double(Ticks[kTimerSlots - 1] - Ticks[0]) * Scale);
     }
 
-    bool FRenderer::CaptureToFile(const FUIntVector2& Extent, const char* Path)
+    bool FRenderer::CaptureToFile(const FUIntVector2& Extent, const char* Path,
+                                  const TFunction<void(RHI::FCmdListH, RHI::FTextureH)>& DrawOverlay)
     {
         // The capture list barriers targets the in flight frame is still writing, so it drains first.
         RHI::WaitDeviceIdle();
@@ -926,6 +1016,11 @@ namespace Grain
         RHI::CmdSetTextureHeap(CL, RHI::GetGlobalHeap());
 
         DrawComposite(CL, Capture, Extent);
+
+        if (DrawOverlay)
+        {
+            DrawOverlay(CL, Capture);
+        }
 
         RHI::Barriers::RasterToRead(CL);
         RHI::CmdBarrier(CL,
@@ -992,10 +1087,14 @@ namespace Grain
             RHI::Retire(TimerPool);
         }
 
-        if (PickBuffer.Gpu != 0)
+        for (RHI::FGPUAllocation* Allocation : { &PickBuffer, &ModelDescBuffer, &ModelCellBuffer,
+                                                &EntityBuffer })
         {
-            RHI::Retire(PickBuffer);
-            PickBuffer = {};
+            if (Allocation->Gpu != 0)
+            {
+                RHI::Retire(*Allocation);
+                *Allocation = {};
+            }
         }
     }
 }
