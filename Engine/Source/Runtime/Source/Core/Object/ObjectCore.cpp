@@ -470,8 +470,6 @@ namespace Lumina
         
         FinalClass = Params.RegisterFunc();
 
-        CObjectForceRegistration(FinalClass);
-        
         InitializeAndCreateFProperties(FinalClass, Params.Params, Params.NumProperties);
         InitializeAndCreateFFunctions(FinalClass, Params.Functions, Params.NumFunctions);
 
@@ -480,6 +478,9 @@ namespace Lumina
             const FMetaDataPairParam& Param = Params.MetaDataArray[i];
             FinalClass->Metadata.AddValue(Param.NameUTF8, Param.ValueUTF8);
         }
+
+        // Last, so a walk of the object array never reaches a class whose properties are still arriving.
+        CObjectForceRegistration(FinalClass);
     }
 
     void ConstructCEnum(CEnum** OutEnum, const FEnumParams& Params)

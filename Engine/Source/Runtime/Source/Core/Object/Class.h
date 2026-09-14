@@ -256,6 +256,9 @@ namespace Lumina
 
     private:
 
+        // Rebuilds AllProperties and AllFunctions from OwnProperties/OwnFunctions plus the super's.
+        RUNTIME_API void Flatten();
+
         // Walks SuperStruct. Kept as the fallback and as the Debug cross-check for the chain.
         RUNTIME_API bool IsChildOfByWalk(const CStruct* Base) const;
 

@@ -10,6 +10,7 @@
 #include "ObjectArray.h"
 #include "ObjectHash.h"
 #include "Core/Console/ConsoleVariable.h"
+#include "Core/Templates/LuminaTemplate.h"
 #include "Log/Log.h"
 #include "Memory/Memory.h"
 #include "Package/Package.h"
@@ -328,8 +329,22 @@ namespace Lumina
         StructRegistry.ProcessRegistrations();
     }
 
+    // Re-entrancy guard for SettleDeferredRegistrations. The pass creates default objects itself, and a CDO
+    // must not restart the pass that is building it.
+    static bool GProcessingNewlyLoadedCObjects = false;
+
+    void SettleDeferredRegistrations()
+    {
+        if (!GProcessingNewlyLoadedCObjects)
+        {
+            ProcessNewlyLoadedCObjects();
+        }
+    }
+
     void ProcessNewlyLoadedCObjects()
     {
+        const TGuardValue<bool> Guard(GProcessingNewlyLoadedCObjects, true);
+
         FClassDeferredRegistry& ClassRegistry = FClassDeferredRegistry::Get();
         FEnumDeferredRegistry& EnumRegistry = FEnumDeferredRegistry::Get();
         FStructDeferredRegistry& StructRegistry = FStructDeferredRegistry::Get();

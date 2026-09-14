@@ -223,6 +223,10 @@ namespace Lumina
     
     RUNTIME_API void ProcessNewlyLoadedCObjects();
 
+    // Runs the deferred pass unless one is already running, so a caller that needs a settled class set can
+    // ask for one without knowing whether it is inside that pass.
+    RUNTIME_API void SettleDeferredRegistrations();
+
     /** How many compiled-in registrations are queued, per registry. */
     struct FDeferredRegistrationSnapshot
     {
