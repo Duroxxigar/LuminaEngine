@@ -141,6 +141,7 @@ namespace Lumina
         }
 
         Minted->ScriptOverrideFunctions.clear();
+        Minted->ScriptOverrideSlots.clear();
 
         CStruct* Base = Minted->GetSuperStruct();
         if (Base == nullptr)
@@ -154,6 +155,7 @@ namespace Lumina
         if (const auto It = GNativeInfos().find(FString(Base->GetName().c_str())); It != GNativeInfos().end())
         {
             Info = &It->second;
+            Minted->ScriptOverrideSlots.assign((Info->EventThunks.size() + 63) / 64, 0ull);
         }
 
         for (const FString& Event : OverriddenEvents)
@@ -167,14 +169,18 @@ namespace Lumina
                 continue;
             }
 
+            // Thunks register in the order the generator numbered the shim's events, so the index is the slot.
             FFunction::FNativeFuncPtr Thunk = nullptr;
+            size_t Slot = 0;
             if (Info != nullptr)
             {
-                for (const FScriptableEventThunk& Candidate : Info->EventThunks)
+                for (size_t i = 0; i < Info->EventThunks.size(); ++i)
                 {
+                    const FScriptableEventThunk& Candidate = Info->EventThunks[i];
                     if (Candidate.Name != nullptr && EventName == FName(Candidate.Name))
                     {
                         Thunk = Candidate.Thunk;
+                        Slot  = i;
                         break;
                     }
                 }
@@ -188,6 +194,7 @@ namespace Lumina
             }
 
             Scripting::MintScriptOverride(*Minted, *Declared, Thunk);
+            Minted->ScriptOverrideSlots[Slot / 64] |= (1ull << (Slot & 63));
         }
     }
 

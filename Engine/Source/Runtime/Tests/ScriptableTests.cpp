@@ -86,6 +86,71 @@ TEST(Scriptable, ReapplyingOverridesDropsTheOnesNoLongerDeclared)
     EXPECT_NE(FindScriptOverride(Sub, FName("OnTest")), nullptr);
     EXPECT_EQ(FindScriptOverride(Sub, FName("OnEchoWorld")), nullptr)
         << "an override removed from the C# type must not survive the reload that reuses the class";
+
+    EXPECT_TRUE(Sub->HasScriptOverrideSlot(0));
+    EXPECT_FALSE(Sub->HasScriptOverrideSlot(1))
+        << "a stale slot bit would keep the shim dispatching an override the map no longer has";
+}
+
+// The shim gates on a slot bit rather than the map, so the two have to describe the same override set.
+TEST(Scriptable, OverrideSlotsAgreeWithTheMintedFunctions)
+{
+    // Only the second declared event, so a slot that merely counted overrides would answer wrongly.
+    const FString Overridden[] = { FString("OnEchoWorld") };
+
+    CScriptClass* Sub = FScriptableRegistry::Mint("ScriptableTest_GTestSlots", "CScriptableTest", Overridden);
+    ASSERT_NE(Sub, nullptr);
+    ProcessNewlyLoadedCObjects();
+    Sub->GetDefaultObject();
+
+    EXPECT_FALSE(Sub->HasScriptOverrideSlot(0));
+    EXPECT_TRUE(Sub->HasScriptOverrideSlot(1))
+        << "the slot is the event's declaration ordinal, which is what the generated shim hardcodes";
+
+    EXPECT_EQ(FindScriptOverride(Sub, FName("OnTest")), nullptr);
+    EXPECT_NE(FindScriptOverride(Sub, FName("OnEchoWorld")), nullptr);
+
+    const FString Both[] = { FString("OnTest"), FString("OnEchoWorld") };
+    FScriptableRegistry::ApplyScriptOverrides(Sub, Both);
+    EXPECT_TRUE(Sub->HasScriptOverrideSlot(0));
+    EXPECT_TRUE(Sub->HasScriptOverrideSlot(1));
+}
+
+// The shim passes a compile-time constant, so a stale binary can outlive the event list it was built against.
+TEST(Scriptable, SlotQueryRejectsIndicesOutsideTheDeclaredRange)
+{
+    const FString Overridden[] = { FString("OnTest") };
+
+    CScriptClass* Sub = FScriptableRegistry::Mint("ScriptableTest_GTestSlotRange", "CScriptableTest", Overridden);
+    ASSERT_NE(Sub, nullptr);
+    ProcessNewlyLoadedCObjects();
+    Sub->GetDefaultObject();
+
+    EXPECT_FALSE(Sub->HasScriptOverrideSlot(64));
+    EXPECT_FALSE(Sub->HasScriptOverrideSlot(4096));
+    EXPECT_FALSE(Sub->HasScriptOverrideSlot(-1));
+}
+
+// A class that overrides nothing must never reach the managed table, which is the whole point of the gate.
+TEST(Scriptable, UnoverriddenSlotResolvesNoManagedInstance)
+{
+    CScriptClass* Sub = FScriptableRegistry::Mint("ScriptableTest_GTestGate", "CScriptableTest");
+    ASSERT_NE(Sub, nullptr);
+    ProcessNewlyLoadedCObjects();
+    Sub->GetDefaultObject();
+
+    CObject* Object = NewObject(Sub, nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ASSERT_NE(Object, nullptr);
+
+    const int32 LiveBefore = ManagedInstances::GetLiveCount();
+
+    EXPECT_EQ(Scriptable::GetOverrideInstance(Object, 0), nullptr);
+    EXPECT_EQ(Scriptable::GetOverrideInstance(Object, 1), nullptr);
+    EXPECT_EQ(ManagedInstances::Find(Object), nullptr)
+        << "the slot test has to reject before the managed table is consulted at all";
+    EXPECT_EQ(ManagedInstances::GetLiveCount(), LiveBefore);
+
+    Object->ForceDestroyNow();
 }
 
 // With the override declared but no managed instance, the shim must fall through to the C++ default.

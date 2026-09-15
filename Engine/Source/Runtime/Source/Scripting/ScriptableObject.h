@@ -2,6 +2,7 @@
 
 #include "Core/Reflection/Type/Function.h"
 
+#include "Core/Object/Object.h"
 #include "Core/Object/ScriptClass.h"
 #include "ManagedTypeRegistry.h"
 
@@ -31,6 +32,14 @@ namespace Lumina
          * Game thread only, like the rest of the scripting layer.
          */
         RUNTIME_API void* GetOrCreateInstance(CObject* Object);
+
+        /** The managed instance to dispatch event Slot on, or null to leave the native body in place. */
+        FORCEINLINE void* GetOverrideInstance(CObject* Object, int32 Slot)
+        {
+            const CScriptClass* ScriptClass = ToScriptClass(Object->GetClass());
+            return (ScriptClass != nullptr && ScriptClass->HasScriptOverrideSlot(Slot))
+                ? GetOrCreateInstance(Object) : nullptr;
+        }
     }
 
     /** One overridable event and the generated thunk that dispatches it into managed code. */

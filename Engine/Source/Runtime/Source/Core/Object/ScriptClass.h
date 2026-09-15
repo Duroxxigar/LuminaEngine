@@ -69,6 +69,16 @@ namespace Lumina
         /** The overriding function for Name, or null when the subclass leaves the native body in place. */
         RUNTIME_API NODISCARD const FFunction* FindScriptOverride(const FName& Name) const;
 
+        /** One bit per generated event slot, mirroring ScriptOverrideFunctions so a shim skips the name lookup. */
+        TVector<uint64> ScriptOverrideSlots;
+
+        /** Whether the script overrides the event the generator assigned Slot. */
+        NODISCARD bool HasScriptOverrideSlot(int32 Slot) const
+        {
+            const size_t Word = (size_t)((uint32)Slot >> 6);
+            return Word < ScriptOverrideSlots.size() && (ScriptOverrideSlots[Word] & (1ull << (Slot & 63))) != 0;
+        }
+
         /** EScriptUpdatePhase for a minted entity-script class, from its C# [UpdatePhase]. */
         uint8 ScriptUpdatePhase = 0;
 

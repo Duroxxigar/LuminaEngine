@@ -1,9 +1,6 @@
 #pragma once
 
 #include "World/ECS/Registry.h"
-
-
-
 #include "Containers/HashTable.h"
 #include "Containers/Vector.h"
 #include "Core/Object/Object.h"

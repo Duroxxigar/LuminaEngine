@@ -99,9 +99,8 @@ public abstract class EntityScript : Lumina.CEntityScript
     }
 
     // OnAttach / OnReady / OnUpdate / OnFixedUpdate / OnDetach are inherited from Lumina.CEntityScript as
-    // [ScriptEvent] virtuals -- override them exactly as before. Overriding one sets its bit in the minted
-    // class's ScriptOverrides mask, so the native shim only crosses the boundary for callbacks a script
-    // actually implements.
+    // [ScriptEvent] virtuals, and overriding one sets its slot bit on the minted class so the native shim
+    // only crosses the boundary for the callbacks a script actually implements.
 
     /// <summary>Add (idempotent) and return this entity's SInputComponent so it can receive input. Call in OnReady.</summary>
     protected Lumina.SInputComponent EnableInput()
