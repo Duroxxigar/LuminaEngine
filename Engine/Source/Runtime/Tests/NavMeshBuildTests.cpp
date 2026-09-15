@@ -260,3 +260,73 @@ TEST(NavMeshBuild, BakeHandleOutlivesTheCallerReference)
     }
     EXPECT_GE(Observer->Progress(), 0.0f);
 }
+
+TEST(NavMeshBuild, LargeGridExceedsTheThirtyTwoBitRefBudget)
+{
+    // 16-voxel tiles keep each Recast pass cheap while still crossing the tile count that matters.
+    FNavBuildInput In;
+    ApplyTestSettings(In);
+    In.Settings.TileSizeVoxels = 16;
+    AddGroundQuad(In, -30.0f, -30.0f, 30.0f, 30.0f, 0.0f);
+    GrowBounds(In, 1.0f);
+
+    FNavBuildOutput Out;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(std::move(In), Out));
+
+    // 32-bit poly refs cap maxTiles at 256 once maxPolys eats 14 bits, so this is the interesting range.
+    ASSERT_GT(Out.MaxTiles, 256);
+
+    auto Mesh = MakeUnique<FNavMesh>();
+    ASSERT_TRUE(Mesh->Initialize(Out.Origin, Out.TileWorldSize, Out.MaxTiles, Out.MaxPolysPerTile, std::move(Out.Tiles)));
+    ASSERT_TRUE(Mesh->IsReady());
+
+    const FNavDebugStats Stats = Mesh->GetDebugStats();
+    EXPECT_GT(Stats.LoadedTiles, 256);
+
+    FNavPath Path;
+    FNavQueryFilter Filter;
+    ASSERT_TRUE(Mesh->FindPath(FVector3(-28.0f, 0.0f, -28.0f), FVector3(28.0f, 0.0f, 28.0f), Filter, Path));
+    EXPECT_TRUE(Path.bValid);
+}
+
+TEST(NavMeshBuild, TileBlobKeepsItsLinkArrayEightByteAligned)
+{
+    // dtLink holds a dtPolyRef, so under 64-bit refs the links block has to start 8-byte aligned.
+    // sizeof(dtMeshHeader) is 100, so a stock dtAlign4 walk misaligns it whenever vertCount is even.
+    FNavBuildOutput Out;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(MakeGroundPlane(20.0f), Out));
+
+    int32 Checked = 0;
+    for (const FNavTileData& Tile : Out.Tiles)
+    {
+        if (Tile.Blob.empty())
+        {
+            continue;
+        }
+        EXPECT_TRUE(NavMeshTesting::TileLinksAreAligned(Tile.Blob)) << "tile " << Tile.X << ", " << Tile.Y;
+        ++Checked;
+    }
+    EXPECT_GT(Checked, 0);
+}
+
+TEST(NavMeshBuild, StaleTileBlobIsRejectedRatherThanRead)
+{
+    FNavBuildOutput Out;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(MakeGroundPlane(), Out));
+
+    // Truncating leaves magic and version intact, which is all dtNavMesh::addTile checks. A blob
+    // baked against a different Detour layout gets through the same gap.
+    int32 Corrupted = 0;
+    for (FNavTileData& Tile : Out.Tiles)
+    {
+        if (!Tile.Blob.empty())
+        {
+            Tile.Blob.resize(Tile.Blob.size() - 4);
+            ++Corrupted;
+        }
+    }
+    ASSERT_GT(Corrupted, 0);
+
+    auto Mesh = MakeUnique<FNavMesh>();
+    EXPECT_FALSE(Mesh->Initialize(Out.Origin, Out.TileWorldSize, Out.MaxTiles, Out.MaxPolysPerTile, std::move(Out.Tiles)));
+}

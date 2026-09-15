@@ -10,6 +10,10 @@
     #include <DetourNavMeshQuery.h>
     #include <DetourCommon.h>
 #include "Log/Log.h"
+
+// A module compiling without the define sees a narrower dtPolyRef than Detour's own sources, and the
+// layout mismatch corrupts memory rather than failing to link.
+static_assert(sizeof(dtPolyRef) == 8, "Recast must be built with DT_POLYREF64; see Recast.Build.cs.");
 #endif
 
 namespace Lumina
@@ -28,6 +32,57 @@ namespace Lumina
             {
                 Out.setAreaCost(i, In.AreaCost[i]);
             }
+        }
+
+        // Mirrors the block walk in dtCreateNavMeshData and dtNavMesh::addTile.
+        int32 ExpectedTileBlobSize(const dtMeshHeader* H)
+        {
+            auto A4 = [](int32 x) { return (x + 3) & ~3; };
+#ifdef DT_POLYREF64
+            auto A8 = [](int32 x) { return (x + 7) & ~7; };
+            const int32 HeaderSize = A8((int32)sizeof(dtMeshHeader));
+            const int32 VertsSize  = A8((int32)sizeof(float) * 3 * H->vertCount);
+#else
+            const int32 HeaderSize = A4((int32)sizeof(dtMeshHeader));
+            const int32 VertsSize  = A4((int32)sizeof(float) * 3 * H->vertCount);
+#endif
+            return HeaderSize + VertsSize
+                 + A4((int32)sizeof(dtPoly)               * H->polyCount)
+                 + A4((int32)sizeof(dtLink)               * H->maxLinkCount)
+                 + A4((int32)sizeof(dtPolyDetail)         * H->detailMeshCount)
+                 + A4((int32)sizeof(float) * 3            * H->detailVertCount)
+                 + A4(4                                   * H->detailTriCount)
+                 + A4((int32)sizeof(dtBVNode)             * H->bvNodeCount)
+                 + A4((int32)sizeof(dtOffMeshConnection)  * H->offMeshConCount);
+        }
+
+        // addTile only checks magic and version, and neither changes when the ref width or the block
+        // alignment does, so a stale blob would otherwise be read at the wrong offsets.
+        bool ValidateTileBlob(const TVector<uint8>& Blob, int32 TileX, int32 TileY)
+        {
+            if (Blob.size() < sizeof(dtMeshHeader))
+            {
+                LOG_ERROR("NavMesh tile ({}, {}): blob is {} bytes, smaller than a tile header. Re-bake required.",
+                    TileX, TileY, (int32)Blob.size());
+                return false;
+            }
+
+            const dtMeshHeader* H = reinterpret_cast<const dtMeshHeader*>(Blob.data());
+            if (H->magic != DT_NAVMESH_MAGIC || H->version != DT_NAVMESH_VERSION)
+            {
+                LOG_ERROR("NavMesh tile ({}, {}): bad magic/version. Re-bake required.", TileX, TileY);
+                return false;
+            }
+
+            const int32 Expected = ExpectedTileBlobSize(H);
+            if ((int32)Blob.size() != Expected)
+            {
+                LOG_ERROR("NavMesh tile ({}, {}): blob is {} bytes but its header describes {}. This is navmesh data "
+                          "baked against a different Detour layout (poly ref width or block alignment). Re-bake required.",
+                    TileX, TileY, (int32)Blob.size(), Expected);
+                return false;
+            }
+            return true;
         }
 #endif
     }
@@ -81,11 +136,18 @@ namespace Lumina
         int32 Added = 0;
         int32 Skipped = 0;
         int32 Rejected = 0;
+        int32 Stale = 0;
         for (FNavTileData& Tile : Tiles)
         {
             if (Tile.Blob.empty())
             {
                 ++Skipped;
+                continue;
+            }
+
+            if (!ValidateTileBlob(Tile.Blob, Tile.X, Tile.Y))
+            {
+                ++Stale;
                 continue;
             }
 
@@ -110,6 +172,11 @@ namespace Lumina
                 ++Added;
             }
         }
+        if (Stale > 0)
+        {
+            LOG_ERROR("FNavMesh::Initialize: {} of {} non-empty tiles were baked against a different Detour layout. Re-bake this navmesh.",
+                Stale, Added + Rejected + Stale);
+        }
         if (Rejected > 0)
         {
             LOG_WARN("FNavMesh::Initialize: dtNavMesh::addTile rejected {} of {} non-empty tiles (likely tile coord collision or maxTiles too small).",
@@ -117,7 +184,7 @@ namespace Lumina
         }
         if (Added == 0 && (int32)Tiles.size() > 0)
         {
-            LOG_ERROR("FNavMesh::Initialize: no tiles were added (skipped={}, rejected={}). NavMesh will not be ready.", Skipped, Rejected);
+            LOG_ERROR("FNavMesh::Initialize: no tiles were added (skipped={}, rejected={}, stale={}). NavMesh will not be ready.", Skipped, Rejected, Stale);
             dtFreeNavMesh(NavMesh);
             NavMesh = nullptr;
             return false;
@@ -150,7 +217,7 @@ namespace Lumina
         }
 
         bReady = true;
-        RefreshTriangleCache();
+        bDebugCacheDirty = true;
         return true;
 #else
         (void)MaxTiles; (void)MaxPolysPerTile; (void)Tiles;
@@ -279,8 +346,19 @@ namespace Lumina
 #endif
     }
 
-    void FNavMesh::RefreshTriangleCache()
+    void FNavMesh::InvalidateDebugCache()
     {
+        bDebugCacheDirty = true;
+    }
+
+    void FNavMesh::EnsureDebugCache() const
+    {
+        if (!bDebugCacheDirty)
+        {
+            return;
+        }
+        bDebugCacheDirty = false;
+
         CachedTriVerts.clear();
         CachedTriAreas.clear();
         CachedBoundaryVerts.clear();
@@ -370,6 +448,7 @@ namespace Lumina
 
     void FNavMesh::ForEachBoundaryEdge(const FBoundaryEdgeVisitor& Visitor) const
     {
+        EnsureDebugCache();
         const size_t N = CachedBoundaryAreas.size();
         for (size_t i = 0; i < N; ++i)
         {
@@ -379,6 +458,7 @@ namespace Lumina
 
     void FNavMesh::ForEachOffMeshLink(const FOffMeshLinkVisitor& Visitor) const
     {
+        EnsureDebugCache();
         const size_t N = CachedOffMeshVerts.size() / 2;
         for (size_t i = 0; i < N; ++i)
         {
@@ -388,6 +468,7 @@ namespace Lumina
 
     void FNavMesh::ForEachLoadedTile(const FTileBoundsVisitor& Visitor) const
     {
+        EnsureDebugCache();
         for (const FNavTileBounds& T : CachedTileBounds)
         {
             Visitor(T);
@@ -396,6 +477,7 @@ namespace Lumina
 
     FNavDebugStats FNavMesh::GetDebugStats() const
     {
+        EnsureDebugCache();
         FNavDebugStats S;
         S.LoadedTiles   = (int32)CachedTileBounds.size();
         S.Triangles     = (int32)CachedTriAreas.size();
@@ -406,6 +488,7 @@ namespace Lumina
 
     void FNavMesh::ForEachTriangle(FTriangleVisitor Visitor) const
     {
+        EnsureDebugCache();
         const size_t NumTris = CachedTriAreas.size();
         for (size_t i = 0; i < NumTris; ++i)
         {
@@ -415,6 +498,7 @@ namespace Lumina
 
     void FNavMesh::ParallelForEachTriangle(const FParallelTriangleVisitor& Visitor) const
     {
+        EnsureDebugCache();
         const size_t NumTris = CachedTriAreas.size();
         if (NumTris == 0) return;
 
@@ -430,6 +514,12 @@ namespace Lumina
         
 #if defined(LUMINA_HAS_RECAST)
         if (!NavMesh)
+        {
+            return false;
+        }
+
+        // Checked before the removal, so a rejected blob leaves the existing tile in place.
+        if (!NewBlob.empty() && !ValidateTileBlob(NewBlob, TileX, TileY))
         {
             return false;
         }
@@ -459,8 +549,7 @@ namespace Lumina
             dtFree(Owned);
             return false;
         }
-        // Full refresh; per-tile patching isn't worth the complexity.
-        RefreshTriangleCache();
+        InvalidateDebugCache();
         return true;
 #else
         (void)TileX; (void)TileY; (void)NewBlob;
@@ -547,5 +636,40 @@ namespace Lumina
         (void)Start; (void)End; (void)Filter;
         return false;
 #endif
+    }
+
+    namespace NavMeshTesting
+    {
+        bool TileLinksAreAligned(const TVector<uint8>& Blob)
+        {
+#if defined(LUMINA_HAS_RECAST)
+            if (Blob.size() < sizeof(dtMeshHeader))
+            {
+                return false;
+            }
+            const dtMeshHeader* H = reinterpret_cast<const dtMeshHeader*>(Blob.data());
+            const int32 Expected = ExpectedTileBlobSize(H);
+            if ((int32)Blob.size() != Expected)
+            {
+                return false;
+            }
+
+            auto A4 = [](int32 x) { return (x + 3) & ~3; };
+#ifdef DT_POLYREF64
+            auto A8 = [](int32 x) { return (x + 7) & ~7; };
+            const int32 LinkOffset = A8((int32)sizeof(dtMeshHeader))
+                                   + A8((int32)sizeof(float) * 3 * H->vertCount)
+                                   + A4((int32)sizeof(dtPoly) * H->polyCount);
+#else
+            const int32 LinkOffset = A4((int32)sizeof(dtMeshHeader))
+                                   + A4((int32)sizeof(float) * 3 * H->vertCount)
+                                   + A4((int32)sizeof(dtPoly) * H->polyCount);
+#endif
+            return (LinkOffset % (int32)alignof(dtLink)) == 0;
+#else
+            (void)Blob;
+            return true;
+#endif
+        }
     }
 }

@@ -2,6 +2,21 @@
 Recast & Detour
 ===============
 
+Lumina local changes
+--------------------
+
+Re-apply these when bumping the vendored copy.
+
+* `Recast.Build.cs` defines `DT_POLYREF64=1` publicly. 32-bit poly refs split 32 bits across
+  salt/tile/poly and `dtNavMesh::init` rejects any layout leaving under 10 salt bits, which caps a
+  mesh at 256 tiles once `maxPolys` takes 14 of them.
+* `dtAlign8` in `DetourCommon.h`, used for `headerSize` and `vertsSize` under `DT_POLYREF64` at
+  `DetourNavMeshBuilder.cpp` (both `dtCreateNavMeshData` and `dtNavMeshDataSwapEndian`) and
+  `DetourNavMesh.cpp` (`addTile`). `dtLink` holds a `dtPolyRef`, so it is 16 bytes and 8-aligned
+  under 64-bit refs, but `sizeof(dtMeshHeader)` is 100, so the stock `dtAlign4` walk starts the
+  links block at a 4-mod-8 offset whenever `vertCount` is even. All three walks must stay in step
+  with each other or tiles are read at the wrong offsets.
+
 [![Build](https://github.com/recastnavigation/recastnavigation/actions/workflows/Build.yaml/badge.svg)](https://github.com/recastnavigation/recastnavigation/actions/workflows/Build.yaml)
 [![Tests](https://github.com/recastnavigation/recastnavigation/actions/workflows/Tests.yaml/badge.svg)](https://github.com/recastnavigation/recastnavigation/actions/workflows/Tests.yaml)
 

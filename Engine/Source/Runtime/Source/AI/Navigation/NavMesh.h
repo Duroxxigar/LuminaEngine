@@ -79,8 +79,8 @@ namespace Lumina
 
         FNavDebugStats GetDebugStats() const;
 
-        /** Auto-called by Initialize and RebuildTile. Read-only on dtNavMesh. */
-        void RefreshTriangleCache();
+        /** Marks the debug draw caches stale. Rebuilding them walks every poly, so it waits for a reader. */
+        void InvalidateDebugCache();
 
     private:
 
@@ -118,6 +118,9 @@ namespace Lumina
 
         FAcquiredQuery AcquireQuery() const;
 
+        /** Rebuilds the debug caches if stale. Main thread only, like every reader of them. */
+        void EnsureDebugCache() const;
+
     private:
 
         dtNavMesh*                          NavMesh = nullptr;
@@ -125,21 +128,30 @@ namespace Lumina
         // Mutable so const query API can flip Busy flags.
         mutable TVector<FQuerySlot>         QueryPool;
 
+        // Debug draw only, so all of it is built on demand and mutable behind the const readers.
+        mutable bool                        bDebugCacheDirty = true;
+
         // Flat cache: 3 vec3 per tri in Verts; 1 area byte per tri.
-        TVector<FVector3>                  CachedTriVerts;
-        TVector<uint8>                      CachedTriAreas;
+        mutable TVector<FVector3>          CachedTriVerts;
+        mutable TVector<uint8>              CachedTriAreas;
 
         // 2 vec3 per edge in Verts; 1 area byte per edge. Boundary = poly outer perimeter.
-        TVector<FVector3>                  CachedBoundaryVerts;
-        TVector<uint8>                      CachedBoundaryAreas;
+        mutable TVector<FVector3>          CachedBoundaryVerts;
+        mutable TVector<uint8>              CachedBoundaryAreas;
 
         // 2 vec3 per link (Start, End).
-        TVector<FVector3>                  CachedOffMeshVerts;
+        mutable TVector<FVector3>          CachedOffMeshVerts;
 
-        TVector<FNavTileBounds>             CachedTileBounds;
+        mutable TVector<FNavTileBounds>     CachedTileBounds;
 
         FVector3                           Origin = FVector3(0.0f);
         float                               TileWorldSize = 0.0f;
         bool                                bReady = false;
     };
+
+    /** Probes into the baked tile layout, so tests can assert it without including Detour. */
+    namespace NavMeshTesting
+    {
+        RUNTIME_API bool TileLinksAreAligned(const TVector<uint8>& Blob);
+    }
 }
