@@ -425,6 +425,8 @@ namespace Lumina::NavMeshBuilder
 
         Handle.Output.Origin = Grid.Origin;
         Handle.Output.TileWorldSize = Grid.TileWorldSize;
+        Handle.Output.TilesX = Grid.TilesX;
+        Handle.Output.TilesY = Grid.TilesY;
         Handle.Output.MaxTiles = (int32)TileCount;
         Handle.Output.MaxPolysPerTile = 1 << 14;
         Handle.Output.Tiles.resize(TileCount);
@@ -501,8 +503,11 @@ namespace Lumina::NavMeshBuilder
         Grid.TileWorldSize = BaseLayout.TileWorldSize;
         const int32 BorderVoxels = (int32)std::ceil(Input.Settings.AgentRadius / Input.Settings.CellSize) + 3;
         Grid.BorderSize = (float)BorderVoxels * Input.Settings.CellSize;
-        Grid.TilesX = Math::Max(1, (int32)std::ceil((Input.BoundsMax.x - Input.BoundsMin.x) / Grid.TileWorldSize));
-        Grid.TilesY = Math::Max(1, (int32)std::ceil((Input.BoundsMax.z - Input.BoundsMin.z) / Grid.TileWorldSize));
+
+        // Taken from the layout, not from Input's live bounds, so moving the volume without a re-bake
+        // cannot shift the clamps in TriTileRange out from under the baked tile coords.
+        Grid.TilesX = Math::Max(1, BaseLayout.TilesX);
+        Grid.TilesY = Math::Max(1, BaseLayout.TilesY);
 
         // A single tile culls the input to just this tile's overlapping triangles.
         const int32 NumTris = (int32)(Input.Indices.size() / 3);

@@ -151,6 +151,10 @@ namespace Lumina
         bool bTruncated = false;
 
         bool bValid   = false;
+
+        /** FNavMesh topology epoch this was found against. A path is a snapshot, not a live corridor, so
+         *  anything following one across frames re-queries once this stops matching the mesh. */
+        uint64 Epoch = 0;
     };
 
     /** Outcome of a surface walk along a straight line. */

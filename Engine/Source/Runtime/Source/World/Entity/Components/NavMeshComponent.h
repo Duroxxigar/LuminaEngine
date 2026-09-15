@@ -59,9 +59,6 @@ namespace Lumina
         /** Layout fed to BakeSingleTile so coords align with live mesh. */
         FNavBuildOutput                         LiveLayout;
 
-        int32                                   TilesX = 0;
-        int32                                   TilesY = 0;
-
         /** Entity world scale, mirrored each tick; multiplies Extents into the effective bake volume. */
         FVector3                                WorldScale = FVector3(1.0f);
 
@@ -92,6 +89,8 @@ namespace Lumina
             , Tiles(Other.Tiles)
             , Origin(Other.Origin)
             , TileWorldSize(Other.TileWorldSize)
+            , TilesX(Other.TilesX)
+            , TilesY(Other.TilesY)
             , MaxPolysPerTile(Other.MaxPolysPerTile)
         {
         }
@@ -107,6 +106,8 @@ namespace Lumina
                 Tiles           = Other.Tiles;
                 Origin          = Other.Origin;
                 TileWorldSize   = Other.TileWorldSize;
+                TilesX          = Other.TilesX;
+                TilesY          = Other.TilesY;
                 MaxPolysPerTile = Other.MaxPolysPerTile;
                 Runtime         = FNavMeshRuntime{};
             }
@@ -146,6 +147,14 @@ namespace Lumina
         /** Tile size in world units. */
         PROPERTY(Category = "NavMesh|Baked")
         float TileWorldSize = 0.0f;
+
+        /** Grid the baked tile coords index into. Serialized so a hot rebake still lines up after the
+         *  volume is moved or rescaled without a full re-bake. */
+        PROPERTY(Category = "NavMesh|Baked")
+        int32 TilesX = 0;
+
+        PROPERTY(Category = "NavMesh|Baked")
+        int32 TilesY = 0;
 
         /** Cap fed to dtNavMeshParams. */
         PROPERTY(Category = "NavMesh|Baked")

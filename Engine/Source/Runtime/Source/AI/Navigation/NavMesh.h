@@ -2,6 +2,7 @@
 
 #include <cfloat>
 #include "AI/Navigation/NavTypes.h"
+#include "Core/Threading/Sync.h"
 
 class dtNavMesh;
 class dtNavMeshQuery;
@@ -54,8 +55,22 @@ namespace Lumina
 
         bool FindRandomPoint(const FVector3& Center, float Radius, const FNavQueryFilter& Filter, FVector3& Out) const;
 
-        /** NewBlob is consumed; empty removes the tile. Caller must serialize against in-flight queries on this tile. */
+        /** NewBlob is consumed; empty removes the tile. Serializes against in-flight queries itself. */
         bool RebuildTile(int32 TileX, int32 TileY, TVector<uint8>&& NewBlob);
+
+        /** Pages a baked tile in. Fails if the resident pool is full or the blob does not match this layout. */
+        bool AddTile(int32 TileX, int32 TileY, const TVector<uint8>& Blob);
+
+        /** Pages a tile out. True when the slot is free afterwards, including when it already was. */
+        bool RemoveTile(int32 TileX, int32 TileY);
+
+        bool HasTile(int32 TileX, int32 TileY) const;
+
+        int32 GetResidentTileCount() const;
+
+        /** Bumped whenever a tile is added or removed. An FNavPath carries the value it was found
+         *  against, so a follower can tell the ground moved under it. */
+        uint64 GetTopologyEpoch() const { return TopologyEpoch.load(std::memory_order_acquire); }
 
         /** Iterates the cached flat triangle list (skip the dtNavMesh traversal cost). */
         using FTriangleVisitor = TMoveOnlyFunction<void(const FVector3&, const FVector3&, const FVector3&, uint8)>;
@@ -118,12 +133,22 @@ namespace Lumina
 
         FAcquiredQuery AcquireQuery() const;
 
+        /** Both assume TopologyLock is already held exclusively. */
+        bool AddTileLocked(int32 TileX, int32 TileY, const TVector<uint8>& Blob);
+        bool RemoveTileLocked(int32 TileX, int32 TileY);
+
         /** Rebuilds the debug caches if stale. Main thread only, like every reader of them. */
         void EnsureDebugCache() const;
 
     private:
 
         dtNavMesh*                          NavMesh = nullptr;
+
+        // Shared by every query, exclusive for tile mutation. addTile rewrites the link arrays of up to
+        // eight neighbours, so a tile swap is never local and the whole mesh is the only safe granularity.
+        mutable FSharedMutex                TopologyLock;
+
+        std::atomic<uint64>                 TopologyEpoch{ 1 };
 
         // Mutable so const query API can flip Busy flags.
         mutable TVector<FQuerySlot>         QueryPool;

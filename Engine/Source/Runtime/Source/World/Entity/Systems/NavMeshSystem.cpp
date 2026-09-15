@@ -1171,10 +1171,10 @@ namespace Lumina
                 Comp.Origin          = Out.Origin;
                 Comp.TileWorldSize   = Out.TileWorldSize;
                 Comp.MaxPolysPerTile = Out.MaxPolysPerTile;
-                Comp.Runtime.LiveLayout.Origin = Out.Origin;
-                Comp.Runtime.LiveLayout.TileWorldSize = Out.TileWorldSize;
-                Comp.Runtime.LiveLayout.MaxTiles = Out.MaxTiles;
-                Comp.Runtime.LiveLayout.MaxPolysPerTile = Out.MaxPolysPerTile;
+                Comp.TilesX          = Out.TilesX;
+                Comp.TilesY          = Out.TilesY;
+                Comp.Runtime.LiveLayout = Out;
+                Comp.Runtime.LiveLayout.Tiles.clear();
                 Comp.Runtime.ActiveBake.reset();
                 Comp.Runtime.DirtyTiles.clear();
 
@@ -1225,10 +1225,10 @@ namespace Lumina
             {
                 const FVector3 BakeMin = Comp.Center - Comp.GetWorldExtents();
                 const FVector3 BakeMax = Comp.Center + Comp.GetWorldExtents();
-                Comp.Runtime.TilesX = Math::Max(1, (int32)std::ceil((BakeMax.x - BakeMin.x) / Comp.TileWorldSize));
-                Comp.Runtime.TilesY = Math::Max(1, (int32)std::ceil((BakeMax.z - BakeMin.z) / Comp.TileWorldSize));
                 Comp.Runtime.LiveLayout.Origin          = Comp.Origin;
                 Comp.Runtime.LiveLayout.TileWorldSize   = Comp.TileWorldSize;
+                Comp.Runtime.LiveLayout.TilesX          = Comp.TilesX;
+                Comp.Runtime.LiveLayout.TilesY          = Comp.TilesY;
                 Comp.Runtime.LiveLayout.MaxTiles        = (int32)Comp.Tiles.size();
                 Comp.Runtime.LiveLayout.MaxPolysPerTile = Comp.MaxPolysPerTile;
 
@@ -1315,7 +1315,7 @@ namespace Lumina
             auto MarkDirtyForAABB = [&](const FVector3& Mn, const FVector3& Mx)
             {
                 int32 TX0, TY0, TX1, TY1;
-                TilesForAABB(Mn, Mx, Comp.Origin, Comp.TileWorldSize, Comp.Runtime.TilesX, Comp.Runtime.TilesY, TX0, TY0, TX1, TY1);
+                TilesForAABB(Mn, Mx, Comp.Origin, Comp.TileWorldSize, Comp.TilesX, Comp.TilesY, TX0, TY0, TX1, TY1);
                 for (int32 ty = TY0; ty <= TY1; ++ty)
                 {
                     for (int32 tx = TX0; tx <= TX1; ++tx)

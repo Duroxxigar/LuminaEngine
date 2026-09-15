@@ -363,6 +363,7 @@ namespace Lumina
         for (CEdGraphNode* Node : Nodes)
         {
             Node->ClearError();
+            Node->ClearWarning();
         }
 
         // Every walk below resolves a switch through whichever branch is stamped here, so this runs first.
@@ -389,6 +390,7 @@ namespace Lumina
             Error.Node          = CyclicNode;
             Compiler.AddError(Error);
 
+            ApplyDiagnosticsToNodes(Compiler);
             return;
         }
 
@@ -505,7 +507,21 @@ namespace Lumina
         // Restore default cursor.
         Compiler.SetStage(EMaterialCompileStage::Pixel);
 
-        for (auto& Error : Compiler.GetErrors())
+        ApplyDiagnosticsToNodes(Compiler);
+    }
+
+    void CMaterialNodeGraph::ApplyDiagnosticsToNodes(const FMaterialCompiler& Compiler)
+    {
+        // Warnings first, so a node carrying both keeps the error as its status.
+        for (const EdNodeGraph::FError& Warning : Compiler.GetWarnings())
+        {
+            if (Warning.Node)
+            {
+                Warning.Node->SetWarning(Warning);
+            }
+        }
+
+        for (const EdNodeGraph::FError& Error : Compiler.GetErrors())
         {
             if (Error.Node)
             {

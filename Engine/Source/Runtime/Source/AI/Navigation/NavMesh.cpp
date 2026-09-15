@@ -266,6 +266,7 @@ namespace Lumina
     bool FNavMesh::ProjectPoint(const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out) const
     {
 #if defined(LUMINA_HAS_RECAST)
+        FReadScopeLock Topology(TopologyLock);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
 
@@ -291,8 +292,11 @@ namespace Lumina
         Out = {};
 
 #if defined(LUMINA_HAS_RECAST)
+        FReadScopeLock Topology(TopologyLock);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
+
+        Out.Epoch = TopologyEpoch.load(std::memory_order_relaxed);
 
         dtQueryFilter F; ApplyFilter(Filter, F);
 
@@ -357,6 +361,8 @@ namespace Lumina
         {
             return;
         }
+
+        FReadScopeLock Topology(TopologyLock);
         bDebugCacheDirty = false;
 
         CachedTriVerts.clear();
@@ -508,40 +514,21 @@ namespace Lumina
         });
     }
 
-    bool FNavMesh::RebuildTile(int32 TileX, int32 TileY, TVector<uint8>&& NewBlob)
+    bool FNavMesh::AddTileLocked(int32 TileX, int32 TileY, const TVector<uint8>& Blob)
     {
-        LUMINA_PROFILE_SCOPE();
-        
 #if defined(LUMINA_HAS_RECAST)
-        if (!NavMesh)
+        if (!NavMesh || Blob.empty() || !ValidateTileBlob(Blob, TileX, TileY))
         {
             return false;
         }
 
-        // Checked before the removal, so a rejected blob leaves the existing tile in place.
-        if (!NewBlob.empty() && !ValidateTileBlob(NewBlob, TileX, TileY))
-        {
-            return false;
-        }
-
-        const dtTileRef OldRef = NavMesh->getTileRefAt(TileX, TileY, 0);
-        if (OldRef != 0)
-        {
-            NavMesh->removeTile(OldRef, nullptr, nullptr);
-        }
-
-        if (NewBlob.empty())
-        {
-            return true; // intentionally empty
-        }
-
-        const size_t Size = NewBlob.size();
+        const size_t Size = Blob.size();
         uint8* Owned = (uint8*)dtAlloc((int)Size, DT_ALLOC_PERM);
         if (!Owned)
         {
             return false;
         }
-        memcpy(Owned, NewBlob.data(), Size);
+        memcpy(Owned, Blob.data(), Size);
 
         dtTileRef NewRef = 0;
         if (dtStatusFailed(NavMesh->addTile(Owned, (int)Size, DT_TILE_FREE_DATA, 0, &NewRef)))
@@ -549,17 +536,142 @@ namespace Lumina
             dtFree(Owned);
             return false;
         }
-        InvalidateDebugCache();
         return true;
+#else
+        (void)TileX; (void)TileY; (void)Blob;
+        return false;
+#endif
+    }
+
+    bool FNavMesh::RemoveTileLocked(int32 TileX, int32 TileY)
+    {
+#if defined(LUMINA_HAS_RECAST)
+        if (!NavMesh)
+        {
+            return false;
+        }
+        const dtTileRef OldRef = NavMesh->getTileRefAt(TileX, TileY, 0);
+        if (OldRef != 0)
+        {
+            NavMesh->removeTile(OldRef, nullptr, nullptr);
+        }
+        return true;
+#else
+        (void)TileX; (void)TileY;
+        return false;
+#endif
+    }
+
+    bool FNavMesh::RebuildTile(int32 TileX, int32 TileY, TVector<uint8>&& NewBlob)
+    {
+        LUMINA_PROFILE_SCOPE();
+
+#if defined(LUMINA_HAS_RECAST)
+        if (!NavMesh)
+        {
+            return false;
+        }
+
+        // Validated before the removal, so a rejected blob leaves the existing tile in place.
+        if (!NewBlob.empty() && !ValidateTileBlob(NewBlob, TileX, TileY))
+        {
+            return false;
+        }
+
+        bool bAdded = true;
+        {
+            TScopeLock<FSharedMutex> Topology(TopologyLock);
+            RemoveTileLocked(TileX, TileY);
+            if (!NewBlob.empty())
+            {
+                bAdded = AddTileLocked(TileX, TileY, NewBlob);
+            }
+            TopologyEpoch.fetch_add(1, std::memory_order_release);
+        }
+
+        InvalidateDebugCache();
+        return bAdded;
 #else
         (void)TileX; (void)TileY; (void)NewBlob;
         return false;
 #endif
     }
 
+    bool FNavMesh::AddTile(int32 TileX, int32 TileY, const TVector<uint8>& Blob)
+    {
+        LUMINA_PROFILE_SCOPE();
+
+        bool bResult = false;
+        {
+            TScopeLock<FSharedMutex> Topology(TopologyLock);
+            bResult = AddTileLocked(TileX, TileY, Blob);
+            if (bResult)
+            {
+                TopologyEpoch.fetch_add(1, std::memory_order_release);
+            }
+        }
+
+        if (bResult)
+        {
+            InvalidateDebugCache();
+        }
+        return bResult;
+    }
+
+    bool FNavMesh::RemoveTile(int32 TileX, int32 TileY)
+    {
+        LUMINA_PROFILE_SCOPE();
+
+        bool bResult = false;
+        {
+            TScopeLock<FSharedMutex> Topology(TopologyLock);
+            bResult = RemoveTileLocked(TileX, TileY);
+            TopologyEpoch.fetch_add(1, std::memory_order_release);
+        }
+
+        InvalidateDebugCache();
+        return bResult;
+    }
+
+    bool FNavMesh::HasTile(int32 TileX, int32 TileY) const
+    {
+#if defined(LUMINA_HAS_RECAST)
+        FReadScopeLock Topology(TopologyLock);
+        return NavMesh && NavMesh->getTileRefAt(TileX, TileY, 0) != 0;
+#else
+        (void)TileX; (void)TileY;
+        return false;
+#endif
+    }
+
+    int32 FNavMesh::GetResidentTileCount() const
+    {
+#if defined(LUMINA_HAS_RECAST)
+        FReadScopeLock Topology(TopologyLock);
+        if (!NavMesh)
+        {
+            return 0;
+        }
+        int32 Count = 0;
+        const dtNavMesh* CMesh = NavMesh;
+        for (int32 i = 0, N = CMesh->getMaxTiles(); i < N; ++i)
+        {
+            const dtMeshTile* Tile = CMesh->getTile(i);
+            if (Tile && Tile->header)
+            {
+                ++Count;
+            }
+        }
+        return Count;
+#else
+        return 0;
+#endif
+    }
+
     bool FNavMesh::FindRandomPoint(const FVector3& Center, float Radius, const FNavQueryFilter& Filter, FVector3& Out) const
     {
 #if defined(LUMINA_HAS_RECAST)
+        FReadScopeLock Topology(TopologyLock);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
 
@@ -605,6 +717,7 @@ namespace Lumina
         Out.Point = End;
 
 #if defined(LUMINA_HAS_RECAST)
+        FReadScopeLock Topology(TopologyLock);
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
 

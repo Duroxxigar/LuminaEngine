@@ -59,6 +59,10 @@ namespace Lumina
         return Out;
     }
 
+    static constexpr uint32 GNodeErrorHeaderColor   = IM_COL32(200, 45, 45, 255);
+    static constexpr uint32 GNodeWarningHeaderColor = IM_COL32(205, 155, 35, 255);
+    static constexpr uint32 GNodeErrorPinColor      = IM_COL32(255, 70, 70, 255);
+
     static void DrawPinIcon(bool bConnected, int Alpha, ImVec4 Color)
     {
         EIconType iconType = EIconType::Circle;
@@ -940,6 +944,11 @@ namespace Lumina
         }
     }
 
+    void CEdNodeGraph::QueueFocusNode(CEdGraphNode* Node)
+    {
+        PendingFocusNode = Node;
+    }
+
     uint64 CEdNodeGraph::MakeLinkID(const CEdNodeGraphPin* InputPin, const CEdNodeGraphPin* OutputPin)
     {
         return ((uint64)OutputPin->GetPinGUID() << 32) | (uint64)InputPin->GetPinGUID();
@@ -991,6 +1000,13 @@ namespace Lumina
             }
         }
         PendingPlacements.clear();
+
+        if (PendingFocusNode.IsValid())
+        {
+            NodeEditor::SelectNode(PendingFocusNode->GetNodeID(), false);
+            NodeEditor::NavigateToSelection(false, 0.25f);
+        }
+        PendingFocusNode = nullptr;
 
         if (bHasPendingAlignment)
         {
@@ -1085,7 +1101,15 @@ namespace Lumina
 
             const bool bNodeActive = DebugContext.bEnabled && DebugContext.ActiveNodes != nullptr
                 && DebugContext.ActiveNodes->find(Node) != DebugContext.ActiveNodes->end();
-            const uint32 HeaderColor = bNodeActive ? IM_COL32(235, 170, 40, 255) : Node->GetNodeTitleColor();
+            uint32 HeaderColor = bNodeActive ? IM_COL32(235, 170, 40, 255) : Node->GetNodeTitleColor();
+            if (Node->HasError())
+            {
+                HeaderColor = GNodeErrorHeaderColor;
+            }
+            else if (Node->HasWarning())
+            {
+                HeaderColor = GNodeWarningHeaderColor;
+            }
             NodeBuilder.Header(ImGui::ColorConvertU32ToFloat4(HeaderColor));
 
             if (!Node->WantsTitlebar())
@@ -1122,7 +1146,7 @@ namespace Lumina
                     ImVec4 PinColor = ImGui::ColorConvertU32ToFloat4(InputPin->GetPinColor());
                     if (Node->HasError())
                     {
-                        PinColor = ImVec4(255.0f, 0.0f, 0.0f, 255.0f);
+                        PinColor = ImGui::ColorConvertU32ToFloat4(GNodeErrorPinColor);
                     }
 
                     const bool bDisabled = InputPin->IsDisabled();
@@ -1188,7 +1212,7 @@ namespace Lumina
                     ImVec4 PinColor = ImGui::ColorConvertU32ToFloat4(OutputPin->GetPinColor());
                     if (Node->HasError())
                     {
-                        PinColor = ImVec4(255.0f, 0.0f, 0.0f, 255.0f);
+                        PinColor = ImGui::ColorConvertU32ToFloat4(GNodeErrorPinColor);
                     }
                     DrawPinIcon(OutputPin->HasConnection(), bDisabledOut ? 80 : 255, PinColor);
 

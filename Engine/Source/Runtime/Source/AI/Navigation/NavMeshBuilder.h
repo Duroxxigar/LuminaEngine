@@ -30,6 +30,12 @@ namespace Lumina
     {
         FVector3               Origin = FVector3(0.0f);
         float                   TileWorldSize = 0.0f;
+
+        /** Grid the tile coords were baked against. Recomputing these from live bounds misplaces a
+         *  hot rebake as soon as the volume is moved or rescaled without a full re-bake. */
+        int32                   TilesX = 0;
+        int32                   TilesY = 0;
+
         int32                   MaxTiles = 0;
         int32                   MaxPolysPerTile = 0;
         TVector<FNavTileData>   Tiles;

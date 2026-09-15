@@ -5,7 +5,11 @@
 #include "AI/Navigation/NavMesh.h"
 #include "AI/Navigation/NavMeshBuilder.h"
 #include "AI/Navigation/NavTypes.h"
+#include <atomic>
+#include <vector>
+
 #include "Core/Math/Math.h"
+#include "Core/Threading/Thread.h"
 #include "Memory/SmartPtr.h"
 #include "Platform/Time/PlatformTime.h"
 
@@ -329,4 +333,113 @@ TEST(NavMeshBuild, StaleTileBlobIsRejectedRatherThanRead)
 
     auto Mesh = MakeUnique<FNavMesh>();
     EXPECT_FALSE(Mesh->Initialize(Out.Origin, Out.TileWorldSize, Out.MaxTiles, Out.MaxPolysPerTile, std::move(Out.Tiles)));
+}
+
+TEST(NavMeshBuild, QueriesSurviveConcurrentRetiling)
+{
+    // removeTile frees the tile while pooled queries may be walking it, so this used to be a
+    // use after free whenever a hot rebake landed next to a worker running FindPath.
+    FNavBuildOutput Out;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(MakeGroundPlane(20.0f), Out));
+
+    TVector<FNavTileData> Baked = Out.Tiles;
+    auto Mesh = MakeUnique<FNavMesh>();
+    ASSERT_TRUE(Mesh->Initialize(Out.Origin, Out.TileWorldSize, Out.MaxTiles, Out.MaxPolysPerTile, std::move(Out.Tiles)));
+
+    const FNavTileData* Victim = nullptr;
+    for (const FNavTileData& Tile : Baked)
+    {
+        if (!Tile.Blob.empty())
+        {
+            Victim = &Tile;
+            break;
+        }
+    }
+    ASSERT_NE(Victim, nullptr);
+
+    std::atomic<bool> bStop{ false };
+    std::atomic<uint64> Queries{ 0 };
+
+    std::vector<Lumina::FThread> Readers;
+    Readers.reserve(6);
+    for (int32 i = 0; i < 6; ++i)
+    {
+        Readers.emplace_back([&bStop, &Queries, Raw = Mesh.get()]
+        {
+            FNavQueryFilter Filter;
+            while (!bStop.load(std::memory_order_acquire))
+            {
+                FNavPath Path;
+                Raw->FindPath(FVector3(-18.0f, 0.0f, -18.0f), FVector3(18.0f, 0.0f, 18.0f), Filter, Path);
+                FVector3 Projected;
+                Raw->ProjectPoint(FVector3(0.0f, 0.0f, 0.0f), FVector3(2.0f, 16.0f, 2.0f), Filter, Projected);
+                Queries.fetch_add(1, std::memory_order_relaxed);
+            }
+        });
+    }
+
+    const uint64 StartEpoch = Mesh->GetTopologyEpoch();
+    for (int32 i = 0; i < 400; ++i)
+    {
+        TVector<uint8> Copy = Victim->Blob;
+        EXPECT_TRUE(Mesh->RebuildTile(Victim->X, Victim->Y, std::move(Copy)));
+    }
+
+    bStop.store(true, std::memory_order_release);
+    for (Lumina::FThread& Reader : Readers)
+    {
+        Reader.Join();
+    }
+
+    EXPECT_GT(Queries.load(std::memory_order_relaxed), 0u);
+    EXPECT_GT(Mesh->GetTopologyEpoch(), StartEpoch);
+
+    // Retiling in place must leave the mesh answering exactly as it did before.
+    FNavPath Path;
+    FNavQueryFilter Filter;
+    ASSERT_TRUE(Mesh->FindPath(FVector3(-18.0f, 0.0f, -18.0f), FVector3(18.0f, 0.0f, 18.0f), Filter, Path));
+    EXPECT_TRUE(Path.bValid);
+    EXPECT_EQ(Path.Epoch, Mesh->GetTopologyEpoch());
+}
+
+TEST(NavMeshBuild, TilesPageOutAndBackIn)
+{
+    FNavBuildOutput Out;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(MakeGroundPlane(20.0f), Out));
+
+    TVector<FNavTileData> Baked = Out.Tiles;
+    auto Mesh = MakeUnique<FNavMesh>();
+    ASSERT_TRUE(Mesh->Initialize(Out.Origin, Out.TileWorldSize, Out.MaxTiles, Out.MaxPolysPerTile, std::move(Out.Tiles)));
+
+    int32 Resident = Mesh->GetResidentTileCount();
+    ASSERT_GT(Resident, 1);
+
+    int32 Removed = 0;
+    for (const FNavTileData& Tile : Baked)
+    {
+        if (Tile.Blob.empty())
+        {
+            continue;
+        }
+        ASSERT_TRUE(Mesh->HasTile(Tile.X, Tile.Y));
+        EXPECT_TRUE(Mesh->RemoveTile(Tile.X, Tile.Y));
+        EXPECT_FALSE(Mesh->HasTile(Tile.X, Tile.Y));
+        ++Removed;
+    }
+    ASSERT_GT(Removed, 0);
+    EXPECT_EQ(Mesh->GetResidentTileCount(), 0);
+
+    for (const FNavTileData& Tile : Baked)
+    {
+        if (!Tile.Blob.empty())
+        {
+            EXPECT_TRUE(Mesh->AddTile(Tile.X, Tile.Y, Tile.Blob));
+        }
+    }
+    EXPECT_EQ(Mesh->GetResidentTileCount(), Resident);
+
+    FNavPath Path;
+    FNavQueryFilter Filter;
+    ASSERT_TRUE(Mesh->FindPath(FVector3(-18.0f, 0.0f, -18.0f), FVector3(18.0f, 0.0f, 18.0f), Filter, Path));
+    EXPECT_TRUE(Path.bValid);
 }
