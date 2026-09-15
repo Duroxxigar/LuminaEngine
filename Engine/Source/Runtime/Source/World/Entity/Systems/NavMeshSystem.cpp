@@ -2,6 +2,8 @@
 #include "NavMeshSystem.h"
 
 #include <algorithm>
+
+#include "Platform/Time/PlatformTime.h"
 #include "World/ECS/Registry.h"
 
 #include "AI/Navigation/NavMesh.h"
@@ -58,6 +60,7 @@ namespace Lumina
     static TConsoleVar<bool>  CVarNavDebugModifiers ("Nav.Debug.Modifiers",    true,  "Wireframe box for each nav area modifier volume, colored by its area.");
     static TConsoleVar<bool>  CVarNavDebugLinks     ("Nav.Debug.OffMeshLinks", true,  "Arrows for off-mesh connections.");
     static TConsoleVar<bool>  CVarNavDebugLog       ("Nav.Debug.LogStats",     false, "Log triangle/edge/tile counts on every cache refresh.");
+    static TConsoleVar<bool>  CVarNavTimings        ("Nav.Debug.Timings",      false, "Log where navmesh gather, bake and hydration wall-clock goes.");
     static TConsoleVar<float> CVarNavDebugLift      ("Nav.Debug.LiftY",        0.05f, "Vertical offset added to debug geometry to avoid Z-fighting.");
     static TConsoleVar<float> CVarNavDebugVertSize  ("Nav.Debug.VertexRadius", 0.08f, "Radius of vertex spheres (also drives center-sphere size).");
 
@@ -1285,10 +1288,17 @@ namespace Lumina
                 Comp.Runtime.bStreamedInit = bStreaming;
                 Comp.Runtime.Streamer.Reset(Comp.Origin, Comp.TileWorldSize);
 
-                Task::AsyncTask(1, 1, [Job, Tiles = std::move(TilesCopy), InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys](uint32, uint32, uint32) mutable
+                const bool bLogTimings = CVarNavTimings.GetValue();
+                Task::AsyncTask(1, 1, [Job, Tiles = std::move(TilesCopy), InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys, bLogTimings](uint32, uint32, uint32) mutable
                 {
+                    const int32 TileCount = (int32)Tiles.size();
+                    PlatformTime::FStopwatch Watch;
                     auto Mesh = MakeUnique<FNavMesh>();
                     Mesh->Initialize(InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys, std::move(Tiles));
+                    if (bLogTimings)
+                    {
+                        LOG_INFO("NavTiming hydrate: {} tiles, maxTiles={}, {:.1f} ms.", TileCount, InitMaxTiles, Watch.ElapsedMilliseconds());
+                    }
                     Job->ResultMesh = std::move(Mesh);
                     Job->bDone.store(true, std::memory_order_release);
                 }, ETaskPriority::Background);
@@ -1426,7 +1436,10 @@ namespace Lumina
             };
 
             TVector<FNavSourceEntry> CurrentSources;
+            PlatformTime::FStopwatch DetectWatch;
             CollectNavSources(Context, Comp.Center - Comp.GetWorldExtents(), Comp.Center + Comp.GetWorldExtents(), false, 0.0f, CurrentSources);
+            const double DetectGatherMs = DetectWatch.ElapsedMilliseconds();
+            const int32 DirtyBefore = (int32)Comp.Runtime.DirtyTiles.size();
             for (const FNavSourceEntry& Src : CurrentSources)
             {
                 VisitSource(Src.Key, Src.AABBMin, Src.AABBMax);
@@ -1438,6 +1451,16 @@ namespace Lumina
                 if (CurrentAABBs.find(Id) == CurrentAABBs.end())
                 {
                     MarkDirtyForAABB(Snap.AABBMin, Snap.AABBMax);
+                }
+            }
+
+            if (CVarNavTimings.GetValue())
+            {
+                const int32 DirtyAfter = (int32)Comp.Runtime.DirtyTiles.size();
+                if (DirtyAfter != DirtyBefore || DetectGatherMs > 1.0)
+                {
+                    LOG_INFO("NavTiming detect: {} sources in {:.2f} ms, dirty {} -> {}, pending rebakes {}.",
+                        (int32)CurrentSources.size(), DetectGatherMs, DirtyBefore, DirtyAfter, (int32)Comp.Runtime.PendingRebakes.size());
                 }
             }
 
@@ -1516,6 +1539,7 @@ namespace Lumina
                 Snap->GatherMax = Math::Min(Mx, Snap->BakeMax);
             }
 
+            PlatformTime::FStopwatch GatherWatch;
             {
                 TVector<FNavSourceEntry> Sources;
                 CollectNavSources(Context, Snap->GatherMin, Snap->GatherMax, true, Comp.Settings.CellSize, Sources);
@@ -1525,10 +1549,19 @@ namespace Lumina
                     Snap->Prims.push_back(std::move(Entry.Prim));
                 }
             }
+            const bool bLogRebakeTimings = CVarNavTimings.GetValue();
+            if (bLogRebakeTimings)
+            {
+                const FVector3 GatherSpan = Snap->GatherMax - Snap->GatherMin;
+                LOG_INFO("NavTiming rebake gather: {} tiles, box {:.0f}x{:.0f}, {} prims in {:.2f} ms, {} still dirty.",
+                    (int32)BatchJobs.size(), GatherSpan.x, GatherSpan.z, (int32)Snap->Prims.size(),
+                    GatherWatch.ElapsedMilliseconds(), (int32)Comp.Runtime.DirtyTiles.size());
+            }
 
             // Coordinator emits geometry once on a worker, then ParallelFors the per-tile bakes.
-            Task::AsyncTask(1, 1, [Snap, Jobs = std::move(BatchJobs)](uint32, uint32, uint32) mutable
+            Task::AsyncTask(1, 1, [Snap, Jobs = std::move(BatchJobs), bLogRebakeTimings](uint32, uint32, uint32) mutable
             {
+                PlatformTime::FStopwatch EmitWatch;
                 FNavBuildInput Input;
                 Input.BoundsMin = Snap->BakeMin;
                 Input.BoundsMax = Snap->BakeMax;
@@ -1551,8 +1584,17 @@ namespace Lumina
                     Coords.push_back(FNavTileCoord{ Job->TileX, Job->TileY });
                 }
 
+                const double EmitMs = EmitWatch.ElapsedMilliseconds();
+                const int32 EmittedTris = (int32)(Input.Indices.size() / 3);
+
+                PlatformTime::FStopwatch BakeWatch;
                 TVector<FNavTileData> Baked;
                 NavMeshBuilder::BakeTiles(Input, Snap->Layout, Coords, Baked);
+                if (bLogRebakeTimings)
+                {
+                    LOG_INFO("NavTiming rebake work: {} tiles, emit {} tris in {:.2f} ms, bake {:.2f} ms.",
+                        (int32)Coords.size(), EmittedTris, EmitMs, BakeWatch.ElapsedMilliseconds());
+                }
 
                 for (size_t i = 0; i < Jobs.size(); ++i)
                 {
