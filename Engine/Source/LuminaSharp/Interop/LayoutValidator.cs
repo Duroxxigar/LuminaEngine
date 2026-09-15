@@ -125,6 +125,22 @@ internal static unsafe partial class LayoutValidator
             ++FlagsChecked;
         }
 
+        // The parameter half rides the same wire as the author-facing half, so it needs the same guard.
+        foreach (EScriptParamFlags Value in Enum.GetValues(typeof(EScriptParamFlags)))
+        {
+            if (Value == EScriptParamFlags.None)
+            {
+                continue;
+            }
+
+            int NativeValue = PropertyFlagNativeValue(Value.ToString());
+            if (NativeValue != (int)Value)
+            {
+                Failures.Append($"\n  - EScriptParamFlags.{Value} is {(int)Value} in C# but native reports {NativeValue}.");
+            }
+            ++FlagsChecked;
+        }
+
         if (Failures.Length > 0)
         {
             Debug.LogError($"FATAL: C#/C++ interop layout validation FAILED, refusing to start C# (a mismatched blittable layout or enum would corrupt memory). Fix the C# mirror or the native type:{Failures}");

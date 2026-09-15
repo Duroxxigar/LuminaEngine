@@ -22,16 +22,23 @@ public static unsafe class ScriptFunctionDispatch
 
     private readonly struct FBound
     {
-        public FBound(MethodInfo Method, IntPtr[] Parameters, IntPtr Return)
+        public FBound(MethodInfo Method, FrameMarshal.FSlot[] Parameters, bool[]? WriteBack,
+            FrameMarshal.FSlot Return, bool bHasReturn)
         {
             this.Method = Method;
             this.Parameters = Parameters;
+            this.WriteBack = WriteBack;
             this.Return = Return;
+            this.bHasReturn = bHasReturn;
         }
 
-        public readonly MethodInfo Method;
-        public readonly IntPtr[]   Parameters;
-        public readonly IntPtr     Return;
+        public readonly MethodInfo            Method;
+        public readonly FrameMarshal.FSlot[]  Parameters;
+
+        // Null when nothing is by-ref, which is the ordinary signature and skips the write-back pass.
+        public readonly bool[]?               WriteBack;
+        public readonly FrameMarshal.FSlot    Return;
+        public readonly bool                  bHasReturn;
     }
 
     [ManagedExport]
@@ -55,19 +62,31 @@ public static unsafe class ScriptFunctionDispatch
                 return;
             }
 
-            ParameterInfo[] Signature = Bound.Method.GetParameters();
-            object?[] Arguments = Signature.Length == 0 ? Array.Empty<object>() : new object?[Signature.Length];
+            int Count = Bound.Parameters.Length;
+            object?[] Arguments = Count == 0 ? Array.Empty<object>() : new object?[Count];
 
-            for (int Index = 0; Index < Signature.Length; ++Index)
+            for (int Index = 0; Index < Count; ++Index)
             {
-                Arguments[Index] = FrameMarshal.Read(Frame, Bound.Parameters[Index], Signature[Index].ParameterType);
+                Arguments[Index] = FrameMarshal.Read(Frame, Bound.Parameters[Index]);
             }
 
             object? Result = Bound.Method.Invoke(Target, Arguments);
 
-            if (Bound.Return != IntPtr.Zero)
+            // Invoke assigns an out or ref argument back into the array, which the caller reads off the frame.
+            if (Bound.WriteBack != null)
             {
-                FrameMarshal.Write(Frame, Bound.Return, Bound.Method.ReturnType, Result);
+                for (int Index = 0; Index < Count; ++Index)
+                {
+                    if (Bound.WriteBack[Index])
+                    {
+                        FrameMarshal.Write(Frame, Bound.Parameters[Index], Arguments[Index]);
+                    }
+                }
+            }
+
+            if (Bound.bHasReturn)
+            {
+                FrameMarshal.Write(Frame, Bound.Return, Result);
             }
         }
         catch (Exception Exception)
@@ -99,21 +118,66 @@ public static unsafe class ScriptFunctionDispatch
             return false;
         }
 
+        ParameterInfo[] Signature = Method.GetParameters();
         int Count = Native.FunctionParamCount(Function);
-        if (Count != Method.GetParameters().Length)
+
+        IntPtr ReturnParam = Native.FunctionReturnParam(Function);
+        bool bHasReturn = ReturnParam != IntPtr.Zero;
+
+        if (Count != Signature.Length)
         {
-            Debug.LogError($"Script function '{Name}' on {Type.Name} takes {Method.GetParameters().Length} arguments but its frame describes {Count}; the call is dropped.");
+            Debug.LogError($"Script function '{Name}' on {Type.Name} takes {Signature.Length} arguments but its frame describes {Count}; the call is dropped.");
             BoundByFunction[Key] = default;
             return false;
         }
 
-        IntPtr[] Parameters = new IntPtr[Count];
-        for (int Index = 0; Index < Count; ++Index)
+        bool bMethodReturns = Method.ReturnType != typeof(void);
+        if (bHasReturn != bMethodReturns)
         {
-            Parameters[Index] = Native.FunctionParamAt(Function, Index);
+            Debug.LogError($"Script function '{Name}' on {Type.Name} returns {Method.ReturnType.Name} but its frame {(bHasReturn ? "describes a return value" : "describes none")}; the call is dropped.");
+            BoundByFunction[Key] = default;
+            return false;
         }
 
-        Bound = new FBound(Method, Parameters, Native.FunctionReturnParam(Function));
+        FrameMarshal.FSlot[] Parameters = new FrameMarshal.FSlot[Signature.Length];
+        bool[]? WriteBack = null;
+
+        for (int Index = 0; Index < Signature.Length; ++Index)
+        {
+            string Where = $"Script function '{Name}' on {Type.Name}, argument '{Signature[Index].Name}'";
+            if (!FrameMarshal.TryBind(Native.FunctionParamAt(Function, Index), Signature[Index].ParameterType,
+                    Where, out Parameters[Index]))
+            {
+                BoundByFunction[Key] = default;
+                return false;
+            }
+
+            // A view writes through to the slot as the callee edits it, so a ref one needs no copy back.
+            if (FrameMarshal.DirectionOf(Signature[Index]) != EScriptParamFlags.None
+                && !FrameMarshal.IsViewOnly(Parameters[Index]))
+            {
+                WriteBack ??= new bool[Signature.Length];
+                WriteBack[Index] = true;
+            }
+        }
+
+        FrameMarshal.FSlot Return = default;
+        if (bHasReturn && !FrameMarshal.TryBind(ReturnParam, Method.ReturnType,
+                $"Script function '{Name}' on {Type.Name}, return value", out Return))
+        {
+            BoundByFunction[Key] = default;
+            return false;
+        }
+
+        // A view borrows storage it does not own, so there is nothing for it to hand back by value.
+        if (bHasReturn && FrameMarshal.IsViewOnly(Return))
+        {
+            Debug.LogError($"Script function '{Name}' on {Type.Name} returns {Method.ReturnType.Name}, a view over storage it does not own; the call is dropped. Take it as a parameter and fill it in place instead.");
+            BoundByFunction[Key] = default;
+            return false;
+        }
+
+        Bound = new FBound(Method, Parameters, WriteBack, Return, bHasReturn);
         BoundByFunction[Key] = Bound;
         return true;
     }
@@ -126,5 +190,6 @@ public static unsafe class ScriptFunctionDispatch
     internal static void Reset()
     {
         BoundByFunction.Clear();
+        FrameMarshal.Reset();
     }
 }

@@ -52,6 +52,23 @@ namespace Lumina::Scripting
         LE_NO_COPYMOVE(FScriptDynamicArray);
     };
 
+    // A script optional's payload, described by the array element desc that already carries all of its parts.
+    struct FScriptOptionalDesc
+    {
+        FScriptArrayElementDesc Payload;
+    };
+
+    // Heap payload rather than inline, so the slot is one fixed size and engaged is exactly a non-null payload.
+    struct FScriptDynamicOptional
+    {
+        const FScriptOptionalDesc* Desc = nullptr;
+        void*                      Payload = nullptr;
+
+        FScriptDynamicOptional() = default;
+        ~FScriptDynamicOptional();
+        LE_NO_COPYMOVE(FScriptDynamicOptional);
+    };
+
     // Key/value element description for a script-minted map. The Key/Value reuse the array element desc (size,
     // lifecycle kind, inner FProperty, construct/destruct/copy). Pairs are packed [key][pad][value][pad] with a
     // 16-byte alignment so any key/value type stays aligned inside the (16-byte-aligned) backing buffer.
@@ -226,6 +243,7 @@ namespace Lumina
 
         TVector<Scripting::FScriptArrayElementDesc*>   ElementDescs;
         TVector<Scripting::FScriptMapElementDesc*>     MapDescs;
+        TVector<Scripting::FScriptOptionalDesc*>       OptionalDescs;
         bool                                           bRuntimeFreed = false;
 
 

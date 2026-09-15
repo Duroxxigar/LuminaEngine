@@ -66,8 +66,14 @@ public static unsafe partial class Native
     // The offset of a property within whatever container holds it, which is how a call frame's blittable
     // slots are addressed without a crossing per argument.
     [NativeCall] public static partial int PropertyOffset(IntPtr Prop);
+
+    // The width of the slot at that offset, which for an enum is its underlying type's width.
+    [NativeCall] public static partial int PropertySize(IntPtr Prop);
     [NativeCall] public static partial string ClassGetName(IntPtr Class);
     [NativeCall] public static partial IntPtr ClassGetDefaultObject(IntPtr Class);
+
+    // Copies a whole struct value into the property's slot, for a reflected function returning one by value.
+    [NativeCall] public static partial void PropCopyStruct(IntPtr C, IntPtr Prop, IntPtr Source);
 
     // TSubStructOf. The setter is a shim rather than a byte write so the MetaStruct constraint is enforced.
     [NativeCall] public static partial IntPtr PropGetSubStruct(IntPtr C, IntPtr Prop);
@@ -91,6 +97,9 @@ public static unsafe partial class Native
 
     // TOptional access. The get returns the payload address, or zero when the optional is unset.
     [NativeCall] public static partial IntPtr PropOptionalGetValue(IntPtr Container, IntPtr Prop);
+
+    // The payload property, whose width the managed side copies through.
+    [NativeCall] public static partial IntPtr PropOptionalInner(IntPtr Prop);
     [NativeCall] public static partial int PropOptionalHasValue(IntPtr Container, IntPtr Prop);
     [NativeCall] public static partial void PropOptionalSetValue(IntPtr Container, IntPtr Prop, IntPtr Value);
     [NativeCall] public static partial void PropOptionalReset(IntPtr Container, IntPtr Prop);

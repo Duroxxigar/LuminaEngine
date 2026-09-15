@@ -371,6 +371,11 @@ namespace Lumina
 
         uint16 NumMetaData;
         const FMetaDataPairParam* MetaDataArray;
+
+        // Null for a compile-time TOptional<T>, whose owner constructs it; a script optional owns heap storage.
+        void (*ConstructContainerFn)(void* InContainer, const void* Context);
+        void (*DestructContainerFn)(void* InContainer, const void* Context);
+        const void* ContainerContext;
     };
     
     /**

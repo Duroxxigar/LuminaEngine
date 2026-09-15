@@ -161,6 +161,9 @@ public sealed class ScriptProperty
     /// are skipped for it, which is why "no setter" cannot simply mean "not a property".
     /// </summary>
     public bool IsNativeOwnedView { get; init; }
+
+    // Parameter direction, folded onto the minted property's flags. Always None for a member.
+    internal EScriptParamFlags ParamFlags { get; init; }
 }
 
 /// <summary>One [Button] method surfaced as an inspector button, invoked by name.</summary>

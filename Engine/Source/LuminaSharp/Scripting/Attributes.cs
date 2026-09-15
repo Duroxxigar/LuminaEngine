@@ -84,6 +84,19 @@ public enum EPropertyFlags : uint
     DuplicateTransient = 1u << 16,
 }
 
+// The parameter half of native EPropertyFlags, kept apart because neither is anything a [Property] declares.
+[Flags]
+internal enum EScriptParamFlags : uint
+{
+    None     = 0,
+
+    // The caller reads this frame slot back after the call, which is what the dispatcher writes back into.
+    OutParam = 1u << 17,
+
+    // An out parameter the callee also sees the incoming value of, so C# ref rather than C# out.
+    RefParam = 1u << 18,
+}
+
 /// <summary>
 /// Exposes a script field/property to the editor (and saves it).
 /// </summary>

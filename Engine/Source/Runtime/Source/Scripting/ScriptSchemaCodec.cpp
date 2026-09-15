@@ -184,6 +184,7 @@ namespace Lumina::Scripting
                     break;
                 }
                 case EPropertyTypeFlags::Vector:
+                case EPropertyTypeFlags::Optional:
                 {
                     Type->ElementType = ReadType(R);
                     break;

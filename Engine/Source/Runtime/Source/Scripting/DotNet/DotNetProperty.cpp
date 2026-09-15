@@ -77,6 +77,12 @@ LUMINA_DOTNET_EXPORT(int32, PropertyOffset)(const void* Prop)
     return Prop ? (int32)static_cast<const FProperty*>(Prop)->Offset : -1;
 }
 
+// The width of one value in a container or a call frame, which for an enum is its underlying width.
+LUMINA_DOTNET_EXPORT(int32, PropertySize)(const void* Prop)
+{
+    return Prop ? (int32)static_cast<const FProperty*>(Prop)->GetElementSize() : -1;
+}
+
 // One crossing resolves type and property to an offset, which the blittable path caches.
 LUMINA_DOTNET_EXPORT(int32, PropertyOffsetByName)(const char* Type, int TLen, const char* Prop, int PLen)
 {
@@ -336,6 +342,18 @@ LUMINA_DOTNET_EXPORT(void*, ClassGetDefaultObject)(void* Class)
     return Class != nullptr ? static_cast<CClass*>(Class)->GetDefaultObject() : nullptr;
 }
 
+// Returning a struct by value. The property owns the copy, since only it knows whether the members own memory.
+LUMINA_DOTNET_EXPORT(void, PropCopyStruct)(void* C, const void* Prop, const void* Source)
+{
+    if (C == nullptr || Prop == nullptr || Source == nullptr)
+    {
+        return;
+    }
+
+    const FProperty* Property = static_cast<const FProperty*>(Prop);
+    Property->CopyCompleteValue(Property->GetValuePtr<void>(C), Source);
+}
+
 // The struct analog of the TSubclassOf pair, with MetaStruct standing in for MetaClass.
 
 LUMINA_DOTNET_EXPORT(void*, PropGetSubStruct)(void* C, const void* Prop)
@@ -518,6 +536,20 @@ static void* OptionalMember(void* Container, const void* Prop)
 {
     const auto* Optional = static_cast<const FOptionalProperty*>(Prop);
     return (Container != nullptr && Optional != nullptr) ? Optional->GetValuePtr<void>(Container) : nullptr;
+}
+
+// The payload property, so the managed side can size its copy of the value behind the optional.
+LUMINA_DOTNET_EXPORT(const void*, PropOptionalInner)(const void* Prop)
+{
+    if (Prop == nullptr)
+    {
+        return nullptr;
+    }
+
+    const FProperty* Property = static_cast<const FProperty*>(Prop);
+    return Property->GetType() == EPropertyTypeFlags::Optional
+        ? static_cast<const FOptionalProperty*>(Property)->GetInternalProperty()
+        : nullptr;
 }
 
 LUMINA_DOTNET_EXPORT(int32, PropOptionalHasValue)(void* C, const void* Prop)

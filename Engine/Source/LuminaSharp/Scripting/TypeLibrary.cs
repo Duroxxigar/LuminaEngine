@@ -272,6 +272,17 @@ internal sealed class TypeLibrary
         {
             return new ScriptType { Kind = EPropertyType.SoftObject, Clr = Type, TargetClass = "" };
         }
+        // A nullable is an optional over its payload, matching the native TOptional a C++ one reflects as.
+        if (Nullable.GetUnderlyingType(Type) is Type Payload)
+        {
+            ScriptType Inner = ResolveType(Payload, Depth + 1, Visiting);
+            if (Inner.Kind == EPropertyType.None)
+            {
+                return new ScriptType { Kind = EPropertyType.None, Clr = Type };
+            }
+            return new ScriptType { Kind = EPropertyType.Optional, Clr = Type, Element = Inner };
+        }
+
         if (Type.IsGenericType)
         {
             Type Definition = Type.GetGenericTypeDefinition();
@@ -687,10 +698,18 @@ internal sealed class TypeDescription
             List<ScriptProperty> Params = new();
             foreach (ParameterInfo Parameter in Method.GetParameters())
             {
+                // A frame slot holds the value, so a by-ref parameter is described as the type behind it.
+                Type Declared = Parameter.ParameterType;
+                if (Declared.IsByRef)
+                {
+                    Declared = Declared.GetElementType()!;
+                }
+
                 Params.Add(new ScriptProperty
                 {
                     Name = Parameter.Name ?? $"Arg{Params.Count}",
-                    Type = Library.ResolveType(Parameter.ParameterType, 0, new HashSet<Type>()),
+                    Type = Library.ResolveType(Declared, 0, new HashSet<Type>()),
+                    ParamFlags = FrameMarshal.DirectionOf(Parameter),
                 });
             }
 

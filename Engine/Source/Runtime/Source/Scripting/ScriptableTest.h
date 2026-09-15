@@ -3,6 +3,7 @@
 #include "Containers/Name.h"
 #include "Core/Object/Object.h"
 #include "Core/Object/ObjectHandleTyped.h"
+#include "Core/Templates/Optional.h"
 #include "Scripting/EntityScript.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Entity/Systems/EntitySystem.h"
@@ -35,6 +36,14 @@ namespace Lumina
         // Object arg + return: the C++ default echoes the input; a C# override could return a different object.
         FUNCTION()
         virtual CWorld* OnEchoWorld(CWorld* In) { return In; }
+
+        // A reflected optional, so the frame marshaller has a real TOptional slot to bind a C# nullable to.
+        FUNCTION()
+        virtual TOptional<float> OnEchoOptional(TOptional<float> In) { return In; }
+
+        // A reflected container, so the frame marshaller has a real vector slot to bind a C# view to.
+        FUNCTION()
+        virtual void OnAppendSum(TVector<float>& Values) { Values.push_back(0.0f); }
     };
 
     /**

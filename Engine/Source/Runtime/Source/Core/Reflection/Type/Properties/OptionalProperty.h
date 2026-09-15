@@ -15,6 +15,9 @@ namespace Lumina
             , GetValueFn(Params->GetValueFn)
             , SetValueFn(Params->SetValueFn)
             , ResetFn   (Params->ResetFn)
+            , ConstructContainerFn(Params->ConstructContainerFn)
+            , DestructContainerFn (Params->DestructContainerFn)
+            , ContainerContext    (Params->ContainerContext)
         {
         }
 
@@ -30,6 +33,11 @@ namespace Lumina
         void  SetValue(void* InContainer, const void* InValue) const { SetValueFn(InContainer, InValue); }
         void  Reset(void* InContainer) const          { ResetFn(InContainer); }
 
+        // Routed through the ops rather than a type test, so a TOptional<T> and a script optional are one path.
+        void ConstructValue(void* Value) const override { if (ConstructContainerFn) { ConstructContainerFn(Value, ContainerContext); } }
+        void DestructValue(void* Value) const override  { if (DestructContainerFn)  { DestructContainerFn(Value, ContainerContext); } }
+        bool OwnsStorage() const override { return ConstructContainerFn != nullptr; }
+
         RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
         RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
 
@@ -43,6 +51,10 @@ namespace Lumina
         OptionalGetValuePtr     GetValueFn;
         OptionalSetValuePtr     SetValueFn;
         OptionalResetPtr        ResetFn;
+
+        void (*ConstructContainerFn)(void*, const void*) = nullptr;
+        void (*DestructContainerFn)(void*, const void*) = nullptr;
+        const void*             ContainerContext = nullptr;
 
         FProperty*              Inner = nullptr;
     };

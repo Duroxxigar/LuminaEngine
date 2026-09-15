@@ -73,6 +73,15 @@ internal static class ScriptPropertyClassifier
                 + $"{SuggestListView(Array.ElementType)} instead, which views the storage native already owns.");
         }
 
+        // Bound for a call frame, which owns the storage; a member would also need an accessor and a default.
+        if (Type is INamedTypeSymbol Maybe
+            && Maybe.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+        {
+            return FScriptPropertyClassification.Reject(
+                $"'{Display(Type)}' crosses as a native TOptional, which is bound for a [ScriptFunction] "
+                + "parameter or return but not yet for a [Property].");
+        }
+
         if (Type is INamedTypeSymbol Named && Named.IsGenericType)
         {
             switch (Named.ConstructedFrom.ToDisplayString())

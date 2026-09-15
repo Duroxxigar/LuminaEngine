@@ -144,6 +144,8 @@ namespace Lumina
         NODISCARD bool IsReplicated()   const       { return EnumHasAnyFlags(Flags, EPropertyFlags::Replicated); }
         NODISCARD bool IsEntityHandle() const       { return EnumHasAnyFlags(Flags, EPropertyFlags::EntityHandle); }
         NODISCARD bool IsDuplicateTransient() const { return EnumHasAnyFlags(Flags, EPropertyFlags::DuplicateTransient); }
+        NODISCARD bool IsOutParam()     const       { return EnumHasAnyFlags(Flags, EPropertyFlags::OutParam); }
+        NODISCARD bool IsRefParam()     const       { return EnumHasAnyFlags(Flags, EPropertyFlags::RefParam); }
         NODISCARD bool ShouldSerialize()const       { return !EnumHasAnyFlags(Flags, EPropertyFlags::NoSerialize); }
         NODISCARD bool IsEditable()     const       { return EnumHasAnyFlags(Flags, EPropertyFlags::Editable); }
         NODISCARD bool IsConst()        const       { return EnumHasAnyFlags(Flags, EPropertyFlags::Const); }

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "Containers/Name.h"
+#include "Core/Math/Math.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/ObjectBase.h"
@@ -47,6 +48,29 @@ namespace
         Field.Name = FName(Name);
         Field.Type = MakeShared<Scripting::FScriptExportType>();
         Field.Type->Kind = Kind;
+        return Field;
+    }
+
+    Scripting::FScriptExportField EnumField(const char* Name, const char* EnumName, EPropertyTypeFlags Underlying)
+    {
+        Scripting::FScriptExportField Field;
+        Field.Name = FName(Name);
+        Field.Type = MakeShared<Scripting::FScriptExportType>();
+        Field.Type->Kind = EPropertyTypeFlags::Enum;
+        Field.Type->EnumName = FName(EnumName);
+        Field.Type->EnumUnderlying = Underlying;
+        Field.Type->EnumEntries.push_back({FName("Zero"), 0});
+        Field.Type->EnumEntries.push_back({FName("One"), 1});
+        return Field;
+    }
+
+    Scripting::FScriptExportField NativeStructField(const char* Name, const char* NativeType)
+    {
+        Scripting::FScriptExportField Field;
+        Field.Name = FName(Name);
+        Field.Type = MakeShared<Scripting::FScriptExportType>();
+        Field.Type->Kind = EPropertyTypeFlags::Struct;
+        Field.Type->NativeName = FName(NativeType);
         return Field;
     }
 
@@ -215,4 +239,58 @@ TEST(ScriptFunctionMint, AFunctionWithNoParametersIsStillCallable)
     FFunctionFrame Frame(*Minted.Function);
     Frame.Invoke(Minted.Class->GetDefaultObject());
     EXPECT_EQ(GThunkCalls, CallsBefore + 1);
+}
+
+// The managed dispatcher sizes its read and write from the slot, so a wrong width writes over a neighbor.
+TEST(ScriptFunctionMint, ANarrowEnumParameterOccupiesItsUnderlyingWidth)
+{
+    Scripting::FScriptExportSchema Params;
+    Params.Fields.push_back(EnumField("Channel", "ScriptFn_ChannelEnum", EPropertyTypeFlags::UInt8));
+    Params.Fields.push_back(ScalarField("After", EPropertyTypeFlags::Int32));
+    Params.Fields.push_back(ScalarField("ReturnValue", EPropertyTypeFlags::Int32));
+
+    const FMinted Minted = MintClassWithFunction("ScriptFn_NarrowEnum", Params, 2);
+    ASSERT_NE(Minted.Function, nullptr);
+
+    const TSpan<FProperty* const> All = Minted.Function->GetParams();
+    ASSERT_EQ(All.size(), 3u);
+
+    EXPECT_EQ(All[0]->GetType(), EPropertyTypeFlags::Enum);
+    EXPECT_EQ(All[0]->GetElementSize(), sizeof(uint8));
+    EXPECT_GE(All[1]->Offset, All[0]->Offset + 1u);
+}
+
+TEST(ScriptFunctionMint, AWideEnumParameterOccupiesItsUnderlyingWidth)
+{
+    Scripting::FScriptExportSchema Params;
+    Params.Fields.push_back(EnumField("Wide", "ScriptFn_WideEnum", EPropertyTypeFlags::Int64));
+
+    const FMinted Minted = MintClassWithFunction("ScriptFn_WideEnum", Params, -1);
+    ASSERT_NE(Minted.Function, nullptr);
+
+    const TSpan<FProperty* const> All = Minted.Function->GetParams();
+    ASSERT_EQ(All.size(), 1u);
+    EXPECT_EQ(All[0]->GetElementSize(), sizeof(int64));
+}
+
+// The C# mirror is checked against this width, so it has to be the real sizeof, not the reflected sum.
+TEST(ScriptFunctionMint, ANativeStructParameterReportsTheStructsOwnSize)
+{
+    Scripting::FScriptExportSchema Params;
+    Params.Fields.push_back(NativeStructField("Where", "FVector3"));
+    Params.Fields.push_back(ScalarField("ReturnValue", EPropertyTypeFlags::Int32));
+
+    const FMinted Minted = MintClassWithFunction("ScriptFn_NativeStruct", Params, 1);
+    ASSERT_NE(Minted.Function, nullptr);
+
+    const CStruct* Vector = FindObject<CStruct>(FName("FVector3"));
+    ASSERT_NE(Vector, nullptr);
+
+    const TSpan<FProperty* const> All = Minted.Function->GetParams();
+    ASSERT_EQ(All.size(), 2u);
+
+    EXPECT_EQ(All[0]->GetType(), EPropertyTypeFlags::Struct);
+    EXPECT_EQ(All[0]->GetElementSize(), Vector->GetAlignedSize());
+    EXPECT_EQ(All[0]->GetElementSize(), sizeof(FVector3));
+    EXPECT_LE(All[0]->Offset + All[0]->GetElementSize(), Minted.Function->GetParmsSize());
 }

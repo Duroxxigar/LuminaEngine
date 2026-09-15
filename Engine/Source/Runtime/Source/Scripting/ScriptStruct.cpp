@@ -17,6 +17,7 @@
 #include "Core/Reflection/Type/Properties/ArrayProperty.h"
 #include "Core/Reflection/Type/Properties/MapProperty.h"
 #include "Core/Reflection/Type/Properties/EnumProperty.h"
+#include "Core/Reflection/Type/Properties/OptionalProperty.h"
 #include "Core/Reflection/Type/Properties/InstancedStructProperty.h"
 #include "Core/Reflection/Type/Properties/ObjectProperty.h"
 #include "Core/Reflection/Type/Properties/SoftObjectProperty.h"
@@ -48,6 +49,8 @@ namespace Lumina
         FScriptArrayElementDesc*    ArrayDesc = nullptr;
         bool                        bMap = false;
         FScriptMapElementDesc*      MapDesc = nullptr;
+        bool                        bOptional = false;
+        FScriptOptionalDesc*        OptionalDesc = nullptr;
     };
 
     namespace
@@ -421,6 +424,86 @@ namespace Lumina
                 static_cast<FScriptDynamicArray*>(Vector)->~FScriptDynamicArray();
             };
             Ops.ContainerContext = Desc;
+        }
+
+        // ---- Script dynamic optional (a heap payload, so an engaged optional is a non-null pointer) ----
+
+        bool OptionalHasValue(const void* Container)
+        {
+            return static_cast<const FScriptDynamicOptional*>(Container)->Payload != nullptr;
+        }
+
+        void* OptionalGetValue(void* Container)
+        {
+            return static_cast<FScriptDynamicOptional*>(Container)->Payload;
+        }
+
+        void OptionalReset(void* Container)
+        {
+            FScriptDynamicOptional* Optional = static_cast<FScriptDynamicOptional*>(Container);
+            if (Optional->Payload == nullptr)
+            {
+                return;
+            }
+
+            if (Optional->Desc != nullptr)
+            {
+                Optional->Desc->Payload.DestructElement(Optional->Payload);
+            }
+            Memory::Free(Optional->Payload);
+            Optional->Payload = nullptr;
+        }
+
+        void OptionalSetValue(void* Container, const void* Value)
+        {
+            FScriptDynamicOptional* Optional = static_cast<FScriptDynamicOptional*>(Container);
+            if (Optional->Desc == nullptr || Optional->Desc->Payload.Size == 0)
+            {
+                return;
+            }
+
+            if (Optional->Payload == nullptr)
+            {
+                Optional->Payload = Memory::Malloc(Optional->Desc->Payload.Size, 16);
+                Optional->Desc->Payload.ConstructElement(Optional->Payload);
+            }
+
+            if (Value != nullptr)
+            {
+                Optional->Desc->Payload.CopyElement(Optional->Payload, Value);
+            }
+        }
+
+        void FillOptionalParams(FOptionalPropertyParams& Params, const FScriptOptionalDesc* Desc)
+        {
+            Params.HasValueFn = &OptionalHasValue;
+            Params.GetValueFn = &OptionalGetValue;
+            Params.SetValueFn = &OptionalSetValue;
+            Params.ResetFn    = &OptionalReset;
+
+            // The description owns the params, so the self-reference keeps the two from drifting.
+            Params.ConstructContainerFn = [](void* Container, const void* Context)
+            {
+                FScriptDynamicOptional* Optional = Memory::ConstructAt(static_cast<FScriptDynamicOptional*>(Container));
+                Optional->Desc = static_cast<const FScriptOptionalDesc*>(Context);
+            };
+            Params.DestructContainerFn = [](void* Container, const void*)
+            {
+                static_cast<FScriptDynamicOptional*>(Container)->~FScriptDynamicOptional();
+            };
+            Params.ContainerContext = Desc;
+        }
+
+        FProperty* MakeOptional(const FPropertyOwner& Owner, const FName& Name, uint32 Offset,
+            const FScriptOptionalDesc* Desc)
+        {
+            const FString NameStr = Name.ToString();
+            FOptionalPropertyParams Params{};
+            FillBaseParams(Params, EPropertyTypeFlags::Optional, Offset, NameStr.c_str());
+            FillOptionalParams(Params, Desc);
+            Params.NumMetaData   = 0;
+            Params.MetaDataArray = nullptr;
+            return Owner.Build<FOptionalProperty>(&Params);
         }
 
         // ---- Script dynamic map (type-erased pairs, linear find via the key property's Identical) ----
@@ -1022,6 +1105,21 @@ namespace Lumina
             return true;
         }
 
+        if (Type.Kind == EPropertyTypeFlags::Optional && Type.ElementType)
+        {
+            FScriptOptionalDesc* Desc = Memory::New<FScriptOptionalDesc>();
+            OptionalDescs.push_back(Desc);
+            if (!ResolveElement(*Type.ElementType, Field.Name, Desc->Payload))
+            {
+                return false;
+            }
+            Out.bOptional = true;
+            Out.OptionalDesc = Desc;
+            Out.Size = sizeof(FScriptDynamicOptional);
+            Out.Align = alignof(FScriptDynamicOptional);
+            return true;
+        }
+
         if (Type.Kind == EPropertyTypeFlags::Map && Type.KeyType && Type.ValueType)
         {
             FScriptMapElementDesc* Desc = Memory::New<FScriptMapElementDesc>();
@@ -1071,6 +1169,16 @@ namespace Lumina
             ApplyDeclaredFlags(Array, Field.Flags);
             ApplyHidden(Array, Field.Meta);
             return Array;
+        }
+        if (Plan.bOptional)
+        {
+            FProperty* Optional = MakeOptional(Owner, Field.Name, Offset, Plan.OptionalDesc);
+            FProperty* Inner = CreateElement(Optional, *Type.ElementType, Plan.OptionalDesc->Payload);
+            Plan.OptionalDesc->Payload.Inner = Inner;
+            ApplyMeta(GetPropertyArena(), Optional, &Field.Meta, FKindTag{});
+            ApplyDeclaredFlags(Optional, Field.Flags);
+            ApplyHidden(Optional, Field.Meta);
+            return Optional;
         }
         if (Plan.bMap)
         {
@@ -1280,6 +1388,12 @@ namespace Lumina
         }
         MapDescs.clear();
 
+        for (FScriptOptionalDesc* Desc : OptionalDescs)
+        {
+            Memory::Delete(Desc);
+        }
+        OptionalDescs.clear();
+
         SubStructsByKey.clear();
         EnumsByKey.clear();
         SubStructs.clear();
@@ -1317,6 +1431,19 @@ namespace Lumina::Scripting
     void FScriptArrayElementDesc::CopyElement(void* Dst, const void* Src) const
     {
         if (Inner != nullptr) { Inner->CopyCompleteValue(Dst, Src); }
+    }
+
+    FScriptDynamicOptional::~FScriptDynamicOptional()
+    {
+        if (Payload != nullptr)
+        {
+            if (Desc != nullptr)
+            {
+                Desc->Payload.DestructElement(Payload);
+            }
+            Memory::Free(Payload);
+            Payload = nullptr;
+        }
     }
 
     FScriptDynamicArray::~FScriptDynamicArray()

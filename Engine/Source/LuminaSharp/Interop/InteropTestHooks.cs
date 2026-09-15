@@ -1,0 +1,263 @@
+using System;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using Lumina;
+
+namespace LuminaSharp;
+
+// Byte-backed on purpose, so a marshaller that assumed four bytes writes over the slot that follows.
+internal enum ETestFrameChannel : byte
+{
+    Zero = 0,
+    One = 1,
+    Two = 2,
+    Highest = 255,
+}
+
+// Stands in for a script type, so a native test can drive the real dispatcher over a minted frame.
+internal sealed class FrameMarshalTarget
+{
+    public void MarshalOut(int In, out int Out)
+    {
+        Out = In * 2;
+    }
+
+    public void MarshalRef(ref int Value)
+    {
+        Value += 5;
+    }
+
+    // Named for the reflected function it stands in for, which is how the dispatcher resolves it.
+    public float? OnEchoOptional(float? In)
+    {
+        return In.HasValue ? In.Value * 2.0f : null;
+    }
+
+    public float? OnMaybeDouble(float? In)
+    {
+        return In.HasValue ? In.Value + 0.5f : null;
+    }
+
+    // Reads the caller's vector in place and appends the total, so both directions of the view are observable.
+    public void OnAppendSum(Lumina.TVector<float> Values)
+    {
+        float Sum = 0.0f;
+        for (int Index = 0; Index < Values.Count; ++Index)
+        {
+            Sum += Values[Index];
+        }
+
+        Values.Add(Sum);
+    }
+
+    public void MarshalDirections(int Plain, out int Out, ref int Ref, in int In)
+    {
+        Out = Plain;
+        Ref += In;
+    }
+}
+
+// Drives FrameMarshal from a native test, which is the only way to exercise it without an editor.
+internal static unsafe class InteropTestHooks
+{
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static IntPtr Test_MakeMarshalTarget()
+    {
+        return GCHandle.ToIntPtr(GCHandle.Alloc(new FrameMarshalTarget()));
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static void Test_FreeMarshalTarget(IntPtr Handle)
+    {
+        if (Handle != IntPtr.Zero)
+        {
+            GCHandle.FromIntPtr(Handle).Free();
+        }
+    }
+
+    // The packed direction of one parameter, pinning out, ref and in as the C# compiler actually emits them.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static uint Test_ParameterDirection(int Index)
+    {
+        var Method = typeof(FrameMarshalTarget).GetMethod(nameof(FrameMarshalTarget.MarshalDirections))!;
+        ParameterInfo[] Signature = Method.GetParameters();
+        return Index < 0 || Index >= Signature.Length
+            ? uint.MaxValue
+            : (uint)FrameMarshal.DirectionOf(Signature[Index]);
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameReadVector3(IntPtr Frame, IntPtr Property, float* OutXYZ)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(FVector3), "Test_FrameReadVector3", out FrameMarshal.FSlot Slot))
+        {
+            return 0;
+        }
+
+        FVector3 Value = (FVector3)FrameMarshal.Read(Frame, Slot)!;
+        OutXYZ[0] = Value.X;
+        OutXYZ[1] = Value.Y;
+        OutXYZ[2] = Value.Z;
+        return 1;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameWriteVector3(IntPtr Frame, IntPtr Property, float X, float Y, float Z)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(FVector3), "Test_FrameWriteVector3", out FrameMarshal.FSlot Slot))
+        {
+            return 0;
+        }
+
+        FrameMarshal.Write(Frame, Slot, new FVector3(X, Y, Z));
+        return 1;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameReadByteEnum(IntPtr Frame, IntPtr Property)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(ETestFrameChannel), "Test_FrameReadByteEnum",
+                out FrameMarshal.FSlot Slot))
+        {
+            return -1;
+        }
+
+        return (int)(ETestFrameChannel)FrameMarshal.Read(Frame, Slot)!;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameWriteByteEnum(IntPtr Frame, IntPtr Property, int Value)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(ETestFrameChannel), "Test_FrameWriteByteEnum",
+                out FrameMarshal.FSlot Slot))
+        {
+            return 0;
+        }
+
+        FrameMarshal.Write(Frame, Slot, (ETestFrameChannel)Value);
+        return 1;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameReadEntity(IntPtr Frame, IntPtr Property, uint* OutId)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(Entity), "Test_FrameReadEntity", out FrameMarshal.FSlot Slot))
+        {
+            return 0;
+        }
+
+        *OutId = ((Entity)FrameMarshal.Read(Frame, Slot)!).Id;
+        return 1;
+    }
+
+    // Returns 1 with the payload in OutValue, 0 for an unset optional, and -1 when the bind was refused.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameReadOptional(IntPtr Frame, IntPtr Property, float* OutValue)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(float?), "Test_FrameReadOptional",
+                out FrameMarshal.FSlot Slot))
+        {
+            return -1;
+        }
+
+        object? Value = FrameMarshal.Read(Frame, Slot);
+        if (Value == null)
+        {
+            return 0;
+        }
+
+        *OutValue = (float)Value;
+        return 1;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameWriteOptional(IntPtr Frame, IntPtr Property, int bSet, float Value)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(float?), "Test_FrameWriteOptional",
+                out FrameMarshal.FSlot Slot))
+        {
+            return 0;
+        }
+
+        FrameMarshal.Write(Frame, Slot, bSet != 0 ? Value : null);
+        return 1;
+    }
+
+    // Returns the element count seen through a bound view, or -1 when the bind was refused.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameReadVectorCount(IntPtr Frame, IntPtr Property, float* OutSum)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(Lumina.TVector<float>), "Test_FrameReadVectorCount",
+                out FrameMarshal.FSlot Slot))
+        {
+            return -1;
+        }
+
+        var View = (Lumina.TVector<float>)FrameMarshal.Read(Frame, Slot)!;
+
+        float Sum = 0.0f;
+        foreach (float Value in View)
+        {
+            Sum += Value;
+        }
+
+        *OutSum = Sum;
+        return View.Count;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameAppendToVector(IntPtr Frame, IntPtr Property, float Value)
+    {
+        if (!FrameMarshal.TryBind(Property, typeof(Lumina.TVector<float>), "Test_FrameAppendToVector",
+                out FrameMarshal.FSlot Slot))
+        {
+            return 0;
+        }
+
+        ((Lumina.TVector<float>)FrameMarshal.Read(Frame, Slot)!).Add(Value);
+        return 1;
+    }
+
+    // A vector slot must refuse a map view, since the two ops tables are not interchangeable.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameBindMapOverVector(IntPtr Property)
+    {
+        return FrameMarshal.TryBind(Property, typeof(Lumina.THashMap<int, int>), "Test_FrameBindMapOverVector",
+            out FrameMarshal.FSlot _) ? 1 : 0;
+    }
+
+    // The kind TypeLibrary gives a nullable, so the schema half of a script-declared optional is pinned too.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_ResolveNullableKind(int* OutPayloadKind)
+    {
+        var Library = new TypeLibrary(new[] { typeof(FrameMarshalTarget) });
+        ScriptType Resolved = Library.ResolveType(typeof(float?), 0, new System.Collections.Generic.HashSet<Type>());
+
+        *OutPayloadKind = Resolved.Element == null ? -1 : (int)Resolved.Element.Kind;
+        return (int)Resolved.Kind;
+    }
+
+    // A width the frame cannot hold has to be refused rather than written, which is what this pins.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_FrameBindMismatchedWidth(IntPtr Property)
+    {
+        return FrameMarshal.TryBind(Property, typeof(FVector3), "Test_FrameBindMismatchedWidth",
+            out FrameMarshal.FSlot _) ? 1 : 0;
+    }
+}

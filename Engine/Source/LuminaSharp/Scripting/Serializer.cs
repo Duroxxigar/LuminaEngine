@@ -129,7 +129,7 @@ internal static class Serializer
 
         WriteString(Writer, Property.Name);
         WriteAliases(Writer, Property.Aliases);
-        WriteMeta(Writer, Property.Meta, Property.Hidden);
+        WriteMeta(Writer, Property.Meta, Property.Hidden, Property.ParamFlags);
 
         // Only a top-level field has a hot-reload identity, so only it carries the byte.
         if (bTopLevel)
@@ -146,7 +146,8 @@ internal static class Serializer
         WriteValue(Writer, Property.Type, DefaultValue);
     }
 
-    private static void WriteMeta(BinaryWriter Writer, PropertyAttribute? Meta, bool bHidden = false)
+    private static void WriteMeta(BinaryWriter Writer, PropertyAttribute? Meta, bool bHidden = false,
+        EScriptParamFlags ParamFlags = EScriptParamFlags.None)
     {
         using var Frame = new Record(Writer, ERecord.Meta);
 
@@ -172,7 +173,7 @@ internal static class Serializer
         Writer.Write((byte)(bHidden ? 1 : 0));
 
         // Appended, which the Meta record's length prefix makes safe against an older native reader.
-        Writer.Write((uint)(Meta?.Flags ?? EPropertyFlags.None));
+        Writer.Write((uint)(Meta?.Flags ?? EPropertyFlags.None) | (uint)ParamFlags);
     }
 
     // Type descriptor; parsed in lockstep by the native ReadType. The kind is the shared reflected taxonomy
@@ -215,6 +216,7 @@ internal static class Serializer
                 break;
             }
             case EPropertyType.Vector:
+            case EPropertyType.Optional:
             {
                 WriteType(Writer, Type.Element ?? new ScriptType());
                 break;

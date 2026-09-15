@@ -78,6 +78,29 @@ namespace
             Close(L);
         }
 
+        // An optional writes its payload type where a vector writes its element type, one nested Type record.
+        void OptionalType(EPropertyTypeFlags Payload)
+        {
+            const size_t L = Open(EScriptSchemaRecord::Type);
+            U8((uint8)EPropertyTypeFlags::Optional);
+            U8(0);          // not an entity
+            U8(0);          // not an input action
+            ScalarType(Payload);
+            Close(L);
+        }
+
+        void OptionalField(const char* Name, EPropertyTypeFlags Payload)
+        {
+            const size_t L = Open(EScriptSchemaRecord::Field);
+            Str(Name);
+            I32(0);                 // no aliases
+            Meta();
+            U8(0);                  // not SkipHotReload
+            OptionalType(Payload);
+            NilValue();
+            Close(L);
+        }
+
         void NilValue() { U8((uint8)EScriptValueKind::Nil); }
 
         // Only a top-level field carries the hot-reload byte, so a nested one that wrote it would put every
@@ -330,4 +353,25 @@ TEST(ScriptSchemaCodec, DeclaredPropertyFlagsRoundTrip)
     ASSERT_EQ(Schema.Fields.size(), 2u);
     EXPECT_EQ(Schema.Fields[0].Flags, Declared);
     EXPECT_EQ(Schema.Fields[1].Flags, 0u) << "a writer that omits the field must read as no flags, not garbage";
+}
+
+// Without the payload type reaching native, the mint has nothing to synthesize the optional's storage from.
+TEST(ScriptSchemaCodec, AnOptionalCarriesItsPayloadType)
+{
+    FTestSchemaWriter W;
+    W.Header();
+    W.I32(1);
+    W.OptionalField("Maybe", EPropertyTypeFlags::Float);
+
+    FScriptExportSchema Schema;
+    TVector<FScriptPropertyEntry> Defaults;
+    ASSERT_TRUE(ParseSchemaBlob(W.Bytes, Schema, Defaults));
+
+    ASSERT_EQ(Schema.Fields.size(), 1u);
+    EXPECT_EQ(Schema.Fields[0].Name, FName("Maybe"));
+    ASSERT_NE(Schema.Fields[0].Type, nullptr);
+    EXPECT_EQ(Schema.Fields[0].Type->Kind, EPropertyTypeFlags::Optional);
+
+    ASSERT_NE(Schema.Fields[0].Type->ElementType, nullptr);
+    EXPECT_EQ(Schema.Fields[0].Type->ElementType->Kind, EPropertyTypeFlags::Float);
 }
