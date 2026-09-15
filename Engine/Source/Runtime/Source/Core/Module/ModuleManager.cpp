@@ -57,6 +57,13 @@ namespace Lumina
 
         const FName BareFName(BareName);
 
+        // Reloading would strand the first handle, skip its shutdown, and run StartupModule a second time.
+        if (const auto Loaded = ModuleHashMap.find(BareFName);
+            Loaded != ModuleHashMap.end() && Loaded->second.ModuleInterface)
+        {
+            return Loaded->second.ModuleInterface.get();
+        }
+
         // The monolithic path uses no LoadLibrary and touches no filesystem.
         if (ModuleInitFunc Factory = FindStaticFactory(BareFName))
         {
