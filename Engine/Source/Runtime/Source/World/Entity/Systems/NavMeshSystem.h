@@ -52,6 +52,9 @@ namespace Lumina
         RUNTIME_API int32 RequestRebuild(CWorld* World);
 
         RUNTIME_API bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, FNavPath& Out);
+
+        // MaxCorners bounds the result to what the caller stores; a longer route comes back truncated.
+        RUNTIME_API bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, int32 MaxCorners, FNavPath& Out);
         RUNTIME_API bool ProjectPoint(CWorld* World, const FVector3& Point, const FVector3& Extents, FVector3& Out);
         /** Returns false when the query could not run at all; Out.bHit says whether a wall blocked the walk. */
         RUNTIME_API bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, FNavRaycastResult& Out);

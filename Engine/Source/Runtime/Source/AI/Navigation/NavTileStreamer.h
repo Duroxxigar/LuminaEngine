@@ -38,6 +38,9 @@ namespace Lumina
 
             /** Wanted tiles that did not fit the budget. Nonzero means paths can fail at range. */
             int32 Starved  = 0;
+
+            // Tiles the mesh already held that this took ownership of, rather than re-adding.
+            int32 Adopted  = 0;
         };
 
         void Reset(const FVector3& InOrigin, float InTileWorldSize);
@@ -57,8 +60,7 @@ namespace Lumina
         float               TileWorldSize = 0.0f;
         THashSet<uint64>    Resident;
 
-        /** Rotated each tick so a budget too small to hold every wanted tile does not always starve
-         *  whichever tiles happen to sort last. */
+        // Ticks left before the starvation warning may be logged again.
         int32               StarvedLogCooldown = 0;
     };
 }

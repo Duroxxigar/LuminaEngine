@@ -660,3 +660,183 @@ TEST(NavMeshBuild, BatchRebakeIgnoresTilesItWasNotAskedFor)
     EXPECT_EQ(Batch[0].Y, Target.Y);
     EXPECT_EQ(Batch[0].Blob, Target.Blob);
 }
+
+namespace
+{
+    // As MakeStreamFixture, but hydrated holding every tile, which is what streaming switched off does.
+    bool MakeSeededStreamFixture(FStreamFixture& Fx, int32 Budget)
+    {
+        FNavBuildInput In;
+        ApplyTestSettings(In);
+        In.Settings.TileSizeVoxels = 16;
+        AddGroundQuad(In, -40.0f, -40.0f, 40.0f, 40.0f, 0.0f);
+        GrowBounds(In, 1.0f);
+
+        if (!NavMeshBuilder::BakeSync(std::move(In), Fx.Out))
+        {
+            return false;
+        }
+        for (const FNavTileData& Tile : Fx.Out.Tiles)
+        {
+            if (!Tile.Blob.empty())
+            {
+                ++Fx.NonEmpty;
+            }
+        }
+
+        TVector<FNavTileData> Seed = Fx.Out.Tiles;
+        Fx.Mesh = MakeUnique<FNavMesh>();
+        if (!Fx.Mesh->Initialize(Fx.Out.Origin, Fx.Out.TileWorldSize, Budget, Fx.Out.MaxPolysPerTile, std::move(Seed)))
+        {
+            return false;
+        }
+        Fx.Streamer.Reset(Fx.Out.Origin, Fx.Out.TileWorldSize);
+        return true;
+    }
+}
+
+// Re-adding a seeded tile fails, and copies the whole blob under the exclusive lock to do so.
+TEST(NavMeshStreaming, SeededTilesAreAdoptedRatherThanReAdded)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeSeededStreamFixture(Fx, 8192));
+    ASSERT_GT(Fx.NonEmpty, 16);
+
+    const TVector<FVector3> NoFocus;
+    const FNavTileStreamer::FStats First = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, NoFocus, StreamSettings(8192, 0.0f));
+
+    EXPECT_EQ(First.Added, 0) << "every tile was already in the mesh";
+    EXPECT_EQ(First.Adopted, Fx.NonEmpty);
+    EXPECT_EQ(First.Resident, Fx.NonEmpty);
+    EXPECT_EQ(Fx.Mesh->GetResidentTileCount(), Fx.NonEmpty);
+
+    // Converged, so a second pass must do no work at all.
+    const FNavTileStreamer::FStats Second = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, NoFocus, StreamSettings(8192, 0.0f));
+    EXPECT_EQ(Second.Added, 0);
+    EXPECT_EQ(Second.Adopted, 0);
+    EXPECT_EQ(Second.Removed, 0);
+}
+
+TEST(NavMeshStreaming, AdoptedTilesCanBeEvicted)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeSeededStreamFixture(Fx, 8192));
+
+    const TVector<FVector3> NoFocus;
+    Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, NoFocus, StreamSettings(8192, 0.0f));
+    ASSERT_EQ(Fx.Streamer.GetResidentCount(), Fx.NonEmpty);
+
+    TVector<FVector3> Focus;
+    Focus.push_back(FVector3(-38.0f, 0.0f, -38.0f));
+    const FNavTileStreamer::FStats Stats = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, Focus, StreamSettings(8192, 8.0f));
+
+    EXPECT_GT(Stats.Removed, 0) << "a tile the streamer adopted must still be evictable";
+    EXPECT_LT(Stats.Resident, Fx.NonEmpty);
+    EXPECT_EQ(Fx.Mesh->GetResidentTileCount(), Stats.Resident);
+}
+
+// The epoch is mesh-wide, so without a spatial test one streamed tile repaths every agent in the world.
+TEST(NavMeshBuild, TileChangeIsReportedOnlyForOverlappingBounds)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeSeededStreamFixture(Fx, 8192));
+
+    const uint64 Before = Fx.Mesh->GetTopologyEpoch();
+
+    const FNavTileData* Changed = nullptr;
+    for (const FNavTileData& Tile : Fx.Out.Tiles)
+    {
+        if (!Tile.Blob.empty())
+        {
+            Changed = &Tile;
+            break;
+        }
+    }
+    ASSERT_NE(Changed, nullptr);
+    ASSERT_TRUE(Fx.Mesh->RemoveTile(Changed->X, Changed->Y));
+    EXPECT_GT(Fx.Mesh->GetTopologyEpoch(), Before);
+
+    const float TileSize = Fx.Out.TileWorldSize;
+    const FVector3 Min(Fx.Out.Origin.x + Changed->X * TileSize, 0.0f, Fx.Out.Origin.z + Changed->Y * TileSize);
+    const FVector3 Max = Min + FVector3(TileSize, 0.0f, TileSize);
+    EXPECT_TRUE(Fx.Mesh->HasTileChangedSince(Before, Min, Max));
+
+    const FVector3 FarMin = Min + FVector3(TileSize * 8.0f, 0.0f, TileSize * 8.0f);
+    const FVector3 FarMax = FarMin + FVector3(TileSize, 0.0f, TileSize);
+    EXPECT_FALSE(Fx.Mesh->HasTileChangedSince(Before, FarMin, FarMax))
+        << "a change under one tile must not invalidate a corridor eight tiles away";
+
+    EXPECT_FALSE(Fx.Mesh->HasTileChangedSince(Fx.Mesh->GetTopologyEpoch(), Min, Max));
+}
+
+// More changes than the ring retains makes the answer unknowable, and unknowable has to read as changed.
+TEST(NavMeshBuild, ChangeRingOverflowReportsChanged)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeSeededStreamFixture(Fx, 8192));
+    ASSERT_GT(Fx.NonEmpty, 4);
+
+    const uint64 Before = Fx.Mesh->GetTopologyEpoch();
+
+    const FNavTileData& Target = Fx.Out.Tiles[Fx.Out.Tiles.size() / 2];
+    for (int32 i = 0; i < 600; ++i)
+    {
+        Fx.Mesh->RemoveTile(Target.X + 1000 + i, Target.Y + 1000);
+    }
+
+    const FVector3 FarMin(-1000.0f, 0.0f, -1000.0f);
+    const FVector3 FarMax(-990.0f, 0.0f, -990.0f);
+    EXPECT_TRUE(Fx.Mesh->HasTileChangedSince(Before, FarMin, FarMax));
+}
+
+TEST(NavMeshBuild, PathCornersCarryTheOffMeshLinkFlag)
+{
+    FNavBuildInput In = MakeSeparatedIslands();
+    In.Links.push_back(MakeGapLink());
+
+    TUniquePtr<FNavMesh> Mesh = BakeAndHydrate(std::move(In));
+    ASSERT_NE(Mesh, nullptr);
+    ASSERT_TRUE(Mesh->IsReady());
+
+    FNavPath Path;
+    FNavQueryFilter Filter;
+    ASSERT_TRUE(Mesh->FindPath(FVector3(-4.0f, 0.0f, 0.0f), FVector3(4.0f, 0.0f, 0.0f), Filter, Path));
+    ASSERT_TRUE(Path.bValid);
+    ASSERT_EQ(Path.CornerFlags.size(), Path.Corners.size());
+
+    bool bSawLink = false;
+    for (uint8 Flags : Path.CornerFlags)
+    {
+        bSawLink = bSawLink || (Flags & (uint8)ENavCornerFlag::OffMeshLink) != 0;
+    }
+    EXPECT_TRUE(bSawLink) << "the only route crosses the link, so a corner has to say so";
+}
+
+// A caller that keeps fewer corners than the query returns reads the overflow as arrival.
+TEST(NavMeshBuild, CallerCornerCapTruncatesRatherThanLies)
+{
+    TUniquePtr<FNavMesh> Mesh = BakeAndHydrate(MakeGroundPlane(24.0f));
+    ASSERT_NE(Mesh, nullptr);
+    ASSERT_TRUE(Mesh->IsReady());
+
+    const FVector3 Start(-22.0f, 0.0f, -22.0f);
+    const FVector3 End(22.0f, 0.0f, 22.0f);
+
+    FNavQueryFilter Tight;
+    Tight.MaxCorners = 8;
+    FNavPath Capped;
+    ASSERT_TRUE(Mesh->FindPath(Start, End, Tight, Capped));
+    EXPECT_LE((int32)Capped.Corners.size(), 8);
+
+    FNavQueryFilter Wide;
+    FNavPath Full;
+    ASSERT_TRUE(Mesh->FindPath(Start, End, Wide, Full));
+    ASSERT_TRUE(Full.bValid);
+
+    // An open plane straightens to very few corners, so the cap only has to hold where it does bite.
+    if ((int32)Full.Corners.size() > 8)
+    {
+        EXPECT_TRUE(Capped.bTruncated);
+        EXPECT_TRUE(Capped.bPartial);
+    }
+}

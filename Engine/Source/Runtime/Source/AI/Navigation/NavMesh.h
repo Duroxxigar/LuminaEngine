@@ -76,6 +76,9 @@ namespace Lumina
          *  against, so a follower can tell the ground moved under it. */
         uint64 GetTopologyEpoch() const { return TopologyEpoch.load(std::memory_order_acquire); }
 
+        // Y is ignored because a tile spans the whole bake, and a ring overflow reports changed.
+        bool HasTileChangedSince(uint64 SinceEpoch, const FVector3& Min, const FVector3& Max) const;
+
         /** Iterates the cached flat triangle list (skip the dtNavMesh traversal cost). */
         using FTriangleVisitor = TMoveOnlyFunction<void(const FVector3&, const FVector3&, const FVector3&, uint8)>;
         void ForEachTriangle(FTriangleVisitor Visitor) const;
@@ -137,9 +140,10 @@ namespace Lumina
 
         FAcquiredQuery AcquireQuery() const;
 
-        /** Both assume TopologyLock is already held exclusively. */
+        /** All three assume TopologyLock is already held exclusively. */
         bool AddTileLocked(int32 TileX, int32 TileY, const TVector<uint8>& Blob);
         bool RemoveTileLocked(int32 TileX, int32 TileY);
+        void RecordTileChangeLocked(int32 TileX, int32 TileY);
 
         /** Rebuilds the debug caches if stale. Main thread only, like every reader of them. */
         void EnsureDebugCache() const;
@@ -154,11 +158,22 @@ namespace Lumina
 
         std::atomic<uint64>                 TopologyEpoch{ 1 };
 
+        // Keyed by epoch so a follower can ask whether a change touched its own corridor.
+        struct FTileChange
+        {
+            uint64 Epoch = 0;
+            int32  X = 0;
+            int32  Y = 0;
+        };
+        static constexpr int32              ChangeRingSize = 256;
+        FTileChange                         ChangeRing[ChangeRingSize] = {};
+
         // Mutable so const query API can flip Busy flags.
         mutable TVector<FQuerySlot>         QueryPool;
 
         // Debug draw only, so all of it is built on demand and mutable behind the const readers.
-        mutable bool                        bDebugCacheDirty = true;
+        mutable FMutex                      DebugCacheLock;
+        mutable std::atomic<bool>           bDebugCacheDirty{ true };
 
         // Flat cache: 3 vec3 per tri in Verts; 1 area byte per tri.
         mutable TVector<FVector3>          CachedTriVerts;

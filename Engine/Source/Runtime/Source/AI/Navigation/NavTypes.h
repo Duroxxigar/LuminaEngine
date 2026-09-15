@@ -171,10 +171,22 @@ namespace Lumina
         TVector<uint8> Blob;
     };
 
+    // Per-corner marker from findStraightPath, so a follower can tell ground from a link hop.
+    enum class ENavCornerFlag : uint8
+    {
+        None            = 0,
+        PathStart       = 1 << 0,
+        PathEnd         = 1 << 1,
+        OffMeshLink     = 1 << 2,
+    };
+
     /** Result of an async path request. Owned by the requester; can be polled or awaited. */
     struct FNavPath
     {
         TVector<FVector3> Corners;
+
+        // One ENavCornerFlag per corner. OffMeshLink means gameplay drives the hop, not the follower.
+        TVector<uint8> CornerFlags;
 
         /** The route does not reach the requested goal; the last corner is as close as the query got. */
         bool bPartial = false;
@@ -183,6 +195,9 @@ namespace Lumina
         bool bTruncated = false;
 
         bool bValid   = false;
+
+        // Every pooled query was busy, so nothing ran. Distinct from no route found.
+        bool bQueryUnavailable = false;
 
         /** FNavMesh topology epoch this was found against. A path is a snapshot, not a live corridor, so
          *  anything following one across frames re-queries once this stops matching the mesh. */
@@ -214,6 +229,9 @@ namespace Lumina
 
         /** Half-extents for findNearestPoly snapping; generous on Y for cell-quantized poly Y. */
         FVector3 QueryExtents = FVector3(2.0f, 16.0f, 2.0f);
+
+        // Corners this caller can store; zero takes the project default.
+        int32 MaxCorners = 0;
 
         FNavQueryFilter()
         {

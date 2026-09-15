@@ -31,6 +31,7 @@ namespace Lumina
             for (int32 i = 0; i < N; ++i)
             {
                 Comp.PathCorners[i] = Path.Corners[i];
+                Comp.PathCornerFlags[i] = i < (int32)Path.CornerFlags.size() ? Path.CornerFlags[i] : 0;
             }
             Comp.CornerCount = N;
             Comp.CurrentCorner = 0;
@@ -112,9 +113,26 @@ namespace Lumina
                 const bool bMovedTarget = Math::Length(Goal - Comp.PathSourceTarget) > Comp.RepathDistance;
                 const float RepathInterval = Significance::ScaleInterval(SignificanceState, Entity, Comp.RepathInterval);
                 const bool bIntervalElapsed = Comp.TimeSinceLastPath > RepathInterval;
-                // A tile rebuild or a streaming eviction bumps the epoch, so stored corners may now cross
-                // ground that is gone. Cheaper and far more responsive than waiting out RepathInterval.
-                const bool bMeshChanged = NavMesh && Comp.CornerCount > 0 && Comp.PathEpoch != NavMesh->GetTopologyEpoch();
+
+                // The epoch is mesh-wide, so one streamed tile would otherwise repath every agent alive.
+                bool bMeshChanged = false;
+                if (NavMesh && Comp.CornerCount > 0 && Comp.PathEpoch != NavMesh->GetTopologyEpoch())
+                {
+                    FVector3 CorridorMin = AgentPos;
+                    FVector3 CorridorMax = AgentPos;
+                    for (int32 i = Comp.CurrentCorner; i < Comp.CornerCount; ++i)
+                    {
+                        CorridorMin = Math::Min(CorridorMin, Comp.PathCorners[i]);
+                        CorridorMax = Math::Max(CorridorMax, Comp.PathCorners[i]);
+                    }
+                    const FVector3 Margin(Comp.AcceptanceRadius);
+                    bMeshChanged = NavMesh->HasTileChangedSince(Comp.PathEpoch, CorridorMin - Margin, CorridorMax + Margin);
+                    if (!bMeshChanged)
+                    {
+                        // Banked so the same untouched corridor is not re-tested against every later change.
+                        Comp.PathEpoch = NavMesh->GetTopologyEpoch();
+                    }
+                }
                 // No CornerCount==0 trigger, or an unreachable goal would re-query every tick.
                 const bool bNeedRepath = Comp.bPathDirty || bMovedTarget || bIntervalElapsed || bMeshChanged;
 
@@ -122,7 +140,16 @@ namespace Lumina
                 {
                     FNavPath Path;
                     FNavQueryFilter Filter;
-                    if (NavMesh && NavMesh->FindPath(AgentPos, Goal, Filter, Path) && Path.bValid)
+                    Filter.MaxCorners = SPathFollowComponent::MaxCorners;
+                    const bool bFound = NavMesh && NavMesh->FindPath(AgentPos, Goal, Filter, Path) && Path.bValid;
+
+                    // Nothing was asked of the navmesh, so this is not a route failure.
+                    if (!bFound && Path.bQueryUnavailable)
+                    {
+                        return;
+                    }
+
+                    if (bFound)
                     {
                         StorePath(Comp, Path);
                         Comp.PathSourceTarget = Goal;

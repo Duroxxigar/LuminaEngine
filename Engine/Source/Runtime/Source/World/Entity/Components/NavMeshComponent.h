@@ -60,8 +60,11 @@ namespace Lumina
         /** Layout fed to BakeSingleTile so coords align with live mesh. */
         FNavBuildOutput                         LiveLayout;
 
-        /** Decides which baked tiles are resident in Mesh. Inert while Nav.StreamRadius is 0. */
+        /** Decides which baked tiles are resident in Mesh. Inert while StreamLoadRadius is 0. */
         FNavTileStreamer                        Streamer;
+
+        // Whether Mesh hydrated empty for the streamer to fill, rather than seeded with every tile.
+        bool                                    bStreamedInit = false;
 
         /** Entity world scale, mirrored each tick; multiplies Extents into the effective bake volume. */
         FVector3                                WorldScale = FVector3(1.0f);

@@ -1,5 +1,7 @@
 #include "RuntimePCH.h"
 #include "NavMeshSystem.h"
+
+#include <algorithm>
 #include "World/ECS/Registry.h"
 
 #include "AI/Navigation/NavMesh.h"
@@ -1264,6 +1266,7 @@ namespace Lumina
                 const float InitTileSize = Comp.TileWorldSize;
                 const int32 InitMaxPolys = Comp.MaxPolysPerTile;
 
+                Comp.Runtime.bStreamedInit = bStreaming;
                 Comp.Runtime.Streamer.Reset(Comp.Origin, Comp.TileWorldSize);
 
                 Task::AsyncTask(1, 1, [Job, Tiles = std::move(TilesCopy), InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys](uint32, uint32, uint32) mutable
@@ -1304,15 +1307,18 @@ namespace Lumina
                     }
                 }
 
-                if (Comp.Runtime.Streamer.IsConfigured())
+                // A mesh seeded with every tile is already resident, so the streamer would only retry adds.
+                const bool bRunStreamer = Comp.Runtime.Streamer.IsConfigured()
+                                       && (Comp.Runtime.bStreamedInit || Stream.LoadRadius > 0.0f);
+                if (bRunStreamer)
                 {
                     const FNavTileStreamer::FStats Stats =
                         Comp.Runtime.Streamer.Update(*Comp.Runtime.Mesh, Comp.Tiles, Focus, Stream);
 
-                    if (CVarNavDebugLog.GetValue() && (Stats.Added > 0 || Stats.Removed > 0))
+                    if (CVarNavDebugLog.GetValue() && (Stats.Added > 0 || Stats.Removed > 0 || Stats.Adopted > 0))
                     {
-                        LOG_INFO("NavMesh streaming: +{} -{}, {} resident of {} wanted.",
-                            Stats.Added, Stats.Removed, Stats.Resident, Stats.Wanted);
+                        LOG_INFO("NavMesh streaming: +{} -{} ~{}, {} resident of {} wanted.",
+                            Stats.Added, Stats.Removed, Stats.Adopted, Stats.Resident, Stats.Wanted);
                     }
                 }
             }
@@ -1355,7 +1361,12 @@ namespace Lumina
                     Comp.Tiles.push_back(std::move(NewTile));
                 }
 
-                Comp.Runtime.Mesh->RebuildTile(Job->TileX, Job->TileY, std::move(Job->ResultBlob));
+                // Swapping in a tile the streamer never paged in would leave it resident and unevictable.
+                const bool bStreamerOwnsResidency = Comp.Runtime.bStreamedInit;
+                if (!bStreamerOwnsResidency || Comp.Runtime.Streamer.IsResident(Job->TileX, Job->TileY))
+                {
+                    Comp.Runtime.Mesh->RebuildTile(Job->TileX, Job->TileY, std::move(Job->ResultBlob));
+                }
                 Job->bConsumed.store(true, std::memory_order_release);
             }
             
@@ -1425,16 +1436,30 @@ namespace Lumina
 
             // Main thread only snapshots params + world matrices; tessellation runs on a worker.
             const uint32 Capacity = MaxConcurrent - (uint32)Comp.Runtime.PendingRebakes.size();
+
+            // A batch gathers the union of its tiles, so scattered tiles re-tessellate everything between.
+            TVector<uint64> Candidates(Comp.Runtime.DirtyTiles.begin(), Comp.Runtime.DirtyTiles.end());
+            int32 SeedX, SeedY;
+            NavTile::UnpackKey(Candidates[0], SeedX, SeedY);
+            const size_t Take = Math::Min((size_t)Capacity, Candidates.size());
+            std::partial_sort(Candidates.begin(), Candidates.begin() + Take, Candidates.end(),
+                [SeedX, SeedY](uint64 A, uint64 B)
+                {
+                    int32 AX, AY, BX, BY;
+                    NavTile::UnpackKey(A, AX, AY);
+                    NavTile::UnpackKey(B, BX, BY);
+                    return Math::Max(Math::Abs(AX - SeedX), Math::Abs(AY - SeedY))
+                         < Math::Max(Math::Abs(BX - SeedX), Math::Abs(BY - SeedY));
+                });
+
             TVector<TSharedPtr<FNavTileRebake>> BatchJobs;
-            BatchJobs.reserve(Capacity);
-            for (auto It = Comp.Runtime.DirtyTiles.begin(); It != Comp.Runtime.DirtyTiles.end() && BatchJobs.size() < Capacity; )
+            BatchJobs.reserve(Take);
+            for (size_t i = 0; i < Take; ++i)
             {
-                const uint64 Key = *It;
-                It = Comp.Runtime.DirtyTiles.erase(It);
+                Comp.Runtime.DirtyTiles.erase(Candidates[i]);
 
                 auto Job = MakeShared<FNavTileRebake>();
-                Job->TileX = (int32)(Key & 0xFFFFFFFFu);
-                Job->TileY = (int32)(Key >> 32);
+                NavTile::UnpackKey(Candidates[i], Job->TileX, Job->TileY);
                 BatchJobs.push_back(Job);
                 Comp.Runtime.PendingRebakes.push_back(std::move(Job));
             }
@@ -1718,8 +1743,14 @@ namespace Lumina
 
         bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, FNavPath& Out)
         {
+            return FindPath(World, Start, End, 0, Out);
+        }
+
+        bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, int32 MaxCorners, FNavPath& Out)
+        {
             FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World);
             FNavQueryFilter Filter;
+            Filter.MaxCorners = MaxCorners;
             return Mesh && Mesh->FindPath(Start, End, Filter, Out);
         }
 

@@ -302,7 +302,11 @@ namespace Lumina
 #if defined(LUMINA_HAS_RECAST)
         FReadScopeLock Topology(TopologyLock);
         FAcquiredQuery Q = AcquireQuery();
-        if (!Q) return false;
+        if (!Q)
+        {
+            Out.bQueryUnavailable = true;
+            return false;
+        }
 
         Out.Epoch = TopologyEpoch.load(std::memory_order_relaxed);
 
@@ -333,7 +337,9 @@ namespace Lumina
         Out.bPartial   = (PathStatus & DT_PARTIAL_RESULT) != 0 || Path[PathLen - 1] != ERef;
         Out.bTruncated = (PathStatus & (DT_BUFFER_TOO_SMALL | DT_OUT_OF_NODES)) != 0;
 
-        const int32 MaxStraight = Math::Clamp(NavSettings.MaxPathCorners, 8, MaxStraightCeiling);
+        // Detour gets the cap the caller can store, or the overflow comes back looking like arrival.
+        const int32 RequestedCorners = Filter.MaxCorners > 0 ? Filter.MaxCorners : NavSettings.MaxPathCorners;
+        const int32 MaxStraight = Math::Clamp(RequestedCorners, 8, MaxStraightCeiling);
         float StraightPath[MaxStraightCeiling * 3];
         uint8 StraightFlags[MaxStraightCeiling];
         dtPolyRef StraightRefs[MaxStraightCeiling];
@@ -351,9 +357,16 @@ namespace Lumina
         }
 
         Out.Corners.reserve(StraightCount);
+        Out.CornerFlags.reserve(StraightCount);
         for (int32 i = 0; i < StraightCount; ++i)
         {
             Out.Corners.push_back(Unpack(&StraightPath[i * 3]));
+
+            uint8 Flags = (uint8)ENavCornerFlag::None;
+            if (StraightFlags[i] & DT_STRAIGHTPATH_START)                Flags |= (uint8)ENavCornerFlag::PathStart;
+            if (StraightFlags[i] & DT_STRAIGHTPATH_END)                  Flags |= (uint8)ENavCornerFlag::PathEnd;
+            if (StraightFlags[i] & DT_STRAIGHTPATH_OFFMESH_CONNECTION)   Flags |= (uint8)ENavCornerFlag::OffMeshLink;
+            Out.CornerFlags.push_back(Flags);
         }
         Out.bValid = true;
         return true;
@@ -365,18 +378,25 @@ namespace Lumina
 
     void FNavMesh::InvalidateDebugCache()
     {
-        bDebugCacheDirty = true;
+        bDebugCacheDirty.store(true, std::memory_order_release);
     }
 
     void FNavMesh::EnsureDebugCache() const
     {
-        if (!bDebugCacheDirty)
+        if (!bDebugCacheDirty.load(std::memory_order_acquire))
+        {
+            return;
+        }
+
+        // Its own lock, because the rebuild writes the caches while the topology lock is only shared.
+        TScopeLock<FMutex> Rebuild(DebugCacheLock);
+        if (!bDebugCacheDirty.load(std::memory_order_acquire))
         {
             return;
         }
 
         FReadScopeLock Topology(TopologyLock);
-        bDebugCacheDirty = false;
+        bDebugCacheDirty.store(false, std::memory_order_release);
 
         CachedTriVerts.clear();
         CachedTriAreas.clear();
@@ -575,6 +595,48 @@ namespace Lumina
 #endif
     }
 
+    void FNavMesh::RecordTileChangeLocked(int32 TileX, int32 TileY)
+    {
+        const uint64 Epoch = TopologyEpoch.fetch_add(1, std::memory_order_release) + 1;
+        FTileChange& Slot = ChangeRing[Epoch % (uint64)ChangeRingSize];
+        Slot.Epoch = Epoch;
+        Slot.X = TileX;
+        Slot.Y = TileY;
+    }
+
+    bool FNavMesh::HasTileChangedSince(uint64 SinceEpoch, const FVector3& Min, const FVector3& Max) const
+    {
+        FReadScopeLock Topology(TopologyLock);
+
+        const uint64 Current = TopologyEpoch.load(std::memory_order_acquire);
+        if (SinceEpoch >= Current)
+        {
+            return false;
+        }
+        if (Current - SinceEpoch > (uint64)ChangeRingSize || TileWorldSize <= 0.0f)
+        {
+            return true;
+        }
+
+        for (uint64 E = SinceEpoch + 1; E <= Current; ++E)
+        {
+            const FTileChange& Slot = ChangeRing[E % (uint64)ChangeRingSize];
+            if (Slot.Epoch != E)
+            {
+                return true;
+            }
+
+            const float TileMinX = Origin.x + (float)Slot.X * TileWorldSize;
+            const float TileMinZ = Origin.z + (float)Slot.Y * TileWorldSize;
+            if (Max.x >= TileMinX && Min.x <= TileMinX + TileWorldSize
+             && Max.z >= TileMinZ && Min.z <= TileMinZ + TileWorldSize)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool FNavMesh::RebuildTile(int32 TileX, int32 TileY, TVector<uint8>&& NewBlob)
     {
         LUMINA_PROFILE_SCOPE();
@@ -599,7 +661,7 @@ namespace Lumina
             {
                 bAdded = AddTileLocked(TileX, TileY, NewBlob);
             }
-            TopologyEpoch.fetch_add(1, std::memory_order_release);
+            RecordTileChangeLocked(TileX, TileY);
         }
 
         InvalidateDebugCache();
@@ -620,7 +682,7 @@ namespace Lumina
             bResult = AddTileLocked(TileX, TileY, Blob);
             if (bResult)
             {
-                TopologyEpoch.fetch_add(1, std::memory_order_release);
+                RecordTileChangeLocked(TileX, TileY);
             }
         }
 
@@ -639,7 +701,7 @@ namespace Lumina
         {
             TScopeLock<FSharedMutex> Topology(TopologyLock);
             bResult = RemoveTileLocked(TileX, TileY);
-            TopologyEpoch.fetch_add(1, std::memory_order_release);
+            RecordTileChangeLocked(TileX, TileY);
         }
 
         InvalidateDebugCache();

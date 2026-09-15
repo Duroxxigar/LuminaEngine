@@ -136,6 +136,15 @@ namespace Lumina
             {
                 break;
             }
+
+            // Re-adding a tile the mesh already holds fails, and copies the whole blob to do so.
+            if (Mesh.HasTile(C.X, C.Y))
+            {
+                Resident.insert(NavTile::PackKey(C.X, C.Y));
+                ++Stats.Adopted;
+                continue;
+            }
+
             if (Mesh.AddTile(C.X, C.Y, Tiles[C.Index].Blob))
             {
                 Resident.insert(NavTile::PackKey(C.X, C.Y));
@@ -151,7 +160,7 @@ namespace Lumina
             if (StarvedLogCooldown <= 0)
             {
                 LOG_WARN("NavMesh streaming: {} tiles wanted but the budget is {}. Paths beyond the resident set "
-                         "will fail; raise Nav.ResidentTileBudget or lower Nav.StreamRadius.", Stats.Wanted, Budget);
+                         "will fail; raise Navigation settings ResidentTileBudget or lower StreamLoadRadius.", Stats.Wanted, Budget);
                 StarvedLogCooldown = 600;
             }
             --StarvedLogCooldown;

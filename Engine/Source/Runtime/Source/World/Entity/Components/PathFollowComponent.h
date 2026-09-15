@@ -64,6 +64,7 @@ namespace Lumina
             bPathDirty = false;
             bPathPartial = false;
             bPathTruncated = false;
+            PathEpoch = 0;
             Status = EPathFollowStatus::None;
             ConsecutiveFailures = 0;
         }
@@ -86,6 +87,14 @@ namespace Lumina
         /** Number of consecutive failed queries since the last success. Useful for script-side give-up logic. */
         FUNCTION()
         int32 GetConsecutivePathFailures() const { return ConsecutiveFailures; }
+
+        // True when the next corner is a link hop that gameplay drives rather than a walk.
+        FUNCTION()
+        bool IsEnteringOffMeshLink() const
+        {
+            if (CornerCount == 0 || CurrentCorner >= CornerCount) return false;
+            return (PathCornerFlags[CurrentCorner] & (uint8)ENavCornerFlag::OffMeshLink) != 0;
+        }
 
         /** Closest queued path corner, or the target if no path is cached. */
         FUNCTION()
@@ -124,8 +133,12 @@ namespace Lumina
         bool bDrawDebugPath = false;
 
         /** Cached path corners filled by the system. Capped to a fixed array to avoid per-tick heap churn. */
+        // Queries are asked for exactly this many, so a longer route comes back flagged truncated.
         static constexpr int32 MaxCorners = 64;
         FVector3   PathCorners[MaxCorners] = {};
+
+        // ENavCornerFlag per stored corner, parallel to PathCorners.
+        uint8       PathCornerFlags[MaxCorners] = {};
         int32       CornerCount   = 0;
         int32       CurrentCorner = 0;
 
