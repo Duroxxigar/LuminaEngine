@@ -67,5 +67,11 @@ namespace Lumina
 
         /** Single-tile rebake aligned to BaseLayout's grid (used for hot-swap). */
         RUNTIME_API bool BakeSingleTile(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, int32 TX, int32 TY, FNavTileData& Out);
+
+        /** Batch rebake aligned to BaseLayout's grid. Bins the input once and bakes the tiles in
+         *  parallel, so a batch costs one pass over the geometry rather than one per tile.
+         *  Out is resized to Coords; a tile that failed to bake is left with an empty blob. */
+        RUNTIME_API void BakeTiles(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout,
+                                   const TVector<FNavTileCoord>& Coords, TVector<FNavTileData>& Out);
     }
 }

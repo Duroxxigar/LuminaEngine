@@ -123,6 +123,13 @@ namespace Lumina
         uint32 UserId = 0;
     };
 
+    /** Grid coordinates of one nav tile. */
+    struct FNavTileCoord
+    {
+        int32 X = 0;
+        int32 Y = 0;
+    };
+
     namespace NavTile
     {
         /** Tile coords are signed, so the two halves are packed rather than added. */

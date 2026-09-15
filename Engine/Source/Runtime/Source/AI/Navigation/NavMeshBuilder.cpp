@@ -497,39 +497,97 @@ namespace Lumina::NavMeshBuilder
     }
 
 #if defined(LUMINA_HAS_RECAST)
-    bool BakeSingleTile(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, int32 TX, int32 TY, FNavTileData& Out)
+    namespace
     {
-        // Reuse pipeline with BaseLayout's origin/tile size for byte-exact hot-swap.
-        FTileGrid Grid{};
-        Grid.Origin = BaseLayout.Origin;
-        Grid.TileWorldSize = BaseLayout.TileWorldSize;
-        const int32 BorderVoxels = (int32)std::ceil(Input.Settings.AgentRadius / Input.Settings.CellSize) + 3;
-        Grid.BorderSize = (float)BorderVoxels * Input.Settings.CellSize;
+        // The layout, never the live bounds, or moving the volume shifts the clamps in TriTileRange.
+        FTileGrid GridFromLayout(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout)
+        {
+            FTileGrid Grid{};
+            Grid.Origin = BaseLayout.Origin;
+            Grid.TileWorldSize = BaseLayout.TileWorldSize;
+            const int32 BorderVoxels = (int32)std::ceil(Input.Settings.AgentRadius / Input.Settings.CellSize) + 3;
+            Grid.BorderSize = (float)BorderVoxels * Input.Settings.CellSize;
+            Grid.TilesX = Math::Max(1, BaseLayout.TilesX);
+            Grid.TilesY = Math::Max(1, BaseLayout.TilesY);
+            return Grid;
+        }
+    }
 
-        // Taken from the layout, not from Input's live bounds, so moving the volume without a re-bake
-        // cannot shift the clamps in TriTileRange out from under the baked tile coords.
-        Grid.TilesX = Math::Max(1, BaseLayout.TilesX);
-        Grid.TilesY = Math::Max(1, BaseLayout.TilesY);
+    void BakeTiles(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout,
+                   const TVector<FNavTileCoord>& Coords, TVector<FNavTileData>& Out)
+    {
+        LUMINA_PROFILE_SCOPE();
 
-        // A single tile culls the input to just this tile's overlapping triangles.
+        Out.clear();
+        Out.resize(Coords.size());
+        if (Coords.empty())
+        {
+            return;
+        }
+
+        const FTileGrid Grid = GridFromLayout(Input, BaseLayout);
+
+        THashMap<uint64, int32> SlotByKey;
+        SlotByKey.reserve(Coords.size());
+        for (int32 i = 0; i < (int32)Coords.size(); ++i)
+        {
+            SlotByKey[NavTile::PackKey(Coords[i].X, Coords[i].Y)] = i;
+            Out[i].X = Coords[i].X;
+            Out[i].Y = Coords[i].Y;
+        }
+
+        // One pass over the geometry fills every requested tile, instead of one pass per tile.
+        TVector<TVector<int32>> Bins;
+        Bins.resize(Coords.size());
         const int32 NumTris = (int32)(Input.Indices.size() / 3);
-        TVector<int32> TileTris;
-        TileTris.reserve(64);
         for (int32 t = 0; t < NumTris; ++t)
         {
-            int32 tx0, ty0, tx1, ty1;
-            TriTileRange(Input, Grid, t, tx0, ty0, tx1, ty1);
-            if (TX >= tx0 && TX <= tx1 && TY >= ty0 && TY <= ty1)
+            int32 TX0, TY0, TX1, TY1;
+            TriTileRange(Input, Grid, t, TX0, TY0, TX1, TY1);
+            for (int32 ty = TY0; ty <= TY1; ++ty)
             {
-                TileTris.push_back(t);
+                for (int32 tx = TX0; tx <= TX1; ++tx)
+                {
+                    auto It = SlotByKey.find(NavTile::PackKey(tx, ty));
+                    if (It != SlotByKey.end())
+                    {
+                        Bins[It->second].push_back(t);
+                    }
+                }
             }
         }
-        return BakeTile(Input, Grid, TX, TY, TileTris.empty() ? nullptr : TileTris.data(), (int32)TileTris.size(), Out);
+
+        Task::ParallelFor((uint32)Coords.size(), [&](uint32 i)
+        {
+            const TVector<int32>& Tris = Bins[i];
+            BakeTile(Input, Grid, Coords[i].X, Coords[i].Y, Tris.empty() ? nullptr : Tris.data(), (int32)Tris.size(), Out[i]);
+        }, 1, ETaskPriority::Background);
+    }
+
+    bool BakeSingleTile(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, int32 TX, int32 TY, FNavTileData& Out)
+    {
+        TVector<FNavTileCoord> Coords;
+        Coords.push_back(FNavTileCoord{ TX, TY });
+
+        TVector<FNavTileData> Baked;
+        BakeTiles(Input, BaseLayout, Coords, Baked);
+        if (Baked.empty())
+        {
+            return false;
+        }
+        Out = std::move(Baked[0]);
+        return true;
     }
 #else
     bool BakeSingleTile(const FNavBuildInput&, const FNavBuildOutput&, int32, int32, FNavTileData&)
     {
         return false;
+    }
+
+    void BakeTiles(const FNavBuildInput&, const FNavBuildOutput&, const TVector<FNavTileCoord>& Coords, TVector<FNavTileData>& Out)
+    {
+        Out.clear();
+        Out.resize(Coords.size());
     }
 #endif
 }

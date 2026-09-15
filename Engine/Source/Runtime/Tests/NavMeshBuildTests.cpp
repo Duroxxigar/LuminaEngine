@@ -602,3 +602,61 @@ TEST(NavMeshStreaming, HysteresisStopsBoundaryThrash)
     EXPECT_EQ(Drift.Removed, 0);
     EXPECT_GE(Drift.Resident, Settled);
 }
+
+TEST(NavMeshBuild, BatchRebakeReproducesTheFullBake)
+{
+    // A hot rebake has to land byte for byte on what the full bake produced, or swapping a tile in
+    // shifts geometry at the seams against its neighbours.
+    FNavBuildInput In = MakeGroundPlane(24.0f);
+    FNavBuildInput Copy = In;
+
+    FNavBuildOutput Full;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(std::move(In), Full));
+    ASSERT_GT(Full.Tiles.size(), 2u);
+
+    TVector<FNavTileCoord> Coords;
+    for (const FNavTileData& Tile : Full.Tiles)
+    {
+        Coords.push_back(FNavTileCoord{ Tile.X, Tile.Y });
+    }
+
+    FNavBuildOutput Layout = Full;
+    Layout.Tiles.clear();
+
+    TVector<FNavTileData> Batch;
+    NavMeshBuilder::BakeTiles(Copy, Layout, Coords, Batch);
+    ASSERT_EQ(Batch.size(), Full.Tiles.size());
+
+    for (size_t i = 0; i < Batch.size(); ++i)
+    {
+        EXPECT_EQ(Batch[i].X, Full.Tiles[i].X);
+        EXPECT_EQ(Batch[i].Y, Full.Tiles[i].Y);
+        EXPECT_EQ(Batch[i].Blob, Full.Tiles[i].Blob) << "tile " << Batch[i].X << ", " << Batch[i].Y;
+    }
+}
+
+TEST(NavMeshBuild, BatchRebakeIgnoresTilesItWasNotAskedFor)
+{
+    FNavBuildInput In = MakeGroundPlane(24.0f);
+    FNavBuildInput Copy = In;
+
+    FNavBuildOutput Full;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(std::move(In), Full));
+
+    // One tile in the middle of the grid, so it has neighbours on every side to be confused with.
+    const FNavTileData& Target = Full.Tiles[Full.Tiles.size() / 2];
+
+    FNavBuildOutput Layout = Full;
+    Layout.Tiles.clear();
+
+    TVector<FNavTileCoord> Coords;
+    Coords.push_back(FNavTileCoord{ Target.X, Target.Y });
+
+    TVector<FNavTileData> Batch;
+    NavMeshBuilder::BakeTiles(Copy, Layout, Coords, Batch);
+
+    ASSERT_EQ(Batch.size(), 1u);
+    EXPECT_EQ(Batch[0].X, Target.X);
+    EXPECT_EQ(Batch[0].Y, Target.Y);
+    EXPECT_EQ(Batch[0].Blob, Target.Blob);
+}

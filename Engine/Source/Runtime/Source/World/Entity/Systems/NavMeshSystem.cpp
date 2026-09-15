@@ -1502,15 +1502,25 @@ namespace Lumina
                 Input.Vertices = std::move(Acc.Vertices);
                 Input.Indices  = std::move(Acc.Indices);
 
-                Task::ParallelFor((uint32)Jobs.size(), [&](uint32 i)
+                // One binning pass feeds every dirty tile, rather than each tile rescanning the soup.
+                TVector<FNavTileCoord> Coords;
+                Coords.reserve(Jobs.size());
+                for (const TSharedPtr<FNavTileRebake>& Job : Jobs)
                 {
-                    FNavTileData Out;
-                    if (NavMeshBuilder::BakeSingleTile(Input, Snap->Layout, Jobs[i]->TileX, Jobs[i]->TileY, Out))
+                    Coords.push_back(FNavTileCoord{ Job->TileX, Job->TileY });
+                }
+
+                TVector<FNavTileData> Baked;
+                NavMeshBuilder::BakeTiles(Input, Snap->Layout, Coords, Baked);
+
+                for (size_t i = 0; i < Jobs.size(); ++i)
+                {
+                    if (i < Baked.size())
                     {
-                        Jobs[i]->ResultBlob = std::move(Out.Blob);
+                        Jobs[i]->ResultBlob = std::move(Baked[i].Blob);
                     }
                     Jobs[i]->bDone.store(true, std::memory_order_release);
-                }, 1, ETaskPriority::Background);
+                }
             }, ETaskPriority::Background);
 
             (void)Entity;
