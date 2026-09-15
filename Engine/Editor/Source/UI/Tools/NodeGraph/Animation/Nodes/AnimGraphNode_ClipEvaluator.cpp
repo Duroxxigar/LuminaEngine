@@ -44,11 +44,11 @@ namespace Lumina
         {
             if (bDynamicClip)
             {
-                EdNodeGraph::FError Warning;
-                Warning.Name        = "Normalized Time Needs A Static Clip";
-                Warning.Description = "A wired Animation pin is only known at runtime, so its length cannot be baked. Time is read as seconds here; turn Normalized Time off, or assign the clip on the node.";
-                Warning.Node        = this;
-                Compiler.AddWarning(Warning);
+                EdNodeGraph::FError NodeWarning;
+                NodeWarning.Name        = "Normalized Time Needs A Static Clip";
+                NodeWarning.Description = "A wired Animation pin is only known at runtime, so its length cannot be baked. Time is read as seconds here; turn Normalized Time off, or assign the clip on the node.";
+                NodeWarning.Node        = this;
+                Compiler.AddWarning(NodeWarning);
             }
             else if (Clip.IsValid())
             {

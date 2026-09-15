@@ -290,11 +290,11 @@ namespace Lumina
                 CAnimGraphNode_StateAlias* Alias = AliasNodes[Transition->FromStateNodeID];
                 if (Alias->SourceStates.empty())
                 {
-                    EdNodeGraph::FError Warning;
-                    Warning.Name        = "Empty State Alias";
-                    Warning.Description = "State Alias names no states, so the transitions drawn out of it compile to nothing.";
-                    Warning.Node        = Alias;
-                    Compiler.AddWarning(Warning);
+                    EdNodeGraph::FError NodeWarning;
+                    NodeWarning.Name        = "Empty State Alias";
+                    NodeWarning.Description = "State Alias names no states, so the transitions drawn out of it compile to nothing.";
+                    NodeWarning.Node        = Alias;
+                    Compiler.AddWarning(NodeWarning);
                 }
 
                 for (const FName& StateName : Alias->SourceStates)
@@ -302,12 +302,12 @@ namespace Lumina
                     auto NameIt = StateNameToNodeID.find(StateName);
                     if (NameIt == StateNameToNodeID.end())
                     {
-                        EdNodeGraph::FError Warning;
-                        Warning.Name        = "Unknown Aliased State";
-                        Warning.Description = FString("State Alias names ") + StateName.ToString() +
+                        EdNodeGraph::FError NodeWarning;
+                        NodeWarning.Name        = "Unknown Aliased State";
+                        NodeWarning.Description = FString("State Alias names ") + StateName.ToString() +
                             ", which is not a state on this machine (renamed or removed?). That edge is skipped.";
-                        Warning.Node        = Alias;
-                        Compiler.AddWarning(Warning);
+                        NodeWarning.Node        = Alias;
+                        Compiler.AddWarning(NodeWarning);
                         continue;
                     }
                     Sources.push_back(NameIt->second);
@@ -344,11 +344,11 @@ namespace Lumina
 
                 if (Exits.empty())
                 {
-                    EdNodeGraph::FError Warning;
-                    Warning.Name        = "Conduit Routes Nowhere";
-                    Warning.Description = "A conduit with no outgoing transition swallows the edges drawn into it.";
-                    Warning.Node        = this;
-                    Compiler.AddWarning(Warning);
+                    EdNodeGraph::FError NodeWarning;
+                    NodeWarning.Name        = "Conduit Routes Nowhere";
+                    NodeWarning.Description = "A conduit with no outgoing transition swallows the edges drawn into it.";
+                    NodeWarning.Node        = this;
+                    Compiler.AddWarning(NodeWarning);
                 }
             }
             else

@@ -19,6 +19,12 @@ public class Editor : LuminaModuleRules
 
         PublicIncludePaths.Add(".");
 
+        // CMaterialFunctionGraph derives from CMaterialNodeGraph, so one unity blob holding both
+        // carries two generated bodies for the same include, and the later one wins and truncates
+        // the base class. Held back individually; the rest of the module merges.
+        ExcludeFromUnity.Add("MaterialNodeGraph.cpp");
+        ExcludeFromUnity.Add("MaterialFunctionGraph.cpp");
+
         PublicDependencyModuleNames.Add("Runtime");
 
         PrivateDependencyModuleNames.AddRange(new[]

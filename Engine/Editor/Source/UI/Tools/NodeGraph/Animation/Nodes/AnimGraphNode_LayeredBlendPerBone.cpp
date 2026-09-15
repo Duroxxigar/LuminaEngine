@@ -32,12 +32,12 @@ namespace Lumina
             }
             else
             {
-                EdNodeGraph::FError Warning;
-                Warning.Name        = "Unknown Bone";
-                Warning.Description = FString("Layered Blend Per Bone references bone '") + BoneName.ToString() +
+                EdNodeGraph::FError NodeWarning;
+                NodeWarning.Name        = "Unknown Bone";
+                NodeWarning.Description = FString("Layered Blend Per Bone references bone '") + BoneName.ToString() +
                     "' which doesn't exist on the graph's skeleton; falling back to a whole-skeleton blend.";
-                Warning.Node        = this;
-                Compiler.AddWarning(Warning);
+                NodeWarning.Node        = this;
+                Compiler.AddWarning(NodeWarning);
             }
         }
         else
@@ -49,13 +49,13 @@ namespace Lumina
             }
             else
             {
-                EdNodeGraph::FError Warning;
-                Warning.Name        = "No Bone / Mask";
-                Warning.Description = MaskName.IsNone()
+                EdNodeGraph::FError NodeWarning;
+                NodeWarning.Name        = "No Bone / Mask";
+                NodeWarning.Description = MaskName.IsNone()
                     ? FString("Layered Blend Per Bone has no Bone or Mask set; falling back to a whole-skeleton blend.")
                     : FString("Layered Blend Per Bone references mask '") + MaskName.ToString() + "' which isn't defined on the graph asset's Bone Masks list.";
-                Warning.Node        = this;
-                Compiler.AddWarning(Warning);
+                NodeWarning.Node        = this;
+                Compiler.AddWarning(NodeWarning);
             }
         }
 
