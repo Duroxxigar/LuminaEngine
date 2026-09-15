@@ -15,6 +15,66 @@ namespace
     {
         return NewObject(CEntityScriptTest::StaticClass(), nullptr, NAME_None, FGuid::New(), OF_Transient);
     }
+
+    // A parent holding the only other reference to its child, the shape a release-then-adopt assign breaks.
+    CObjectRefTest* NewParentOwningChild(CObject*& OutChild)
+    {
+        auto* Parent = NewObject<CObjectRefTest>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+        OutChild = NewTransientTestObject();
+        Parent->Child = OutChild;
+        return Parent;
+    }
+}
+
+// Assigning out of the object being released has to adopt before it drops, or the source is freed mid-read.
+TEST(CObjectLifetime, AssigningOutOfTheReleasedObjectKeepsTheNewTarget)
+{
+    CObject* Child = nullptr;
+    TObjectPtr<CObject> Ref = NewParentOwningChild(Child);
+    ASSERT_NE(Child, nullptr);
+
+    Ref = static_cast<CObjectRefTest*>(Ref.Get())->Child;
+
+    EXPECT_EQ(Ref.Get(), Child) << "the child must survive the parent that held the only other reference";
+    EXPECT_TRUE(Ref.IsValid());
+}
+
+TEST(CObjectLifetime, MoveAssigningOutOfTheReleasedObjectKeepsTheNewTarget)
+{
+    CObject* Child = nullptr;
+    TObjectPtr<CObject> Ref = NewParentOwningChild(Child);
+    ASSERT_NE(Child, nullptr);
+
+    Ref = Move(static_cast<CObjectRefTest*>(Ref.Get())->Child);
+
+    EXPECT_EQ(Ref.Get(), Child);
+    EXPECT_TRUE(Ref.IsValid());
+}
+
+TEST(CObjectLifetime, RawAssigningOutOfTheReleasedObjectKeepsTheNewTarget)
+{
+    CObject* Child = nullptr;
+    TObjectPtr<CObject> Ref = NewParentOwningChild(Child);
+    ASSERT_NE(Child, nullptr);
+
+    Ref = static_cast<CObjectRefTest*>(Ref.Get())->Child.Get();
+
+    EXPECT_EQ(Ref.Get(), Child);
+    EXPECT_TRUE(Ref.IsValid());
+}
+
+// Self-assignment still has to leave the reference intact rather than release and re-adopt a dead slot.
+TEST(CObjectLifetime, SelfAssignmentLeavesTheReferenceIntact)
+{
+    CObject* Object = NewTransientTestObject();
+    TObjectPtr<CObject> Ref = Object;
+
+    TObjectPtr<CObject>& Alias = Ref;
+    Ref = Alias;
+    EXPECT_EQ(Ref.Get(), Object);
+
+    Ref = Ref.Get();
+    EXPECT_EQ(Ref.Get(), Object) << "assigning a raw pointer the reference already holds must be a no-op";
 }
 
 // A strong reference carries its own array entry, so refcounting never reaches through the object.

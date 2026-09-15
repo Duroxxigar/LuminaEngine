@@ -2,6 +2,7 @@
 
 #include "Containers/Name.h"
 #include "Core/Object/Object.h"
+#include "Core/Object/ObjectHandleTyped.h"
 #include "Scripting/EntityScript.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Entity/Systems/EntitySystem.h"
@@ -68,6 +69,16 @@ namespace Lumina
         int32 FixedUpdateCount = 0;
         int32 DetachCount = 0;
         float AccumulatedTime = 0.0f;
+    };
+
+    /** Throwaway owner of a strong reference, so a test can assign out of the object being released. */
+    REFLECT()
+    class RUNTIME_API CObjectRefTest : public CObject
+    {
+        GENERATED_BODY()
+    public:
+
+        TObjectPtr<CObject> Child;
     };
 
     // Throwaway world subsystem, gated off so discovery never puts one in a real world. The test flips the
