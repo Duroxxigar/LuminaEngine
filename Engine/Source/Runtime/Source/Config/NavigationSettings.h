@@ -54,5 +54,10 @@ namespace Lumina
         /** Search nodes each pooled query allocates. Bounds how far a single path may explore. */
         PROPERTY(Editable, Category = "Query", ClampMin = 64)
         int32 QueryNodePoolSize = 2048;
+
+        /** Pooled dtNavMeshQuery objects beyond one per worker. Each costs its node pool, and running
+         *  out makes a query fail rather than wait, so a little slack is cheaper than the alternative. */
+        PROPERTY(Editable, Category = "Query", ClampMin = 0)
+        int32 QueryPoolSlack = 2;
     };
 }

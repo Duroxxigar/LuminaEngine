@@ -198,13 +198,14 @@ namespace Lumina
         }
 
         // Over-provision so contention rarely blocks; each query is a few hundred KB.
-        const uint32 PoolSize = (GTaskSystem ? GTaskSystem->GetNumWorkers() : 4u) + 2u;
+        const CNavigationSettings& Settings = *GetDefault<CNavigationSettings>();
+        const uint32 PoolSize = (GTaskSystem ? GTaskSystem->GetNumWorkers() : 4u) + (uint32)Math::Max(0, Settings.QueryPoolSlack);
         QueryPool = TVector<FQuerySlot>(PoolSize);
         uint32 ReadyQueries = 0;
         for (uint32 i = 0; i < PoolSize; ++i)
         {
             dtNavMeshQuery* Query = dtAllocNavMeshQuery();
-            if (Query && dtStatusSucceed(Query->init(NavMesh, Math::Max(64, GetDefault<CNavigationSettings>()->QueryNodePoolSize))))
+            if (Query && dtStatusSucceed(Query->init(NavMesh, Math::Max(64, Settings.QueryNodePoolSize))))
             {
                 QueryPool[i].Query = Query;
                 ++ReadyQueries;
