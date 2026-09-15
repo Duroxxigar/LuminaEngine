@@ -34,6 +34,7 @@ namespace Lumina
             }
             Comp.CornerCount = N;
             Comp.CurrentCorner = 0;
+            Comp.PathEpoch = Path.Epoch;
             Comp.bPathPartial = Path.bPartial;
             Comp.bPathTruncated = Path.bTruncated || (int32)Path.Corners.size() > N;
         }
@@ -111,8 +112,11 @@ namespace Lumina
                 const bool bMovedTarget = Math::Length(Goal - Comp.PathSourceTarget) > Comp.RepathDistance;
                 const float RepathInterval = Significance::ScaleInterval(SignificanceState, Entity, Comp.RepathInterval);
                 const bool bIntervalElapsed = Comp.TimeSinceLastPath > RepathInterval;
+                // A tile rebuild or a streaming eviction bumps the epoch, so stored corners may now cross
+                // ground that is gone. Cheaper and far more responsive than waiting out RepathInterval.
+                const bool bMeshChanged = NavMesh && Comp.CornerCount > 0 && Comp.PathEpoch != NavMesh->GetTopologyEpoch();
                 // No CornerCount==0 trigger, or an unreachable goal would re-query every tick.
-                const bool bNeedRepath = Comp.bPathDirty || bMovedTarget || bIntervalElapsed;
+                const bool bNeedRepath = Comp.bPathDirty || bMovedTarget || bIntervalElapsed || bMeshChanged;
 
                 if (bNeedRepath)
                 {
@@ -134,6 +138,11 @@ namespace Lumina
                         ++Comp.ConsecutiveFailures;
                         Comp.TimeSinceLastPath = 0.0f;
                         Comp.bPathDirty = false;
+                        // Banked even though the query failed, or a mesh that keeps changing retries every tick.
+                        if (NavMesh)
+                        {
+                            Comp.PathEpoch = NavMesh->GetTopologyEpoch();
+                        }
                         if (Comp.CornerCount == 0)
                         {
                             return;

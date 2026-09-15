@@ -134,6 +134,11 @@ namespace Lumina
         ECS::FEntity TargetEntity = ECS::NullEntity;
         FVector3   PathSourceTarget = FVector3(0.0f); // target location at the moment the cached path was generated
         float       TimeSinceLastPath = 0.0f;
+
+        /** Navmesh topology epoch the stored corners were found against. Tiles rebuilt or streamed out
+         *  from under an agent leave the corners running through geometry that is no longer walkable. */
+        uint64      PathEpoch = 0;
+
         bool        bHasTarget = false;
         bool        bPathDirty = false;
 
