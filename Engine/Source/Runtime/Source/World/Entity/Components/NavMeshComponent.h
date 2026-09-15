@@ -36,7 +36,9 @@ namespace Lumina
     struct FNavMeshRuntime
     {
         TUniquePtr<FNavMesh>            Mesh;
-        TUniquePtr<FNavBakeHandle>      ActiveBake;
+
+        /** Shared with the bake worker, so dropping this mid-bake leaves the worker a live handle. */
+        TSharedPtr<FNavBakeHandle>      ActiveBake;
 
         /** Async hydration job; bDone -> consume ResultMesh, State -> Ready. */
         TSharedPtr<FNavInitJob>         PendingInit;

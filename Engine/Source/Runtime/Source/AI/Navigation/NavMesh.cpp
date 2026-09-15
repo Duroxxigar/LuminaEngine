@@ -238,22 +238,32 @@ namespace Lumina
         if (dtStatusFailed(Q.Get()->findNearestPoly(SP, Extents, &F, &SRef, SNear)) || SRef == 0) return false;
         if (dtStatusFailed(Q.Get()->findNearestPoly(EP, Extents, &F, &ERef, ENear)) || ERef == 0) return false;
 
-        constexpr int32 MaxPolys = 256;
+        // Both buffers live on a half-megabyte fiber stack, so the corridor can afford to be generous.
+        constexpr int32 MaxPolys = 512;
         dtPolyRef Path[MaxPolys];
         int32 PathLen = 0;
         const dtStatus PathStatus = Q.Get()->findPath(SRef, ERef, SNear, ENear, &F, Path, &PathLen, MaxPolys);
         if (dtStatusFailed(PathStatus) || PathLen == 0) return false;
 
-        Out.bPartial = (PathStatus & DT_PARTIAL_RESULT) != 0;
+        // A corridor not ending on the goal poly stopped short, or the caller reads the last corner as the goal.
+        Out.bPartial   = (PathStatus & DT_PARTIAL_RESULT) != 0 || Path[PathLen - 1] != ERef;
+        Out.bTruncated = (PathStatus & (DT_BUFFER_TOO_SMALL | DT_OUT_OF_NODES)) != 0;
 
         constexpr int32 MaxStraight = 256;
         float StraightPath[MaxStraight * 3];
         uint8 StraightFlags[MaxStraight];
         dtPolyRef StraightRefs[MaxStraight];
         int32 StraightCount = 0;
-        if (dtStatusFailed(Q.Get()->findStraightPath(SNear, ENear, Path, PathLen, StraightPath, StraightFlags, StraightRefs, &StraightCount, MaxStraight)))
+        const dtStatus StraightStatus = Q.Get()->findStraightPath(SNear, ENear, Path, PathLen, StraightPath, StraightFlags, StraightRefs, &StraightCount, MaxStraight);
+        if (dtStatusFailed(StraightStatus))
         {
             return false;
+        }
+        // Detour reports a filled corner buffer as success, so the straight path silently ends mid-corridor.
+        if (StraightStatus & DT_BUFFER_TOO_SMALL)
+        {
+            Out.bPartial   = true;
+            Out.bTruncated = true;
         }
 
         Out.Corners.reserve(StraightCount);
@@ -500,8 +510,11 @@ namespace Lumina
 #endif
     }
 
-    bool FNavMesh::Raycast(const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FVector3& HitOut) const
+    bool FNavMesh::Raycast(const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavRaycastResult& Out) const
     {
+        Out = {};
+        Out.Point = End;
+
 #if defined(LUMINA_HAS_RECAST)
         FAcquiredQuery Q = AcquireQuery();
         if (!Q) return false;
@@ -523,10 +536,15 @@ namespace Lumina
         {
             return false;
         }
-        HitOut = (T >= 1.0f) ? End : Math::Mix(Start, End, T);
+
+        // Detour reports an unobstructed walk as T = FLT_MAX.
+        Out.bHit   = T < 1.0f;
+        Out.T      = Out.bHit ? T : 1.0f;
+        Out.Point  = Out.bHit ? Math::Mix(Start, End, T) : End;
+        Out.Normal = Out.bHit ? Unpack(Normal) : FVector3(0.0f);
         return true;
 #else
-        (void)Start; (void)End; (void)Filter; (void)HitOut;
+        (void)Start; (void)End; (void)Filter;
         return false;
 #endif
     }

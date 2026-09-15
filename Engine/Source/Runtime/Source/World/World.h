@@ -721,8 +721,8 @@ namespace Lumina
         
         ECS::FRegistry                                     RegistryPending;
         ECS::FRegistry                                     EntityRegistry;
-        ECS::FEventDispatcher                                    SingletonDispatcher;
-        ECS::FEntity                                        SingletonEntity;
+        ECS::FEventDispatcher                              SingletonDispatcher;
+        ECS::FEntity                                       SingletonEntity;
 
         FSystemContext                                      SystemContext;
         

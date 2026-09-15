@@ -48,7 +48,9 @@ namespace Lumina
 
         bool ProjectPoint(const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out) const;
         bool FindPath(const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavPath& Out) const;
-        bool Raycast(const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FVector3& HitOut) const;
+
+        /** Walks the surface from Start toward End. False when the query could not run; Out.bHit says whether a wall stopped it. */
+        bool Raycast(const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavRaycastResult& Out) const;
 
         bool FindRandomPoint(const FVector3& Center, float Radius, const FNavQueryFilter& Filter, FVector3& Out) const;
 

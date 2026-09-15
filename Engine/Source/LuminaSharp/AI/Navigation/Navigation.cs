@@ -76,16 +76,15 @@ public readonly unsafe partial struct Navigation
     /// <summary>Projects with a default search box (generous on the vertical axis).</summary>
     public FVector3? ProjectPoint(FVector3 Point) => ProjectPoint(Point, new FVector3(2.0f, 16.0f, 2.0f));
 
-    /// <summary>
-    /// Walks the navmesh surface from <paramref name="Start"/> toward <paramref name="End"/> and returns
-    /// the point where the walkable surface ends (a wall/edge), or null if <paramref name="End"/> is
-    /// directly reachable. Useful for "how far can I move in this direction" checks.
-    /// </summary>
+    /// <summary>Walks the surface from <paramref name="Start"/> toward <paramref name="End"/> and returns where it hit a wall, or null if nothing blocked it. Null also covers a query that could not run, so use <see cref="IsWalkableLine"/> to ask whether the line is clear.</summary>
     public FVector3? Raycast(FVector3 Start, FVector3 End)
     {
         NavPointWire Wire = RaycastRaw(Start, End);
         return Wire.Found != 0 ? Wire.Point : null;
     }
+
+    /// <summary>True when the straight line from <paramref name="From"/> to <paramref name="To"/> stays on walkable surface the whole way. Far cheaper than a path query, so reach for it first when shortcutting a route.</summary>
+    public bool IsWalkableLine(FVector3 From, FVector3 To) => IsWalkableLineNative(From, To) != 0;
 
     /// <summary>A random walkable point within <paramref name="Radius"/> of <paramref name="Origin"/>, or null.</summary>
     public FVector3? FindRandomReachablePoint(FVector3 Origin, float Radius)
@@ -160,6 +159,9 @@ public readonly unsafe partial struct Navigation
 
     [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Nav_Raycast")]
     private partial NavPointWire RaycastRaw(FVector3 Start, FVector3 End);
+
+    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Nav_IsWalkableLine")]
+    private partial int IsWalkableLineNative(FVector3 From, FVector3 To);
 
     [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Nav_FindRandomReachablePoint")]
     private partial NavPointWire FindRandomRaw(FVector3 Origin, float Radius);

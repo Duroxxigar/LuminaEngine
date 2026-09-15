@@ -13,7 +13,9 @@
 #include "TaskSystem/TaskSystem.h"
 #include "World/Entity/Components/CharacterComponent.h"
 #include "World/Entity/Components/DynamicMeshComponent.h"
+#include "World/Entity/Components/NavLinkComponent.h"
 #include "World/Entity/Components/NavMeshComponent.h"
+#include "World/Entity/Components/NavModifierComponent.h"
 #include "World/Entity/Components/PhysicsComponent.h"
 #include "World/Entity/Components/StaticMeshComponent.h"
 #include "World/Entity/Components/TerrainComponent.h"
@@ -30,7 +32,7 @@ namespace Lumina
         RequireUpdate(EUpdateStage::FrameStart);
         RequireUpdate(EUpdateStage::Paused);
         Writes<SNavMeshComponent>();
-        Reads<SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent, SCapsuleColliderComponent, SCylinderColliderComponent, SCharacterPhysicsComponent, STerrainColliderComponent, STerrainComponent, STransformComponent, SStaticMeshComponent, SDynamicMeshColliderComponent, SDynamicMeshComponent>();
+        Reads<SBoxColliderComponent, SSphereColliderComponent, SMeshColliderComponent, SCapsuleColliderComponent, SCylinderColliderComponent, SCharacterPhysicsComponent, STerrainColliderComponent, STerrainComponent, STransformComponent, SStaticMeshComponent, SDynamicMeshColliderComponent, SDynamicMeshComponent, SCompoundColliderComponent, SNavModifierComponent, SNavLinkComponent>();
     }
 
     // NOLINTBEGIN(bugprone-throwing-static-initialization)
@@ -48,6 +50,7 @@ namespace Lumina
     static TConsoleVar<bool>  CVarNavDebugCenters   ("Nav.Debug.Centers",      false, "Small sphere at every walkable triangle center.");
     static TConsoleVar<bool>  CVarNavDebugTiles     ("Nav.Debug.TileBounds",   false, "Wireframe box for each loaded nav tile.");
     static TConsoleVar<bool>  CVarNavDebugBounds    ("Nav.Debug.BakeBounds",   true,  "Wireframe box for the bake volume (Center +/- Extents).");
+    static TConsoleVar<bool>  CVarNavDebugModifiers ("Nav.Debug.Modifiers",    true,  "Wireframe box for each nav area modifier volume, colored by its area.");
     static TConsoleVar<bool>  CVarNavDebugLinks     ("Nav.Debug.OffMeshLinks", true,  "Arrows for off-mesh connections.");
     static TConsoleVar<bool>  CVarNavDebugLog       ("Nav.Debug.LogStats",     false, "Log triangle/edge/tile counts on every cache refresh.");
     static TConsoleVar<float> CVarNavDebugLift      ("Nav.Debug.LiftY",        0.05f, "Vertical offset added to debug geometry to avoid Z-fighting.");
@@ -103,6 +106,23 @@ namespace Lumina
             {
                 Context.DrawDebugBox(Comp.Center, Comp.GetWorldExtents(), FQuat(1.0f, 0.0f, 0.0f, 0.0f),
                     FVector4(1.0f, 0.85f, 0.10f, 1.0f), 4.0f, -1.0f);
+            }
+
+            // Modifiers are authored, not baked, so they draw from their components rather than the navmesh.
+            if (CVarNavDebugModifiers.GetValue())
+            {
+                auto ModifierView = Context.CreateView<SNavModifierComponent, STransformComponent>();
+                for (ECS::FEntity E : ModifierView)
+                {
+                    const SNavModifierComponent& Modifier = ModifierView.Get<SNavModifierComponent>(E);
+                    if (!Modifier.bEnabled) continue;
+
+                    const FTransform& WT = ModifierView.Get<STransformComponent>(E).GetWorldTransform();
+                    const FVector3 Scale = WT.GetScale();
+                    const FVector3 Center = WT.GetLocation() + Math::Rotate(WT.GetRotation(), Modifier.Offset * Scale);
+                    const FVector3 Half(Modifier.Extents.x * std::fabs(Scale.x), Modifier.Extents.y * std::fabs(Scale.y), Modifier.Extents.z * std::fabs(Scale.z));
+                    Context.DrawDebugBox(Center, Half, WT.GetRotation(), NavAreaColor((uint8)Modifier.Area), 3.0f, -1.0f);
+                }
             }
 
             if (CVarNavDebugTiles.GetValue())
@@ -210,7 +230,10 @@ namespace Lumina
         }
 
         // Tag-bit packed into cache key so one entity may track one collider of each type.
-        enum class ENavColliderType : uint8 { Box = 0, Sphere = 1, Mesh = 2, CharacterCapsule = 3, Capsule = 4, Cylinder = 5, Terrain = 6, TriangleSoup = 7, DynamicMesh = 8 };
+        enum class ENavColliderType : uint8 { Box = 0, Sphere = 1, Mesh = 2, CharacterCapsule = 3, Capsule = 4, Cylinder = 5, Terrain = 6, TriangleSoup = 7, DynamicMesh = 8, AreaVolume = 9, OffMeshLink = 10 };
+
+        // Compound children reuse the primitive types, so their sub-indices sit above a collision shape asset's.
+        constexpr uint32 CompoundSubIndexBase = 1u << 23;
 
         FORCEINLINE uint64 PackSourceKey(ECS::FEntity E, ENavColliderType T)
         {
@@ -221,6 +244,12 @@ namespace Lumina
         FORCEINLINE uint64 PackSourceKey(ECS::FEntity E, ENavColliderType T, uint32 SubIndex)
         {
             return ((uint64)SubIndex << 40) | ((uint64)(uint32)E << 8) | (uint64)T;
+        }
+
+        // Retuning a link leaves its AABB identical, so the settings ride in the key to dirty the tile.
+        FORCEINLINE uint32 PackLinkSubIndex(const SNavLinkComponent& Link)
+        {
+            return (uint32)Link.Flag | ((uint32)Link.Area << 16) | ((uint32)(Link.bBidirectional ? 1 : 0) << 22);
         }
 
         // Matches body placement so nav geometry overlaps physics exactly.
@@ -381,6 +410,44 @@ namespace Lumina
             }
         }
 
+        // Gift wrapping over the XZ projection, which an oriented box reduces to a hexagon at worst.
+        void BuildXZHull(const FVector3* Pts, int32 N, TVector<FVector3>& Out)
+        {
+            Out.clear();
+            if (N < 3)
+            {
+                return;
+            }
+
+            int32 Leftmost = 0;
+            for (int32 i = 1; i < N; ++i)
+            {
+                if (Pts[i].x < Pts[Leftmost].x || (Pts[i].x == Pts[Leftmost].x && Pts[i].z < Pts[Leftmost].z))
+                {
+                    Leftmost = i;
+                }
+            }
+
+            int32 Current = Leftmost;
+            do
+            {
+                Out.push_back(FVector3(Pts[Current].x, 0.0f, Pts[Current].z));
+
+                int32 Next = (Current + 1) % N;
+                for (int32 i = 0; i < N; ++i)
+                {
+                    const float Cross = (Pts[Next].x - Pts[Current].x) * (Pts[i].z - Pts[Current].z)
+                                      - (Pts[Next].z - Pts[Current].z) * (Pts[i].x - Pts[Current].x);
+                    if (Cross < 0.0f)
+                    {
+                        Next = i;
+                    }
+                }
+                Current = Next;
+            }
+            while (Current != Leftmost && (int32)Out.size() <= N);
+        }
+
         // Explicit Mesh wins; falls back to StaticMeshComponent. Mirrors the collider resolution.
         CStaticMesh* ResolveMeshColliderAsset(const SMeshColliderComponent& MC, const SStaticMeshComponent* Fallback)
         {
@@ -484,6 +551,8 @@ namespace Lumina
             CStaticMesh*                    Mesh  = nullptr;
             TSharedPtr<FDynamicMeshRenderData> DynamicMesh;          // held so a re-commit on the game thread cannot free it under the bake
             TSharedPtr<TVector<FVector3>>   TriangleSoup;             // world-space tri soup (groups of 3); Terrain and TriangleSoup types
+            TSharedPtr<FNavAreaVolume>      AreaVolume;               // AreaVolume type
+            TSharedPtr<FNavOffMeshLink>     Link;                     // OffMeshLink type
         };
 
         struct FNavSourceEntry
@@ -516,6 +585,22 @@ namespace Lumina
                         }
                     }
                     break;
+                case ENavColliderType::AreaVolume:
+                case ENavColliderType::OffMeshLink:
+                    break;
+            }
+        }
+
+        // Annotations travel with the geometry prims so every bake path sees the same authored set.
+        void AppendAnnotation(const FNavSourcePrim& Prim, TVector<FNavAreaVolume>& OutVolumes, TVector<FNavOffMeshLink>& OutLinks)
+        {
+            if (Prim.AreaVolume)
+            {
+                OutVolumes.push_back(*Prim.AreaVolume);
+            }
+            else if (Prim.Link)
+            {
+                OutLinks.push_back(*Prim.Link);
             }
         }
 
@@ -801,6 +886,136 @@ namespace Lumina
                 Out.push_back(std::move(Entry));
             }
 
+            // A compound body is several primitives under one transform, so each child is its own source.
+            auto CompoundView = Context.CreateView<SCompoundColliderComponent, STransformComponent>();
+            for (ECS::FEntity E : CompoundView)
+            {
+                const SCompoundColliderComponent& Compound = CompoundView.Get<SCompoundColliderComponent>(E);
+                if (!Compound.bAffectsNavigation) continue;
+
+                const FMatrix4 BodyWorld = CompoundView.Get<STransformComponent>(E).GetWorldMatrix();
+                for (uint32 i = 0; i < (uint32)Compound.Shapes.size(); ++i)
+                {
+                    const SCompoundSubShape& Child = Compound.Shapes[i];
+
+                    FNavSourceEntry Entry;
+                    Entry.Prim.World = BodyWorld * Math::Translate(FMatrix4(1.0f), Child.Offset) * Math::ToMatrix4(FQuat(Child.Rotation));
+
+                    const uint32 SubIndex = CompoundSubIndexBase + i;
+                    switch (Child.Type)
+                    {
+                    case ECompoundShapeType::Sphere:
+                        {
+                            Entry.Key = PackSourceKey(E, ENavColliderType::Sphere, SubIndex);
+                            Entry.Prim.Type = ENavColliderType::Sphere;
+                            Entry.Prim.Shape = FVector3(Child.Radius, 0.0f, 0.0f);
+
+                            const FVector3 Center = FVector3(Entry.Prim.World * FVector4(0.0f, 0.0f, 0.0f, 1.0f));
+                            const float R = ScaledRadius(Entry.Prim.World, Child.Radius);
+                            Entry.AABBMin = Center - FVector3(R);
+                            Entry.AABBMax = Center + FVector3(R);
+                        }
+                        break;
+
+                    case ECompoundShapeType::Capsule:
+                    case ECompoundShapeType::Cylinder:
+                        {
+                            const bool bCapsule = Child.Type == ECompoundShapeType::Capsule;
+                            Entry.Key = PackSourceKey(E, bCapsule ? ENavColliderType::Capsule : ENavColliderType::Cylinder, SubIndex);
+                            Entry.Prim.Type = bCapsule ? ENavColliderType::Capsule : ENavColliderType::Cylinder;
+                            Entry.Prim.Shape = FVector3(Child.Radius, Child.HalfHeight, 0.0f);
+
+                            const FVector3 Top = FVector3(Entry.Prim.World * FVector4(0.0f,  Child.HalfHeight, 0.0f, 1.0f));
+                            const FVector3 Bot = FVector3(Entry.Prim.World * FVector4(0.0f, -Child.HalfHeight, 0.0f, 1.0f));
+                            const float R = ScaledRadius(Entry.Prim.World, Child.Radius);
+                            Entry.AABBMin = Math::Min(Top, Bot) - FVector3(R);
+                            Entry.AABBMax = Math::Max(Top, Bot) + FVector3(R);
+                        }
+                        break;
+
+                    default:
+                        {
+                            Entry.Key = PackSourceKey(E, ENavColliderType::Box, SubIndex);
+                            Entry.Prim.Type = ENavColliderType::Box;
+                            Entry.Prim.Shape = Child.HalfExtent;
+
+                            const FVector3 H = Child.HalfExtent;
+                            const FVector3 Corners[8] = {
+                                {-H.x,-H.y,-H.z}, { H.x,-H.y,-H.z}, { H.x,-H.y, H.z}, {-H.x,-H.y, H.z},
+                                {-H.x, H.y,-H.z}, { H.x, H.y,-H.z}, { H.x, H.y, H.z}, {-H.x, H.y, H.z},
+                            };
+                            CornersAABB(Entry.Prim.World, Corners, 8, Entry.AABBMin, Entry.AABBMax);
+                        }
+                        break;
+                    }
+
+                    Out.push_back(std::move(Entry));
+                }
+            }
+
+            // Area modifiers carry no triangles; the bake stamps their footprint onto the voxelized surface.
+            auto ModifierView = Context.CreateView<SNavModifierComponent, STransformComponent>();
+            for (ECS::FEntity E : ModifierView)
+            {
+                const SNavModifierComponent& Modifier = ModifierView.Get<SNavModifierComponent>(E);
+                if (!Modifier.bEnabled) continue;
+                if (Modifier.Extents.x <= 0.0f || Modifier.Extents.y <= 0.0f || Modifier.Extents.z <= 0.0f) continue;
+
+                FNavSourceEntry Entry;
+                Entry.Key = PackSourceKey(E, ENavColliderType::AreaVolume, (uint32)Modifier.Area);
+                Entry.Prim.Type = ENavColliderType::AreaVolume;
+                Entry.Prim.World = ModifierView.Get<STransformComponent>(E).GetWorldMatrix() * Math::Translate(FMatrix4(1.0f), Modifier.Offset);
+
+                const FVector3 H = Modifier.Extents;
+                const FVector3 LocalCorners[8] = {
+                    {-H.x,-H.y,-H.z}, { H.x,-H.y,-H.z}, { H.x,-H.y, H.z}, {-H.x,-H.y, H.z},
+                    {-H.x, H.y,-H.z}, { H.x, H.y,-H.z}, { H.x, H.y, H.z}, {-H.x, H.y, H.z},
+                };
+                FVector3 WorldCorners[8];
+                for (int32 i = 0; i < 8; ++i)
+                {
+                    WorldCorners[i] = FVector3(Entry.Prim.World * FVector4(LocalCorners[i], 1.0f));
+                    Entry.AABBMin = Math::Min(Entry.AABBMin, WorldCorners[i]);
+                    Entry.AABBMax = Math::Max(Entry.AABBMax, WorldCorners[i]);
+                }
+
+                auto Volume = MakeShared<FNavAreaVolume>();
+                BuildXZHull(WorldCorners, 8, Volume->Hull);
+                Volume->MinY = Entry.AABBMin.y;
+                Volume->MaxY = Entry.AABBMax.y;
+                Volume->Area = (uint8)Modifier.Area;
+                Entry.Prim.AreaVolume = std::move(Volume);
+                Out.push_back(std::move(Entry));
+            }
+
+            // Off-mesh links are stitched in by the bake; each endpoint has to land on walkable surface.
+            auto LinkView = Context.CreateView<SNavLinkComponent, STransformComponent>();
+            for (ECS::FEntity E : LinkView)
+            {
+                const SNavLinkComponent& LinkComp = LinkView.Get<SNavLinkComponent>(E);
+                if (!LinkComp.bEnabled) continue;
+
+                FNavSourceEntry Entry;
+                Entry.Key = PackSourceKey(E, ENavColliderType::OffMeshLink, PackLinkSubIndex(LinkComp));
+                Entry.Prim.Type = ENavColliderType::OffMeshLink;
+                Entry.Prim.World = LinkView.Get<STransformComponent>(E).GetWorldMatrix();
+
+                auto Link = MakeShared<FNavOffMeshLink>();
+                Link->Start = FVector3(Entry.Prim.World * FVector4(LinkComp.Start, 1.0f));
+                Link->End   = FVector3(Entry.Prim.World * FVector4(LinkComp.End,   1.0f));
+                Link->Radius = ScaledRadius(Entry.Prim.World, LinkComp.Radius);
+                Link->bBidirectional = LinkComp.bBidirectional;
+                Link->Area   = (uint8)LinkComp.Area;
+                Link->Flags  = (uint16)LinkComp.Flag;
+                Link->UserId = (uint32)E;
+
+                const FVector3 Pad(Link->Radius);
+                Entry.AABBMin = Math::Min(Link->Start, Link->End) - Pad;
+                Entry.AABBMax = Math::Max(Link->Start, Link->End) + Pad;
+                Entry.Prim.Link = std::move(Link);
+                Out.push_back(std::move(Entry));
+            }
+
             // Terrain heightfield needs both the collider and the source component.
             auto TerrainView = Context.CreateView<STerrainColliderComponent, STransformComponent>();
             for (ECS::FEntity E : TerrainView)
@@ -828,17 +1043,6 @@ namespace Lumina
             }
         }
 
-        // Collect nav source colliders from all entities with bAffectsNavigation set.
-        void GatherSourceGeometry(const FSystemContext& Context, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc, float CellSize)
-        {
-            TVector<FNavSourceEntry> Sources;
-            CollectNavSources(Context, BakeMin, BakeMax, true, CellSize, Sources);
-            for (const FNavSourceEntry& Entry : Sources)
-            {
-                EmitNavSourcePrim(Entry.Prim, BakeMin, BakeMax, Acc);
-            }
-        }
-
         FORCEINLINE void TilesForAABB(const FVector3& AABBMin, const FVector3& AABBMax, const FVector3& Origin, float TileWorldSize, int32 TilesX, int32 TilesY,
                                       int32& OutTX0, int32& OutTY0, int32& OutTX1, int32& OutTY1)
         {
@@ -862,14 +1066,22 @@ namespace Lumina
             }
         }
 
+        // One walk feeds geometry and annotations, so a full bake and a hot rebake see the same authored set.
         void FillBuildInput(const FSystemContext& Context, SNavMeshComponent& Comp, FNavBuildInput& Out)
         {
             Out.Settings  = Comp.Settings;
             Out.BoundsMin = Comp.Center - Comp.GetWorldExtents();
             Out.BoundsMax = Comp.Center + Comp.GetWorldExtents();
 
+            TVector<FNavSourceEntry> Sources;
+            CollectNavSources(Context, Out.BoundsMin, Out.BoundsMax, true, Comp.Settings.CellSize, Sources);
+
             FGatherAccumulator Acc;
-            GatherSourceGeometry(Context, Out.BoundsMin, Out.BoundsMax, Acc, Comp.Settings.CellSize);
+            for (const FNavSourceEntry& Entry : Sources)
+            {
+                EmitNavSourcePrim(Entry.Prim, Out.BoundsMin, Out.BoundsMax, Acc);
+                AppendAnnotation(Entry.Prim, Out.AreaVolumes, Out.Links);
+            }
             Out.Vertices = std::move(Acc.Vertices);
             Out.Indices  = std::move(Acc.Indices);
         }
@@ -1177,6 +1389,8 @@ namespace Lumina
                 TVector<FNavSourcePrim> Prims;
                 FVector3                BakeMin;
                 FVector3                BakeMax;
+                FVector3                GatherMin;
+                FVector3                GatherMax;
                 FNavBuildSettings       Settings;
                 FNavBuildOutput         Layout;
             };
@@ -1185,9 +1399,29 @@ namespace Lumina
             Snap->BakeMax  = Comp.Center + Comp.GetWorldExtents();
             Snap->Settings = Comp.Settings;
             Snap->Layout   = Comp.Runtime.LiveLayout;
+
+            // Gathering the whole volume for a few dirty tiles costs a full bake, so narrow it to their footprint.
+            {
+                const int32 BorderVoxels = (int32)std::ceil(Comp.Settings.AgentRadius / Comp.Settings.CellSize) + 3;
+                const float Border = (float)BorderVoxels * Comp.Settings.CellSize;
+                FVector3 Mn( FLT_MAX, Snap->BakeMin.y,  FLT_MAX);
+                FVector3 Mx(-FLT_MAX, Snap->BakeMax.y, -FLT_MAX);
+                for (const TSharedPtr<FNavTileRebake>& Job : BatchJobs)
+                {
+                    const float TileMinX = Comp.Origin.x + (float)Job->TileX * Comp.TileWorldSize;
+                    const float TileMinZ = Comp.Origin.z + (float)Job->TileY * Comp.TileWorldSize;
+                    Mn.x = Math::Min(Mn.x, TileMinX - Border);
+                    Mn.z = Math::Min(Mn.z, TileMinZ - Border);
+                    Mx.x = Math::Max(Mx.x, TileMinX + Comp.TileWorldSize + Border);
+                    Mx.z = Math::Max(Mx.z, TileMinZ + Comp.TileWorldSize + Border);
+                }
+                Snap->GatherMin = Math::Max(Mn, Snap->BakeMin);
+                Snap->GatherMax = Math::Min(Mx, Snap->BakeMax);
+            }
+
             {
                 TVector<FNavSourceEntry> Sources;
-                CollectNavSources(Context, Snap->BakeMin, Snap->BakeMax, true, Comp.Settings.CellSize, Sources);
+                CollectNavSources(Context, Snap->GatherMin, Snap->GatherMax, true, Comp.Settings.CellSize, Sources);
                 Snap->Prims.reserve(Sources.size());
                 for (FNavSourceEntry& Entry : Sources)
                 {
@@ -1206,7 +1440,8 @@ namespace Lumina
                 FGatherAccumulator Acc;
                 for (const FNavSourcePrim& Prim : Snap->Prims)
                 {
-                    EmitNavSourcePrim(Prim, Snap->BakeMin, Snap->BakeMax, Acc);
+                    EmitNavSourcePrim(Prim, Snap->GatherMin, Snap->GatherMax, Acc);
+                    AppendAnnotation(Prim, Input.AreaVolumes, Input.Links);
                 }
                 Input.Vertices = std::move(Acc.Vertices);
                 Input.Indices  = std::move(Acc.Indices);
@@ -1370,10 +1605,10 @@ namespace Lumina
             return Mesh && Mesh->ProjectPoint(World, Extents, Filter, Out);
         }
 
-        bool Raycast(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FVector3& HitOut)
+        bool Raycast(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavRaycastResult& Out)
         {
             FNavMesh* Mesh = FirstReadyNavMesh(Context);
-            return Mesh && Mesh->Raycast(Start, End, Filter, HitOut);
+            return Mesh && Mesh->Raycast(Start, End, Filter, Out);
         }
 
         namespace
@@ -1429,11 +1664,17 @@ namespace Lumina
             return Mesh && Mesh->ProjectPoint(Point, Extents, Filter, Out);
         }
 
-        bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, FVector3& OutHit)
+        bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, FNavRaycastResult& Out)
         {
             FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World);
             FNavQueryFilter Filter;
-            return Mesh && Mesh->Raycast(Start, End, Filter, OutHit);
+            return Mesh && Mesh->Raycast(Start, End, Filter, Out);
+        }
+
+        bool IsWalkableLine(CWorld* World, const FVector3& From, const FVector3& To)
+        {
+            FNavRaycastResult Result;
+            return Raycast(World, From, To, Result) && !Result.bHit;
         }
 
         bool FindRandomReachablePoint(CWorld* World, const FVector3& Origin, float Radius, FVector3& Out)

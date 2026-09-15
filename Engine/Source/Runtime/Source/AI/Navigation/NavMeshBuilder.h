@@ -13,6 +13,12 @@ namespace Lumina
         TVector<uint32>         Indices;
         TVector<uint8>          Areas;          // optional, size = NumTris
 
+        /** Stamped onto the eroded surface before region building, in order. */
+        TVector<FNavAreaVolume> AreaVolumes;
+
+        /** Off-mesh connections; each tile keeps the ones whose start point falls inside it. */
+        TVector<FNavOffMeshLink> Links;
+
         FVector3               BoundsMin = FVector3( FLT_MAX);
         FVector3               BoundsMax = FVector3(-FLT_MAX);
 
@@ -47,8 +53,8 @@ namespace Lumina
 
     namespace NavMeshBuilder
     {
-        /** Tile-parallel async bake; non-blocking. Cancel via Handle->bCancelRequested. */
-        RUNTIME_API TUniquePtr<FNavBakeHandle> Bake(FNavBuildInput Input);
+        /** Tile-parallel async bake; non-blocking. Cancel via Handle->bCancelRequested. The worker keeps its own reference. */
+        RUNTIME_API TSharedPtr<FNavBakeHandle> Bake(FNavBuildInput Input);
 
         /** Blocking variant; still parallelizes tile work internally. */
         RUNTIME_API bool BakeSync(FNavBuildInput Input, FNavBuildOutput& Out);

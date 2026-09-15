@@ -1022,16 +1022,22 @@ LUMINA_DOTNET_EXPORT(FLmNavPoint, Nav_ProjectPoint)(uint64 World, FVector3 Point
     return Result;
 }
 
+// bFound means a wall stopped the walk, so a clear line reports not-found and the caller sees null.
 LUMINA_DOTNET_EXPORT(FLmNavPoint, Nav_Raycast)(uint64 World, FVector3 Start, FVector3 End)
 {
     FLmNavPoint Result{};
-    FVector3 Out;
-    if (Nav::Raycast(AsWorld(World), Start, End, Out))
+    FNavRaycastResult Hit;
+    if (Nav::Raycast(AsWorld(World), Start, End, Hit) && Hit.bHit)
     {
         Result.bFound = 1;
-        Result.Point  = Out;
+        Result.Point  = Hit.Point;
     }
     return Result;
+}
+
+LUMINA_DOTNET_EXPORT(int32, Nav_IsWalkableLine)(uint64 World, FVector3 Start, FVector3 End)
+{
+    return Nav::IsWalkableLine(AsWorld(World), Start, End) ? 1 : 0;
 }
 
 LUMINA_DOTNET_EXPORT(FLmNavPoint, Nav_FindRandomReachablePoint)(uint64 World, FVector3 Origin, float Radius)

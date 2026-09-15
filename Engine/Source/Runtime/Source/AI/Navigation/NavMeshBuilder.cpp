@@ -242,6 +242,17 @@ namespace Lumina::NavMeshBuilder
                 return false;
             }
 
+            // Stamped after erosion so a Null volume carves a hole the agent radius cannot reopen.
+            for (const FNavAreaVolume& Volume : In.AreaVolumes)
+            {
+                if (Volume.Hull.size() < 3)
+                {
+                    continue;
+                }
+                rcMarkConvexPolyArea(&Ctx, reinterpret_cast<const float*>(Volume.Hull.data()), (int)Volume.Hull.size(),
+                                     Volume.MinY, Volume.MaxY, Volume.Area, *Compact);
+            }
+
             // Watershed regions; monotone is faster but yields thin polys.
             if (!rcBuildDistanceField(&Ctx, *Compact) ||
                 !rcBuildRegions(&Ctx, *Compact, Cfg.borderSize, Cfg.minRegionArea, Cfg.mergeRegionArea))
@@ -305,6 +316,30 @@ namespace Lumina::NavMeshBuilder
                 }
             }
 
+            // Detour keeps only the links whose start point lands inside this tile, so pass them all.
+            const int32 LinkCount = (int32)In.Links.size();
+            TVector<float>  LinkVerts;  LinkVerts.resize((size_t)LinkCount * 6);
+            TVector<float>  LinkRadii;  LinkRadii.resize(LinkCount);
+            TVector<uint8>  LinkDirs;   LinkDirs.resize(LinkCount);
+            TVector<uint8>  LinkAreas;  LinkAreas.resize(LinkCount);
+            TVector<uint16> LinkFlags;  LinkFlags.resize(LinkCount);
+            TVector<uint32> LinkIds;    LinkIds.resize(LinkCount);
+            for (int32 i = 0; i < LinkCount; ++i)
+            {
+                const FNavOffMeshLink& Link = In.Links[i];
+                LinkVerts[i * 6 + 0] = Link.Start.x;
+                LinkVerts[i * 6 + 1] = Link.Start.y;
+                LinkVerts[i * 6 + 2] = Link.Start.z;
+                LinkVerts[i * 6 + 3] = Link.End.x;
+                LinkVerts[i * 6 + 4] = Link.End.y;
+                LinkVerts[i * 6 + 5] = Link.End.z;
+                LinkRadii[i] = Link.Radius;
+                LinkDirs[i]  = Link.bBidirectional ? (uint8)DT_OFFMESH_CON_BIDIR : (uint8)0;
+                LinkAreas[i] = Link.Area;
+                LinkFlags[i] = Link.Flags;
+                LinkIds[i]   = Link.UserId;
+            }
+
             dtNavMeshCreateParams Params{};
             Params.verts            = PMesh->verts;
             Params.vertCount        = PMesh->nverts;
@@ -329,6 +364,16 @@ namespace Lumina::NavMeshBuilder
             Params.cs               = Cfg.cs;
             Params.ch               = Cfg.ch;
             Params.buildBvTree      = true;
+            if (LinkCount > 0)
+            {
+                Params.offMeshConVerts  = LinkVerts.data();
+                Params.offMeshConRad    = LinkRadii.data();
+                Params.offMeshConDir    = LinkDirs.data();
+                Params.offMeshConAreas  = LinkAreas.data();
+                Params.offMeshConFlags  = LinkFlags.data();
+                Params.offMeshConUserID = LinkIds.data();
+                Params.offMeshConCount  = LinkCount;
+            }
 
             uint8* NavData = nullptr;
             int    NavDataSize = 0;
@@ -427,14 +472,13 @@ namespace Lumina::NavMeshBuilder
         Handle.bDone.store(true, std::memory_order_release);
     }
 
-    TUniquePtr<FNavBakeHandle> Bake(FNavBuildInput Input)
+    TSharedPtr<FNavBakeHandle> Bake(FNavBuildInput Input)
     {
-        TUniquePtr<FNavBakeHandle> Handle = MakeUnique<FNavBakeHandle>();
-        FNavBakeHandle* Raw = Handle.get();
+        TSharedPtr<FNavBakeHandle> Handle = MakeShared<FNavBakeHandle>();
 
-        Task::AsyncTask(1, 1, [Raw, In = std::move(Input)](uint32, uint32, uint32) mutable
+        Task::AsyncTask(1, 1, [Handle, In = std::move(Input)](uint32, uint32, uint32) mutable
         {
-            RunBake(In, *Raw);
+            RunBake(In, *Handle);
         }, ETaskPriority::Background);
 
         return Handle;

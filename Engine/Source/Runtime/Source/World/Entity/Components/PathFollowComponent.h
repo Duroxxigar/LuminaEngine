@@ -62,6 +62,8 @@ namespace Lumina
             CornerCount = 0;
             CurrentCorner = 0;
             bPathDirty = false;
+            bPathPartial = false;
+            bPathTruncated = false;
             Status = EPathFollowStatus::None;
             ConsecutiveFailures = 0;
         }
@@ -69,8 +71,13 @@ namespace Lumina
         FUNCTION()
         bool IsFollowing() const { return bHasTarget && CornerCount > 0; }
 
+        /** True only once the agent consumed a path that actually ended at the target. */
         FUNCTION()
-        bool IsAtDestination() const { return bHasTarget && CornerCount > 0 && CurrentCorner >= CornerCount; }
+        bool IsAtDestination() const { return bHasTarget && CornerCount > 0 && CurrentCorner >= CornerCount && !bPathPartial && !bPathTruncated; }
+
+        /** True when the cached path stops short of the target, whether unreachable or cut by a buffer limit. */
+        FUNCTION()
+        bool IsPathPartial() const { return bPathPartial || bPathTruncated; }
 
         /** True if the most recent path query failed. Stays true until a subsequent query succeeds or the target is cleared. */
         FUNCTION()
@@ -129,6 +136,12 @@ namespace Lumina
         float       TimeSinceLastPath = 0.0f;
         bool        bHasTarget = false;
         bool        bPathDirty = false;
+
+        /** The query reported the goal as unreachable; the corners stop at the nearest point it could reach. */
+        bool        bPathPartial = false;
+
+        /** The route was longer than PathCorners; the system repaths on arrival at the last stored corner. */
+        bool        bPathTruncated = false;
 
         /** Latched outcome of the most recent path query. Updated by SPathFollowSystem. */
         EPathFollowStatus Status = EPathFollowStatus::None;

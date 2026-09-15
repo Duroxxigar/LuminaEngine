@@ -43,7 +43,7 @@ namespace Lumina
 
         RUNTIME_API bool FindPath(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavPath& Out);
         RUNTIME_API bool ProjectPoint(const FSystemContext& Context, const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out);
-        RUNTIME_API bool Raycast(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FVector3& HitOut);
+        RUNTIME_API bool Raycast(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavRaycastResult& Out);
 
         RUNTIME_API bool IsReady(CWorld* World);
 
@@ -53,7 +53,11 @@ namespace Lumina
 
         RUNTIME_API bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, FNavPath& Out);
         RUNTIME_API bool ProjectPoint(CWorld* World, const FVector3& Point, const FVector3& Extents, FVector3& Out);
-        RUNTIME_API bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, FVector3& OutHit);
+        /** Returns false when the query could not run at all; Out.bHit says whether a wall blocked the walk. */
+        RUNTIME_API bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, FNavRaycastResult& Out);
+
+        /** True when the straight line from From to To stays on walkable surface the whole way. */
+        RUNTIME_API bool IsWalkableLine(CWorld* World, const FVector3& From, const FVector3& To);
 
         /** Random walkable point inside (Origin, Radius). */
         RUNTIME_API bool FindRandomReachablePoint(CWorld* World, const FVector3& Origin, float Radius, FVector3& Out);

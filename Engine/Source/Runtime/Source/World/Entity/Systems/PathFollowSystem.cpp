@@ -34,6 +34,8 @@ namespace Lumina
             }
             Comp.CornerCount = N;
             Comp.CurrentCorner = 0;
+            Comp.bPathPartial = Path.bPartial;
+            Comp.bPathTruncated = Path.bTruncated || (int32)Path.Corners.size() > N;
         }
 
         // Caller must flush dirty transforms before calling from a parallel body.
@@ -153,9 +155,15 @@ namespace Lumina
 
                 if (Comp.CurrentCorner >= Comp.CornerCount)
                 {
+                    // The route continued past the buffer, so repath rather than call a cut corner the destination.
+                    if (Comp.bPathTruncated)
+                    {
+                        Comp.bPathDirty = true;
+                        return;
+                    }
                     if (Comp.Status == EPathFollowStatus::Following)
                     {
-                        Comp.Status = EPathFollowStatus::Reached;
+                        Comp.Status = Comp.bPathPartial ? EPathFollowStatus::Failed : EPathFollowStatus::Reached;
                     }
                     return;
                 }
