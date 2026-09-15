@@ -43,25 +43,19 @@ public readonly unsafe struct TVector<T> : IList<T>
 
     private int Stride => IsValid ? (int)OpsPtr->ElementSize : 0;
 
-    public int Count
-    {
-        get
-        {
-            NativeMarshal.DecodeVectorRaw((byte*)Vector, Stride, out _, out int Length);
-            return Length;
-        }
-    }
+    // From the ops table, which reports elements for a TVector and for a script array's byte storage alike.
+    public int Count => IsValid ? (int)OpsPtr->Size((void*)Vector) : 0;
 
     public bool IsReadOnly => false;
 
     /// <summary>The address of element <paramref name="index"/> in native storage.</summary>
     private nint ElementAt(int index)
     {
-        NativeMarshal.DecodeVectorRaw((byte*)Vector, Stride, out byte* Data, out int Length);
-        if ((uint)index >= (uint)Length)
+        if ((uint)index >= (uint)Count)
         {
             throw new ArgumentOutOfRangeException(nameof(index));
         }
+        NativeMarshal.DecodeVectorRaw((byte*)Vector, out byte* Data, out _);
         return (nint)Data + index * (nint)Stride;
     }
 
@@ -72,7 +66,8 @@ public readonly unsafe struct TVector<T> : IList<T>
     public Span<T> AsSpan()
     {
         ThrowIfMarshalled(nameof(AsSpan));
-        NativeMarshal.DecodeVectorRaw((byte*)Vector, Stride, out byte* Data, out int Length);
+        int Length = Count;
+        NativeMarshal.DecodeVectorRaw((byte*)Vector, out byte* Data, out _);
         return Length == 0 ? Span<T>.Empty : new Span<T>(Data, Length);
     }
 

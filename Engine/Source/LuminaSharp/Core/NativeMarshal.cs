@@ -55,35 +55,26 @@ public static unsafe class NativeMarshal
     // The single source of truth for the TVector layout (Data@0, Count@8 as uint32); shared by ReadVector and TVector.
     internal static Span<T> DecodeVector<T>(byte* Header) where T : unmanaged
     {
-        DecodeVectorRaw(Header, Unsafe.SizeOf<T>(), out byte* Data, out int Count);
+        DecodeVectorRaw(Header, out byte* Data, out int Count);
         return Count == 0 ? Span<T>.Empty : new Span<T>(Data, Count);
     }
 
-    /// <summary>
-    /// The same decode without a type: the element stride comes from the caller (the ops table reports it),
-    /// so this works for an element whose NATIVE size is not <c>Unsafe.SizeOf&lt;T&gt;()</c> -- an FString
-    /// element is 24 native bytes while its managed handle is not, and an object slot is a bare pointer.
-    ///
-    /// Reading the header in place is what keeps <see cref="TVector{T}.Count"/> free. Asking the ops table
-    /// instead would be a <c>delegate* unmanaged</c> call with a GC transition on every loop iteration.
-    /// </summary>
-    internal static void DecodeVectorRaw(byte* Header, int ElementSize, out byte* Data, out int Count)
+    // Only a real TVector counts elements here, so a script array takes its length from the ops table instead.
+    internal static void DecodeVectorRaw(byte* Header, out byte* Data, out int Count)
     {
         Data = null;
         Count = 0;
-        if (Header == null || ElementSize <= 0)
+        if (Header == null)
         {
             return;
         }
         byte* Begin = *(byte**)Header;
-
-        // The backing store is a byte vector, so its length is bytes and the count is that over the stride.
-        uint Bytes = *(uint*)(Header + sizeof(void*));
-        if (Begin == null || Bytes == 0)
+        uint Elements = *(uint*)(Header + sizeof(void*));
+        if (Begin == null || Elements == 0)
         {
             return;
         }
         Data = Begin;
-        Count = (int)(Bytes / (uint)ElementSize);
+        Count = (int)Elements;
     }
 }
