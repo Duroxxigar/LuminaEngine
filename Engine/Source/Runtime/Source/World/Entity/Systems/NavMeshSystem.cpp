@@ -1232,8 +1232,24 @@ namespace Lumina
             }
 
             // The bRuntimeDirty branch is essential, or a re-bake leaves the old Mesh stuck Building.
-            if (Comp.HasBakedData() && !Comp.Runtime.PendingInit && (Comp.Runtime.bRuntimeDirty || !Comp.Runtime.Mesh))
+            // A failed hydration nulls Mesh, so without the state test it re-kicks forever.
+            const bool bHydrateWanted = Comp.Runtime.bRuntimeDirty
+                                     || (!Comp.Runtime.Mesh && Comp.Runtime.State != ENavBakeState::Failed);
+            if (Comp.HasBakedData() && !Comp.Runtime.PendingInit && bHydrateWanted)
             {
+                // Tiles can persist with every blob empty, and Detour cannot be handed nothing.
+                const bool bAnyWalkableTile = Algo::AnyOf(Comp.Tiles,
+                    [](const FNavTileData& Tile) { return !Tile.Blob.empty(); });
+                if (!bAnyWalkableTile)
+                {
+                    LOG_ERROR("NavMesh has {} tiles but none carry walkable geometry, so there is nothing to hydrate. "
+                              "Re-bake the volume, and check it covers ground the agent radius and slope accept.",
+                        (int32)Comp.Tiles.size());
+                    Comp.Runtime.bRuntimeDirty = false;
+                    Comp.Runtime.State = ENavBakeState::Failed;
+                    return;
+                }
+
                 const FVector3 BakeMin = Comp.Center - Comp.GetWorldExtents();
                 const FVector3 BakeMax = Comp.Center + Comp.GetWorldExtents();
                 Comp.Runtime.LiveLayout.Origin          = Comp.Origin;
