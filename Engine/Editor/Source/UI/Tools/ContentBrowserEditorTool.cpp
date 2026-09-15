@@ -803,7 +803,6 @@ namespace Lumina
             ImGui::TextColored(kMenuTextDim, "GUID: %s", Data->AssetGUID.ToString(false, true).c_str());
         }
 
-        std::atomic<bool> GScriptReloadQueued{ false };
     }
 
     // Scripts show lifecycle, assets show refs and GUID, files show size, folders show item counts.
@@ -1574,35 +1573,15 @@ namespace Lumina
         
     }
     
-    // Deleting under a live world can free objects the simulation still references.
+    // Shared with the agent endpoint, so both refuse the same deletions for the same reasons.
     static bool IsAnyWorldPlayingOrSimulating()
     {
-        if (GWorldManager == nullptr)
-        {
-            return false;
-        }
-        for (const TUniquePtr<FWorldContext>& Context : GWorldManager->GetContexts())
-        {
-            if (Context && (Context->Type == EWorldType::Game || Context->Type == EWorldType::Simulation))
-            {
-                return true;
-            }
-        }
-        return false;
+        return AssetOps::IsAnyWorldPlayingOrSimulating();
     }
 
-    // A loaded world would be freed out from under the editor that has it open.
     static bool IsLoadedWorldAsset(FStringView AssetPath)
     {
-        if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
-        {
-            if (CObject* Object = FindObject<CObject>(Data->AssetGUID))
-            {
-                return Object->IsA<CWorld>();
-            }
-        }
-
-        return false;
+        return AssetOps::IsLoadedWorldAsset(AssetPath);
     }
 
     // Loaded packages under Directory, including any created but never saved, which a file walk misses.
@@ -1632,31 +1611,7 @@ namespace Lumina
 
     bool FContentBrowserEditorTool::DestroyAssetAtPath(FStringView AssetPath)
     {
-        CObject* AliveObject = nullptr;
-        if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
-        {
-            AliveObject = FindObject<CObject>(Data->AssetGUID);
-        }
-
-        // Pinned first, since dropping the instances' strong refs could free the prefab out from under us.
-        TObjectPtr<CObject> KeepAlive = AliveObject;
-        if (AliveObject != nullptr && AliveObject->IsA<CPrefab>())
-        {
-            static_cast<CPrefab*>(AliveObject)->DestroyAllInstancesInLoadedWorlds();
-        }
-
-        if (AliveObject != nullptr)
-        {
-            ToolContext->OnDestroyAsset(AliveObject);
-        }
-
-        if (!CPackage::DestroyPackage(AssetPath))
-        {
-            return false;
-        }
-
-        FCoreEditorDelegates::OnAssetDeleted.Broadcast(AssetPath);
-        return true;
+        return AssetOps::DeleteAsset(AssetPath, ToolContext).bDeleted;
     }
 
     void FContentBrowserEditorTool::EndFrame()
@@ -2255,17 +2210,11 @@ namespace Lumina
                     RefreshContentBrowser();
                 }
 
-                // A .cs add or rename changes what compiles, so recompile and regenerate without a manual reload.
-                if (bIsCSharp && Event.Action != EFileAction::Modified)
+                // Which files are script sources and how long to wait for a burst to settle both belong to
+                // the scripting layer, so the browser reports the change and decides nothing.
+                if (Event.Action != EFileAction::Modified)
                 {
-                    if (!GScriptReloadQueued.exchange(true))
-                    {
-                        MainThread::Enqueue([]
-                        {
-                            GScriptReloadQueued.store(false);
-                            DotNet::RequestScriptReload();
-                        });
-                    }
+                    DotNet::NotifyScriptSourceChanged(Event.Path);
                 }
             });
 

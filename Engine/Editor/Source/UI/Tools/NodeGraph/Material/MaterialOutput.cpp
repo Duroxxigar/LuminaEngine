@@ -6,6 +6,7 @@
 #include "Core/Object/Cast.h"
 #include "Core/Object/ObjectArray.h"
 #include "imgui-node-editor/imgui_node_editor_internal.h"
+#include "MaterialCompiler.h"
 #include "Nodes/MaterialGraphNode.h"
 #include "Renderer/RenderManager.h"
 #include "Tools/UI/ImGui/ImGuiRenderer.h"
@@ -13,6 +14,11 @@
 
 namespace Lumina
 {
+    FString CMaterialOutput::GetPinTypeName() const
+    {
+        return FMaterialCompiler::GetHLSLTypeName(InputType);
+    }
+
     float CMaterialOutput::DrawPin()
     {
         float ReturnSize = 1.0f;

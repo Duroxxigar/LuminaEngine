@@ -1,23 +1,24 @@
-﻿#pragma once
+#pragma once
 
 #include "EntitySystem.h"
 #include "AudioSystem.generated.h"
 
 namespace Lumina
 {
-    REFLECT(System)
-    struct SAudioSystem
+    REFLECT()
+    class SAudioSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PostPhysics))
+    public:
+
+        void Configure() override;
 
         // Writes the audio source/procedural components; reads transforms + listeners. The audio device
         // (Audio::Context()) is a process singleton, but this is the only system that touches it within a world,
         // so within-world batching is safe. Defined in the .cpp.
-        static FSystemAccess Access;
 
-        static void Startup(const FSystemContext& Context) noexcept;
-        static void Update(const FSystemContext& Context) noexcept;
-        static void Teardown(const FSystemContext& Context) noexcept;
+        void OnStartup() override;
+        void OnUpdate() override;
+        void OnTeardown() override;
     };
 }

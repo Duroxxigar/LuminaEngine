@@ -64,20 +64,17 @@ namespace Lumina
     };
 
     // Scores every entity carrying a transform once per frame; the scores live in the registry context.
-    REFLECT(System)
-    struct RUNTIME_API SSignificanceSystem
+    REFLECT()
+    class RUNTIME_API SSignificanceSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        // Paused as well as FrameStart, since editor worlds tick only Paused. Highest so it lands first.
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest),
-                      RequiresUpdate(EUpdateStage::Paused,     EUpdatePriority::Highest))
-
     public:
 
-        static FSystemAccess Access;
+        // Paused as well as FrameStart, since editor worlds tick only Paused. Highest so it lands first.
+        void Configure() override;
 
-        static void Startup(const FSystemContext& Context) noexcept;
-        static void Update (const FSystemContext& Context) noexcept;
+        void OnStartup() override;
+        void OnUpdate() override;
     };
 
     namespace Significance

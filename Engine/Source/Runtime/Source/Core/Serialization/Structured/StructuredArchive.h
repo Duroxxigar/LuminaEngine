@@ -72,22 +72,22 @@ namespace Lumina
         RUNTIME_API FArchiveStream EnterStream();
         RUNTIME_API FArchiveMap EnterMap(int32& NumElements);
 
-        void Serialize(uint8& Value);
-        void Serialize(uint16& Value);
-        void Serialize(uint32& Value);
-        void Serialize(uint64& Value);
-        void Serialize(int8& Value);
-        void Serialize(int16& Value);
-        void Serialize(int32& Value);
-        void Serialize(int64& Value);
-        void Serialize(float& Value);
-        void Serialize(double& Value);
-        void Serialize(bool& Value);
-        void Serialize(FString& Value);
-        void Serialize(FName& Value);
-        void Serialize(CObject*& Value);
-        void Serialize(FObjectHandle& Value);
-        void Serialize(void* Data, uint64 DataSize);
+        RUNTIME_API void Serialize(uint8& Value);
+        RUNTIME_API void Serialize(uint16& Value);
+        RUNTIME_API void Serialize(uint32& Value);
+        RUNTIME_API void Serialize(uint64& Value);
+        RUNTIME_API void Serialize(int8& Value);
+        RUNTIME_API void Serialize(int16& Value);
+        RUNTIME_API void Serialize(int32& Value);
+        RUNTIME_API void Serialize(int64& Value);
+        RUNTIME_API void Serialize(float& Value);
+        RUNTIME_API void Serialize(double& Value);
+        RUNTIME_API void Serialize(bool& Value);
+        RUNTIME_API void Serialize(FString& Value);
+        RUNTIME_API void Serialize(FName& Value);
+        RUNTIME_API void Serialize(CObject*& Value);
+        RUNTIME_API void Serialize(FObjectHandle& Value);
+        RUNTIME_API void Serialize(void* Data, uint64 DataSize);
         FArchive& GetArchiver() const;
 
         template<typename T>

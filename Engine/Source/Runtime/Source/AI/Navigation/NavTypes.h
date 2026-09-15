@@ -92,6 +92,69 @@ namespace Lumina
         int32 TileSizeVoxels = 64;
     };
 
+    /** Convex XZ footprint plus a vertical band; stamps an area id onto the voxelized surface. */
+    struct FNavAreaVolume
+    {
+        /** World-space hull of the volume's XZ footprint, in perimeter order. Y is ignored. */
+        TVector<FVector3> Hull;
+
+        float MinY = 0.0f;
+        float MaxY = 0.0f;
+
+        /** ENavArea id stamped onto covered spans. Null carves the surface away. */
+        uint8 Area = 0;
+    };
+
+    /** Point-to-point jump/ladder/teleport link stitched into the navmesh at bake time. */
+    struct FNavOffMeshLink
+    {
+        FVector3 Start = FVector3(0.0f);
+        FVector3 End   = FVector3(0.0f);
+
+        /** Snap radius around each endpoint used to attach the link to a polygon. */
+        float Radius = 0.5f;
+
+        bool bBidirectional = true;
+
+        uint8  Area  = 1;                        // ENavArea::Ground
+        uint16 Flags = (uint16)(1 << 3);         // ENavPolyFlag::Jump
+
+        /** Echoed back by Detour on traversal so gameplay can identify the link. */
+        uint32 UserId = 0;
+    };
+
+    /** Grid coordinates of one nav tile. */
+    struct FNavTileCoord
+    {
+        int32 X = 0;
+        int32 Y = 0;
+    };
+
+    namespace NavTile
+    {
+        /** Tile coords are signed, so the two halves are packed rather than added. */
+        FORCEINLINE uint64 PackKey(int32 TX, int32 TY)
+        {
+            return ((uint64)(uint32)TY << 32) | (uint64)(uint32)TX;
+        }
+
+        FORCEINLINE void UnpackKey(uint64 Key, int32& OutTX, int32& OutTY)
+        {
+            OutTX = (int32)(uint32)(Key & 0xFFFFFFFFull);
+            OutTY = (int32)(uint32)(Key >> 32);
+        }
+
+        /** Shortest XZ distance from a point to the tile's footprint; zero when inside it. */
+        FORCEINLINE float DistanceToTile(const FVector3& Point, const FVector3& Origin, float TileWorldSize, int32 TX, int32 TY)
+        {
+            const float MinX = Origin.x + (float)TX * TileWorldSize;
+            const float MinZ = Origin.z + (float)TY * TileWorldSize;
+            const float DX = Math::Max(0.0f, Math::Max(MinX - Point.x, Point.x - (MinX + TileWorldSize)));
+            const float DZ = Math::Max(0.0f, Math::Max(MinZ - Point.z, Point.z - (MinZ + TileWorldSize)));
+            return std::sqrt(DX * DX + DZ * DZ);
+        }
+    }
+
     /** Per-tile baked blob in the format dtNavMesh::addTile expects. */
     REFLECT()
     struct RUNTIME_API FNavTileData
@@ -108,12 +171,53 @@ namespace Lumina
         TVector<uint8> Blob;
     };
 
+    // Per-corner marker from findStraightPath, so a follower can tell ground from a link hop.
+    enum class ENavCornerFlag : uint8
+    {
+        None            = 0,
+        PathStart       = 1 << 0,
+        PathEnd         = 1 << 1,
+        OffMeshLink     = 1 << 2,
+    };
+
     /** Result of an async path request. Owned by the requester; can be polled or awaited. */
     struct FNavPath
     {
         TVector<FVector3> Corners;
+
+        // One ENavCornerFlag per corner. OffMeshLink means gameplay drives the hop, not the follower.
+        TVector<uint8> CornerFlags;
+
+        /** The route does not reach the requested goal; the last corner is as close as the query got. */
         bool bPartial = false;
+
+        /** A buffer or search limit cut the result, so re-query from the last corner instead of stopping there. */
+        bool bTruncated = false;
+
         bool bValid   = false;
+
+        // Every pooled query was busy, so nothing ran. Distinct from no route found.
+        bool bQueryUnavailable = false;
+
+        /** FNavMesh topology epoch this was found against. A path is a snapshot, not a live corridor, so
+         *  anything following one across frames re-queries once this stops matching the mesh. */
+        uint64 Epoch = 0;
+    };
+
+    /** Outcome of a surface walk along a straight line. */
+    struct FNavRaycastResult
+    {
+        /** Where the walk stopped, so the wall it hit, or End when nothing blocked it. */
+        FVector3 Point = FVector3(0.0f);
+
+        /** Wall normal at the hit; zero when unobstructed. */
+        FVector3 Normal = FVector3(0.0f);
+
+        /** Fraction along Start -> End at which the walk stopped; 1 when unobstructed. */
+        float T = 1.0f;
+
+        /** True when a navmesh edge blocked the walk. */
+        bool bHit = false;
     };
 
     /** Per-call query parameters. Cheap to copy, no heap. */
@@ -125,6 +229,9 @@ namespace Lumina
 
         /** Half-extents for findNearestPoly snapping; generous on Y for cell-quantized poly Y. */
         FVector3 QueryExtents = FVector3(2.0f, 16.0f, 2.0f);
+
+        // Corners this caller can store; zero takes the project default.
+        int32 MaxCorners = 0;
 
         FNavQueryFilter()
         {

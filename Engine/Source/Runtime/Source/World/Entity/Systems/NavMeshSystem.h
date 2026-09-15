@@ -10,22 +10,23 @@ namespace Lumina
     struct SNavMeshComponent;
 
     /** Owns SNavMeshComponent lifecycle: rehydrate, drain bakes, rebuild on Tiles change. */
-    REFLECT(System)
-    struct RUNTIME_API SNavMeshSystem
+    REFLECT()
+    class RUNTIME_API SNavMeshSystem : public CEntitySystem
     {
         GENERATED_BODY()
+    public:
+
         // Paused stage required so editor-mode ticks for bake button, debug draw, dirty detection.
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::FrameStart), RequiresUpdate(EUpdateStage::Paused))
+        void Configure() override;
 
     public:
 
         // Update only reads colliders/transforms and writes SNavMeshComponent (no structural changes),
         // so it overlaps animation/camera in the editor (Paused) stage. Defined in the .cpp.
-        static FSystemAccess Access;
 
-        static void Startup (const FSystemContext& Context) noexcept;
-        static void Update  (const FSystemContext& Context) noexcept;
-        static void Teardown(const FSystemContext& Context) noexcept;
+        void OnStartup() override;
+        void OnUpdate() override;
+        void OnTeardown() override;
 
         /** Kick async bake; no-op if one is already in flight. */
         static void RequestBake(const FSystemContext& Context, SNavMeshComponent& Component);
@@ -42,7 +43,7 @@ namespace Lumina
 
         RUNTIME_API bool FindPath(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavPath& Out);
         RUNTIME_API bool ProjectPoint(const FSystemContext& Context, const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out);
-        RUNTIME_API bool Raycast(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FVector3& HitOut);
+        RUNTIME_API bool Raycast(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavRaycastResult& Out);
 
         RUNTIME_API bool IsReady(CWorld* World);
 
@@ -51,8 +52,15 @@ namespace Lumina
         RUNTIME_API int32 RequestRebuild(CWorld* World);
 
         RUNTIME_API bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, FNavPath& Out);
+
+        // MaxCorners bounds the result to what the caller stores; a longer route comes back truncated.
+        RUNTIME_API bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, int32 MaxCorners, FNavPath& Out);
         RUNTIME_API bool ProjectPoint(CWorld* World, const FVector3& Point, const FVector3& Extents, FVector3& Out);
-        RUNTIME_API bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, FVector3& OutHit);
+        /** Returns false when the query could not run at all; Out.bHit says whether a wall blocked the walk. */
+        RUNTIME_API bool Raycast(CWorld* World, const FVector3& Start, const FVector3& End, FNavRaycastResult& Out);
+
+        /** True when the straight line from From to To stays on walkable surface the whole way. */
+        RUNTIME_API bool IsWalkableLine(CWorld* World, const FVector3& From, const FVector3& To);
 
         /** Random walkable point inside (Origin, Radius). */
         RUNTIME_API bool FindRandomReachablePoint(CWorld* World, const FVector3& Origin, float Radius, FVector3& Out);

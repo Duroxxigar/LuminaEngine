@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "AnimationSystem.h"
 #include "World/ECS/Registry.h"
 
@@ -107,10 +107,13 @@ namespace Lumina
     }
 
     // Time advance, VM state and lazy init all mutate these, so they are declared Write, not Read.
-    FSystemAccess SAnimationSystem::Access = FSystemAccess{}
-        .Write<SSkeletalMeshComponent, STransformComponent, SSimpleAnimationComponent, SAnimationGraphComponent,
-               SFollowerPoseComponent>()
-        .Read<SCharacterMovementComponent, SystemResource::PhysicsQuery, SystemResource::Kinematics>();
+    void SAnimationSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::PrePhysics);
+        RequireUpdate(EUpdateStage::Paused);
+        Writes<SSkeletalMeshComponent, STransformComponent, SSimpleAnimationComponent, SAnimationGraphComponent, SFollowerPoseComponent>();
+        Reads<SCharacterMovementComponent, SystemResource::PhysicsQuery, SystemResource::Kinematics>();
+    }
 
     // Slack so brief occlusion or culling flicker does not stutter the pose.
     static constexpr double kAnimVisibilityGrace = 0.25;
@@ -635,8 +638,10 @@ namespace Lumina
         }
     }
 
-    void SAnimationSystem::Update(const FSystemContext& SystemContext) noexcept
+    void SAnimationSystem::OnUpdate()
     {
+        const FSystemContext& SystemContext = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         auto SimpleView   = SystemContext.CreateView<SSimpleAnimationComponent, SSkeletalMeshComponent>(ECS::TExclude<SDisabledTag, SFollowerPoseComponent>{});

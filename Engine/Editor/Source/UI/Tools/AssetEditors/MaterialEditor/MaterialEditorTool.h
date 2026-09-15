@@ -78,12 +78,19 @@ namespace Lumina
         // opposed to the source-derived estimates the rest of the panel shows.
         void DrawGPUStats(float LabelWidth, const ImVec4& HeaderColor, const ImVec4& LabelColor, const ImVec4& ValueColor);
 
-        void Compile();
+        // bNotifyResult off lets a save-driven compile toast after the package save toast instead of under it.
+        void Compile(bool bNotifyResult = true);
+
+        // Toasts the outcome of the last compile: error, warnings, or clean.
+        void NotifyCompileResult();
         void ApplyMaterialToPreview();
 
         // The transient spray the Particle domain previews through, pointed at PreviewMaterial.
         CParticleSystem* GetOrCreatePreviewParticleSystem(CMaterialInterface* PreviewMaterial);
         void FocusGraphNode(CEdGraphNode* Node);
+
+        // Double-click handler for a Material Function call node: opens the referenced asset in its own tab.
+        void OpenMaterialFunctionForNode(CEdGraphNode* Node);
 
         // Syntax-highlighted editor for the selected Custom Slang node's body. Bound lazily to the
         // selection; edits write straight back to the node (auto-compile picks them up).
@@ -142,6 +149,8 @@ namespace Lumina
         // so we don't rewrite (and dirty) the package every frame.
         size_t                          LastCodeEditorUndoIndex = 0;
         FCompilationResultInfo          CompilationResult;
+        // False until the first compile, so a save before one never toasts a result nothing produced.
+        bool                            bHasCompiled = false;
         
         
         TUniquePtr<FPropertyTable>      EnvironmentEditor;

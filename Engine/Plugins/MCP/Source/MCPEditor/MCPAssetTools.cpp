@@ -1,5 +1,6 @@
 #include "MCPAssetTools.h"
 
+#include "Agent/AgentAssetResolve.h"
 #include "Agent/AgentToolRegistry.h"
 #include "MCPTextMatch.h"
 #include "Asset/AssetOps.h"
@@ -268,16 +269,11 @@ namespace Lumina::MCP
                 Agent::EToolEffect::Mutating, Agent::EToolThread::GameThread,
                 [](const SSaveAssetParams& In, SSaveAssetResult& Out)
                 {
-                    const TOptional<FGuid> Parsed = FGuid::TryParse(FStringView(In.Asset));
-                    if (!Parsed.IsSet())
+                    CObject* Object = nullptr;
+                    FString Error;
+                    if (!Agent::ResolveAssetObject(FStringView(In.Asset), Object, Error))
                     {
-                        return Agent::FToolResult::Error("That is not a GUID. Use assets.search to find an asset.");
-                    }
-
-                    CObject* Object = StaticLoadObject(*Parsed);
-                    if (Object == nullptr)
-                    {
-                        return Agent::FToolResult::Error("That GUID names no asset that could be loaded.");
+                        return Agent::FToolResult::Error(Error);
                     }
 
                     CPackage* Package = Object->GetPackage();
@@ -319,6 +315,7 @@ namespace Lumina::MCP
             [](const SSearchAssetsParams& In, SSearchAssetsResult& Out)
             {
                 const int32 Limit = In.Limit > 0 ? In.Limit : 50;
+                const int32 Offset = In.Offset > 0 ? In.Offset : 0;
 
                 // Matching runs inside the predicate so a huge project is walked once, not collected twice.
                 FAssetRegistry::Get().FindByPredicate([&](const FAssetData& Data)
@@ -339,7 +336,7 @@ namespace Lumina::MCP
 
                     ++Out.Matched;
 
-                    if (static_cast<int32>(Out.Results.size()) < Limit)
+                    if (Out.Matched > Offset && static_cast<int32>(Out.Results.size()) < Limit)
                     {
                         SAssetInfo Info;
                         Info.Name  = Name;

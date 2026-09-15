@@ -12,12 +12,18 @@
 
 namespace Lumina
 {
-    FSystemAccess SSocketAttachmentSystem::Access = FSystemAccess{}
-        .Write<STransformComponent>()
-        .Read<SSocketAttachmentComponent, SSkeletalMeshComponent, SStaticMeshComponent, FRelationshipComponent>();
-
-    void SSocketAttachmentSystem::Update(const FSystemContext& SystemContext) noexcept
+    void SSocketAttachmentSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Low);
+        RequireUpdate(EUpdateStage::Paused, EUpdatePriority::Low);
+        Writes<STransformComponent>();
+        Reads<SSocketAttachmentComponent, SSkeletalMeshComponent, SStaticMeshComponent, FRelationshipComponent>();
+    }
+
+    void SSocketAttachmentSystem::OnUpdate()
+    {
+        const FSystemContext& SystemContext = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         auto View = SystemContext.CreateView<SSocketAttachmentComponent, STransformComponent>(ECS::TExclude<SDisabledTag>{});

@@ -9,13 +9,13 @@ namespace Lumina
     // Backs TSubclassOf<T>: a property whose value is a CClass* constrained to MetaClass (T) or a
     // subclass. Stores a single CClass* (the type is a permanent singleton, so no refcount/copy
     // handling is needed); serialized by class name and re-resolved on load.
-    class FClassProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FClassProperty : public FProperty
     {
     public:
         DECLARE_FPROPERTY(EPropertyTypeFlags::Class)
 
-        FClassProperty(const FFieldOwner& InOwner, const FClassPropertyParams* Params)
-            :FProperty(InOwner, Params)
+        explicit FClassProperty(const FClassPropertyParams* Params)
+            : FProperty(Params)
         {
             MetaClass = Params->ClassFunc();
             SetElementSize(sizeof(void*));

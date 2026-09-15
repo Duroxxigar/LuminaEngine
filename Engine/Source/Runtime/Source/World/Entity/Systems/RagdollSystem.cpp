@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "RagdollSystem.h"
 #include "World/ECS/Registry.h"
 #include "Physics/PhysicsScene.h"
@@ -26,8 +26,16 @@ namespace Lumina
         return Mesh.SkeletalMesh->Skeleton.Get();
     }
 
-    void SRagdollSystem::Update(const FSystemContext& SystemContext) noexcept
+    void SRagdollSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Low);
+        RequireUpdate(EUpdateStage::PostPhysics);
+    }
+
+    void SRagdollSystem::OnUpdate()
+    {
+        const FSystemContext& SystemContext = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         Physics::IPhysicsScene* Scene = SystemContext.GetPhysicsScene();

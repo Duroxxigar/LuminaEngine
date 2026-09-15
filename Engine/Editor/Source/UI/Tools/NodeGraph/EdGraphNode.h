@@ -84,7 +84,8 @@ namespace Lumina
         virtual bool WantsTitlebar() const { return true; }
         virtual FStringView GetNodeDisplayName() const { return "Node"; }
         virtual FStringView GetNodeTooltip() const { return "No Tooltip"; }
-        virtual uint32 GetNodeTitleColor() const { return IM_COL32(200, 35, 35, 255); }
+        // Neutral, because a red default would make every unstyled node look like it failed to compile.
+        virtual uint32 GetNodeTitleColor() const { return IM_COL32(72, 80, 96, 255); }
         virtual ImVec2 GetMinNodeBodySize() const { return ImVec2(80, 150); }
         virtual ImVec2 GetMinNodeTitleBarSize() const;
 
@@ -148,6 +149,11 @@ namespace Lumina
         const EdNodeGraph::FError& GetError() const { return Error.value(); }
         bool HasError() const { return Error.has_value(); }
         void ClearError() { Error = NullOpt; }
+
+        void SetWarning(const EdNodeGraph::FError& InWarning) { Warning = InWarning; }
+        const EdNodeGraph::FError& GetWarning() const { return Warning.value(); }
+        bool HasWarning() const { return Warning.has_value(); }
+        void ClearWarning() { Warning = NullOpt; }
         
         CEdNodeGraphPin* GetPin(uint32 ID, ENodePinDirection Direction);
         CEdNodeGraphPin* GetPinByIndex(uint32 Index, ENodePinDirection Direction);
@@ -203,6 +209,7 @@ namespace Lumina
         FString                             PinHashName;
 
         TOptional<EdNodeGraph::FError>      Error;
+        TOptional<EdNodeGraph::FError>      Warning;
         bool                                bWasBuild = false;
 
         // Set by CEdNodeGraph::AddNode. Non-owning -- the graph owns the

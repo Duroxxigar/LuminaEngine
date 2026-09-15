@@ -82,7 +82,11 @@ namespace Lumina
         const FString Title = GetNodeTitleText();
         if (HasError())
         {
-            ImGui::TextColored(ImVec4(255.0f, 0.0f, 0.0f, 255.f), LE_ICON_EXCLAMATION_THICK " %s", Title.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.88f, 0.88f, 1.0f), LE_ICON_EXCLAMATION_THICK " %s", Title.c_str());
+        }
+        else if (HasWarning())
+        {
+            ImGui::TextColored(ImVec4(0.14f, 0.11f, 0.03f, 1.0f), LE_ICON_ALERT " %s", Title.c_str());
         }
         else
         {

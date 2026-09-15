@@ -62,6 +62,9 @@ namespace Lumina
             CornerCount = 0;
             CurrentCorner = 0;
             bPathDirty = false;
+            bPathPartial = false;
+            bPathTruncated = false;
+            PathEpoch = 0;
             Status = EPathFollowStatus::None;
             ConsecutiveFailures = 0;
         }
@@ -69,8 +72,13 @@ namespace Lumina
         FUNCTION()
         bool IsFollowing() const { return bHasTarget && CornerCount > 0; }
 
+        /** True only once the agent consumed a path that actually ended at the target. */
         FUNCTION()
-        bool IsAtDestination() const { return bHasTarget && CornerCount > 0 && CurrentCorner >= CornerCount; }
+        bool IsAtDestination() const { return bHasTarget && CornerCount > 0 && CurrentCorner >= CornerCount && !bPathPartial && !bPathTruncated; }
+
+        /** True when the cached path stops short of the target, whether unreachable or cut by a buffer limit. */
+        FUNCTION()
+        bool IsPathPartial() const { return bPathPartial || bPathTruncated; }
 
         /** True if the most recent path query failed. Stays true until a subsequent query succeeds or the target is cleared. */
         FUNCTION()
@@ -79,6 +87,14 @@ namespace Lumina
         /** Number of consecutive failed queries since the last success. Useful for script-side give-up logic. */
         FUNCTION()
         int32 GetConsecutivePathFailures() const { return ConsecutiveFailures; }
+
+        // True when the next corner is a link hop that gameplay drives rather than a walk.
+        FUNCTION()
+        bool IsEnteringOffMeshLink() const
+        {
+            if (CornerCount == 0 || CurrentCorner >= CornerCount) return false;
+            return (PathCornerFlags[CurrentCorner] & (uint8)ENavCornerFlag::OffMeshLink) != 0;
+        }
 
         /** Closest queued path corner, or the target if no path is cached. */
         FUNCTION()
@@ -117,8 +133,12 @@ namespace Lumina
         bool bDrawDebugPath = false;
 
         /** Cached path corners filled by the system. Capped to a fixed array to avoid per-tick heap churn. */
+        // Queries are asked for exactly this many, so a longer route comes back flagged truncated.
         static constexpr int32 MaxCorners = 64;
         FVector3   PathCorners[MaxCorners] = {};
+
+        // ENavCornerFlag per stored corner, parallel to PathCorners.
+        uint8       PathCornerFlags[MaxCorners] = {};
         int32       CornerCount   = 0;
         int32       CurrentCorner = 0;
 
@@ -127,8 +147,19 @@ namespace Lumina
         ECS::FEntity TargetEntity = ECS::NullEntity;
         FVector3   PathSourceTarget = FVector3(0.0f); // target location at the moment the cached path was generated
         float       TimeSinceLastPath = 0.0f;
+
+        /** Navmesh topology epoch the stored corners were found against. Tiles rebuilt or streamed out
+         *  from under an agent leave the corners running through geometry that is no longer walkable. */
+        uint64      PathEpoch = 0;
+
         bool        bHasTarget = false;
         bool        bPathDirty = false;
+
+        /** The query reported the goal as unreachable; the corners stop at the nearest point it could reach. */
+        bool        bPathPartial = false;
+
+        /** The route was longer than PathCorners; the system repaths on arrival at the last stored corner. */
+        bool        bPathTruncated = false;
 
         /** Latched outcome of the most recent path query. Updated by SPathFollowSystem. */
         EPathFollowStatus Status = EPathFollowStatus::None;

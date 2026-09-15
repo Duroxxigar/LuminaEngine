@@ -55,20 +55,17 @@ namespace Lumina
     };
 
     // Resolves one world velocity per entity from the physics body, the character mover, or a difference.
-    REFLECT(System)
-    struct RUNTIME_API SKinematicsSystem
+    REFLECT()
+    class RUNTIME_API SKinematicsSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        // PrePhysics, not PostPhysics, so SAnimationSystem reads this the same frame it is written.
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Highest),
-                      RequiresUpdate(EUpdateStage::Paused,     EUpdatePriority::Highest))
-
     public:
 
-        static FSystemAccess Access;
+        // PrePhysics, not PostPhysics, so SAnimationSystem reads this the same frame it is written.
+        void Configure() override;
 
-        static void Startup(const FSystemContext& Context) noexcept;
-        static void Update (const FSystemContext& Context) noexcept;
+        void OnStartup() override;
+        void OnUpdate() override;
     };
 
     namespace Kinematics

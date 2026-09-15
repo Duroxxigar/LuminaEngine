@@ -9,11 +9,16 @@
 
 namespace Lumina
 {
-    FSystemAccess SSpriteAnimationSystem::Access = FSystemAccess{}
-        .Write<SAnimatedSprite3DComponent, SSprite3DComponent>();
-
-    void SSpriteAnimationSystem::Update(const FSystemContext& Context) noexcept
+    void SSpriteAnimationSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics);
+        Writes<SAnimatedSprite3DComponent, SSprite3DComponent>();
+    }
+
+    void SSpriteAnimationSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         const float Dt = (float)Context.GetDeltaTime();

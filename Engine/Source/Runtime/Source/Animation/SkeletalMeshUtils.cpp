@@ -1,5 +1,8 @@
 ﻿#include "RuntimePCH.h"
 #include "SkeletalMeshUtils.h"
+
+#include <cfloat>
+
 #include "World/ECS/Registry.h"
 
 #include "Core/Math/SIMD/PackHalf.h"

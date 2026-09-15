@@ -445,6 +445,9 @@ namespace Lumina
 
     void FEditorUI::Initialize(const FUpdateContext& UpdateContext)
     {
+        // Before any tool exists, so a reinstance during startup still finds this holder.
+        FObjectReferenceProviders::Register(this);
+
         ImGuiContext* Context = Render().GetImGuiRenderer()->GetImGuiContext();
         ImPlotContext* PlotContext = Render().GetImGuiRenderer()->GetImPlotContext();
         ImGui::SetCurrentContext(Context);
@@ -614,6 +617,8 @@ namespace Lumina
 
     void FEditorUI::Deinitialize(const FUpdateContext& UpdateContext)
     {
+        FObjectReferenceProviders::Unregister(this);
+
         if (AssetDataChangedHandle.IsValid())
         {
             AssetEvents::OnAssetDataChanged().Remove(AssetDataChangedHandle);
@@ -753,7 +758,7 @@ namespace Lumina
             LaunchTracyProfiler();
         }
 
-        // The chord is rebindable in Editor Settings, General, Hotkeys, defaulting to Ctrl+Shift+R.
+        // The chord is rebindable in Editor Settings, General, Hotkeys.
         {
             // EKey holds GLFW keycodes, which run contiguously, so they map onto ImGuiKey ranges by offset.
             auto EKeyToImGuiKey = [](EKey Key) -> ImGuiKey
@@ -1422,6 +1427,137 @@ namespace Lumina
 
         const auto Itr = ActiveAssetTools.find(Asset);
         return Itr != ActiveAssetTools.end() ? Itr->second : nullptr;
+    }
+
+    void FEditorUI::ForEachTab(const TFunction<void(const FTabInfo&)>& Functor) const
+    {
+        for (FEditorTool* Tool : EditorTools)
+        {
+            if (Tool == nullptr)
+            {
+                continue;
+            }
+
+            FTabInfo Info;
+            Info.Name      = FString(Tool->GetToolName().c_str());
+            Info.bUnsaved  = Tool->IsUnsavedDocument();
+            Info.bFocused  = Tool == LastActiveTool;
+            Info.bClosable = CanCloseTool(Tool);
+
+            // The window name carries an icon glyph, so the id after ### is what a caller can retype.
+            const size_t Hash = Info.Name.find("###");
+            Info.Id = Hash == FString::npos ? Info.Name : Info.Name.substr(Hash + 3);
+
+            for (const auto& Pair : ActiveAssetTools)
+            {
+                if (Pair.second == Tool && Pair.first != nullptr)
+                {
+                    Info.AssetGuid = FString(Pair.first->GetGUID().ToString().c_str());
+                    break;
+                }
+            }
+
+            Functor(Info);
+        }
+    }
+
+    FEditorTool* FEditorUI::FindTab(FStringView Name, FString& OutError) const
+    {
+        const auto Lower = [](char Character)
+        {
+            return (Character >= 'A' && Character <= 'Z') ? static_cast<char>(Character - 'A' + 'a') : Character;
+        };
+
+        const auto ContainsFold = [&Lower](FStringView Haystack, FStringView Needle)
+        {
+            for (size_t Start = 0; Start + Needle.size() <= Haystack.size(); ++Start)
+            {
+                bool bMatches = true;
+                for (size_t Index = 0; Index < Needle.size() && bMatches; ++Index)
+                {
+                    bMatches = Lower(Haystack[Start + Index]) == Lower(Needle[Index]);
+                }
+
+                if (bMatches)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+
+        FEditorTool* Partial = nullptr;
+        int32 PartialCount = 0;
+
+        for (FEditorTool* Tool : EditorTools)
+        {
+            if (Tool == nullptr)
+            {
+                continue;
+            }
+
+            const FStringView Full(Tool->GetToolName().c_str());
+            const size_t Hash = Full.find("###");
+            const FStringView Id = Hash == FStringView::npos ? FStringView() : Full.substr(Hash + 3);
+
+            if (Full == Name || (!Id.empty() && Id == Name))
+            {
+                return Tool;
+            }
+
+            if (!Name.empty() && ContainsFold(Full, Name))
+            {
+                Partial = Tool;
+                ++PartialCount;
+            }
+        }
+
+        if (PartialCount == 1)
+        {
+            return Partial;
+        }
+
+        OutError = PartialCount == 0
+            ? Lumina::Format("No tab is named '{}'.", Name)
+            : Lumina::Format("'{}' matches {} tabs; use the id from the tab list.", Name, PartialCount);
+        return nullptr;
+    }
+
+    bool FEditorUI::FocusTab(FStringView Name, FString& OutError)
+    {
+        FEditorTool* Tool = FindTab(Name, OutError);
+        if (Tool == nullptr)
+        {
+            return false;
+        }
+
+        FocusTargetWindowName = FString(Tool->GetToolName().c_str());
+        return true;
+    }
+
+    bool FEditorUI::CloseTab(FStringView Name, bool bDiscardUnsaved, FString& OutError)
+    {
+        FEditorTool* Tool = FindTab(Name, OutError);
+        if (Tool == nullptr)
+        {
+            return false;
+        }
+
+        if (!CanCloseTool(Tool))
+        {
+            OutError = Lumina::Format("'{}' cannot be closed.", Name);
+            return false;
+        }
+
+        if (Tool->IsUnsavedDocument() && !bDiscardUnsaved)
+        {
+            OutError = Lumina::Format("'{}' has unsaved changes. Save it, or pass bDiscardUnsaved.", Name);
+            return false;
+        }
+
+        RequestCloseTool(Tool);
+        return true;
     }
 
     void FEditorUI::OpenAssetEditor(const FGuid& AssetGUID)
@@ -2492,15 +2628,20 @@ namespace Lumina
                         {
                             ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 
+                            // Null once ReclaimIdleRenderer has freed it out from under a still-drawn tool.
                             IRenderScene* SceneRenderer = Tool->GetWorld()->GetRenderer();
 
-                            // ImGui works in physical pixels here, so the content region is already the right unit.
-                            const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
-                            SceneRenderer->SetPrimaryViewSize(FUIntVector2(
-                                (uint32)Math::Max(ViewportAvail.x, 64.0f),
-                                (uint32)Math::Max(ViewportAvail.y, 64.0f)));
+                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(~0u);
+                            if (SceneRenderer != nullptr)
+                            {
+                                // ImGui works in physical pixels here, so the content region is already the right unit.
+                                const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
+                                SceneRenderer->SetPrimaryViewSize(FUIntVector2(
+                                    (uint32)Math::Max(ViewportAvail.x, 64.0f),
+                                    (uint32)Math::Max(ViewportAvail.y, 64.0f)));
 
-                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                                ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                            }
 
                             Tool->bViewportFocused = ImGui::IsWindowFocused();
                             Tool->bViewportHovered = ImGui::IsWindowHovered();
@@ -2520,15 +2661,20 @@ namespace Lumina
 
                         if (DrawViewportWindow)
                         {
+                            // Null once ReclaimIdleRenderer has freed it out from under a still-drawn tool.
                             IRenderScene* SceneRenderer = Tool->GetWorld()->GetRenderer();
 
-                            // ImGui works in physical pixels here, so the content region is already the right unit.
-                            const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
-                            SceneRenderer->SetPrimaryViewSize(FUIntVector2(
-                                (uint32)Math::Max(ViewportAvail.x, 64.0f),
-                                (uint32)Math::Max(ViewportAvail.y, 64.0f)));
+                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(~0u);
+                            if (SceneRenderer != nullptr)
+                            {
+                                // ImGui works in physical pixels here, so the content region is already the right unit.
+                                const ImVec2 ViewportAvail = ImGui::GetContentRegionAvail();
+                                SceneRenderer->SetPrimaryViewSize(FUIntVector2(
+                                    (uint32)Math::Max(ViewportAvail.x, 64.0f),
+                                    (uint32)Math::Max(ViewportAvail.y, 64.0f)));
 
-                            ImTextureRef ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                                ViewportTexture = ImGuiX::ToImTextureRef(SceneRenderer->GetDisplayResourceID());
+                            }
 
                             Tool->bViewportFocused = ImGui::IsWindowFocused();
                             Tool->bViewportHovered = ImGui::IsWindowHovered();
@@ -3364,7 +3510,9 @@ namespace Lumina
 
         ImGui::Separator();
 
-        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", "Shift+F11"))
+        // Read from the binding rather than written out, so rebinding the chord relabels the menu with it.
+        const FString ReloadChord = GetDefault<CEditorSettings>()->ReloadScriptsHotkey.GetDisplayName();
+        if (ImGui::MenuItem(LE_ICON_LANGUAGE_CSHARP " Recompile C# Assemblies", ReloadChord.c_str()))
         {
             DotNet::RequestScriptReload();
         }
@@ -4068,6 +4216,30 @@ namespace Lumina
         }
 
         return false;
+    }
+
+    void FEditorUI::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+    {
+        for (FEditorTool* Tool : EditorTools)
+        {
+            if (Tool != nullptr)
+            {
+                Tool->VisitObjectReferences(Func);
+            }
+        }
+
+        // Keyed by the asset, so a repointed key is a rebuilt table: written in place it would sit in the
+        // bucket its old hash chose and the tool would never be found for that asset again.
+        THashMap<CObject*, FEditorTool*> Rebuilt;
+        Rebuilt.reserve(ActiveAssetTools.size());
+        for (const auto& [Asset, Tool] : ActiveAssetTools)
+        {
+            if (CObject* const Replacement = Func(Asset))
+            {
+                Rebuilt.insert_or_assign(Replacement, Tool);
+            }
+        }
+        ActiveAssetTools = Move(Rebuilt);
     }
 
     void FEditorUI::OnProjectLoaded()

@@ -23,6 +23,12 @@ namespace Lumina
         
         void CompileGraph(FMaterialCompiler& Compiler);
 
+        // Stamps the compiler's findings onto the nodes that raised them, driving their in-graph status.
+        void ApplyDiagnosticsToNodes(const FMaterialCompiler& Compiler);
+
+        // Adds the declared and actually-received types, which is what a mismatch error is about.
+        void DrawPinTooltip(CEdNodeGraphPin* Pin) override;
+
         void ValidateGraph() override;
 
         // Hold-and-click quick-place: 1..4 -> ConstantFloat..Float4, 5 Time, 6 WorldPos, 7 TexCoords,

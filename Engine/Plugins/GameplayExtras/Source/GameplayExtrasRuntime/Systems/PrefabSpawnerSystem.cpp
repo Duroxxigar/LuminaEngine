@@ -1,4 +1,4 @@
-﻿#include "PrefabSpawnerSystem.h"
+#include "PrefabSpawnerSystem.h"
 
 #include "Assets/AssetTypes/Prefabs/Prefab.h"
 #include "World/ECS/Registry.h"
@@ -33,10 +33,15 @@ namespace Lumina
     }
 
     // Instantiate does structural changes and fires construct hooks no declaration can describe.
-    FSystemAccess SPrefabSpawnerSystem::Access = FSystemAccess::Exclusive();
-
-    void SPrefabSpawnerSystem::Startup(const FSystemContext& Context) noexcept
+    void SPrefabSpawnerSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::FrameStart, EUpdatePriority::Low);
+    }
+
+    void SPrefabSpawnerSystem::OnStartup()
+    {
+        const FSystemContext& Context = GetContext();
+
         if (Context.GetWorldType() == EWorldType::Editor)
         {
             return;
@@ -66,8 +71,10 @@ namespace Lumina
         }
     }
 
-    void SPrefabSpawnerSystem::Update(const FSystemContext& Context) noexcept
+    void SPrefabSpawnerSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         const float DeltaTime = static_cast<float>(Context.GetDeltaTime());
 
         ECS::FRegistry& Registry = Context.GetRegistry();
@@ -121,7 +128,7 @@ namespace Lumina
         }
     }
 
-    void SPrefabSpawnerSystem::Teardown(const FSystemContext& Context) noexcept
+    void SPrefabSpawnerSystem::OnTeardown()
     {
     }
 }

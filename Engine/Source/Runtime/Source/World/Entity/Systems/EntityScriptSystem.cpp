@@ -58,8 +58,16 @@ namespace Lumina
         }
     }
 
-    void SEntityScriptSystem::Update(const FSystemContext& Context) noexcept
+    void SEntityScriptSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics);
+        RequireUpdate(EUpdateStage::PostPhysics);
+    }
+
+    void SEntityScriptSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = Context.GetRegistry();

@@ -11,16 +11,34 @@ struct PSInput
     nointerpolation uint DrawIndex : TEXCOORD1;
 };
 
+float StopPosition(uint Index)
+{
+    if (!SpanContains(&Pass().Stops, Index))
+    {
+        return 0.0;
+    }
+    return SpanAt(&Pass().Stops, Index).Position.x;
+}
+
+float4 StopColor(uint Index)
+{
+    if (!SpanContains(&Pass().Stops, Index))
+    {
+        return float4(0.0);
+    }
+    return loadAligned<16>(&SpanAt(&Pass().Stops, Index).Color);
+}
+
 // Progressive lerp with a saturated segment weight: stops before the one containing T resolve to
 // weight 1, stops after to 0, so this is an exact piecewise-linear ramp, not an approximation.
 float4 SampleColorStops(FUiDraw Draw, float T)
 {
-    FUiColorStop* Stops = Pass().Stops;
+
     const uint Base  = Draw.StopOffset;
     const uint Count = Draw.StopCount;
 
-    const float First = Stops[Base].Position.x;
-    const float Last  = Stops[Base + Count - 1u].Position.x;
+    const float First = StopPosition(Base);
+    const float Last  = StopPosition(Base + Count - 1u);
 
     if (Draw.bRepeating != 0u && Last > First)
     {
@@ -28,13 +46,13 @@ float4 SampleColorStops(FUiDraw Draw, float T)
         T = First + (T - First) - Span * floor((T - First) / Span);
     }
 
-    float4 Colour = Stops[Base].Color;
+    float4 Colour = StopColor(Base);
     for (uint i = 1u; i < Count; ++i)
     {
-        const float P0 = Stops[Base + i - 1u].Position.x;
-        const float P1 = Stops[Base + i].Position.x;
+        const float P0 = StopPosition(Base + i - 1u);
+        const float P1 = StopPosition(Base + i);
         const float W  = (P1 > P0) ? saturate((T - P0) / (P1 - P0)) : step(P1, T);
-        Colour = lerp(Colour, Stops[Base + i].Color, W);
+        Colour = lerp(Colour, StopColor(Base + i), W);
     }
     return Colour;
 }
@@ -83,7 +101,7 @@ float ClipMaskCoverage(FUiDraw Draw, float2 FragCoord)
     float Coverage = 1.0;
     for (uint i = 0u; i < Count; ++i)
     {
-        FUiClipMask Mask = Pass().ClipMasks[Offset + i];
+        FUiClipMask Mask = SpanGet(&Pass().ClipMasks, Offset + i);
         float Distance   = SdRoundedBox(UiClipLocal(Mask, FragCoord) - Mask.Rect.xy, Mask.Rect.zw, Mask.Radii);
 
         // Distance is in mask space, so the screen-space derivative still converts it into target pixels.
@@ -97,7 +115,7 @@ float ClipMaskCoverage(FUiDraw Draw, float2 FragCoord)
 [shader("fragment")]
 float4 FragmentMain(PSInput Input) : SV_Target0
 {
-    FUiDraw Draw = Pass().Draws[Input.DrawIndex];
+    FUiDraw Draw = SpanGet(&Pass().Draws, Input.DrawIndex);
 
     // Ahead of any discard, because killing a lane leaves the quad's derivatives undefined.
     float Coverage = ClipMaskCoverage(Draw, Input.Position.xy);

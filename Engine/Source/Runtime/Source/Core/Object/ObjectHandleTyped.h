@@ -53,14 +53,20 @@ namespace Lumina
             }
         }
 
+        // Takes the pair by value so an assignment can drop its old reference after adopting the new one.
+        static void ReleaseRef(T* InObject, FCObjectEntry* InEntry)
+        {
+            if (InEntry != nullptr)
+            {
+                GObjectArray.ReleaseStrongRefEntry(InEntry, (const CObjectBase*)InObject);
+            }
+        }
+
         void ReleaseInternal()
         {
-            if (Entry != nullptr)
-            {
-                GObjectArray.ReleaseStrongRefEntry(Entry, (const CObjectBase*)Object);
-                Entry = nullptr;
-            }
+            ReleaseRef(Object, Entry);
             Object = nullptr;
+            Entry  = nullptr;
         }
 
     public:
@@ -94,12 +100,15 @@ namespace Lumina
             ReleaseInternal();
         }
 
+        // Releasing first would destroy the owner the source lives inside, so the new reference is taken first.
         TObjectPtr& operator=(const TObjectPtr& Other)
         {
             if (this != &Other)
             {
-                ReleaseInternal();
+                T* const             OldObject = Object;
+                FCObjectEntry* const OldEntry  = Entry;
                 AdoptInternal(Other.Object, Other.Entry);
+                ReleaseRef(OldObject, OldEntry);
             }
             return *this;
         }
@@ -108,11 +117,13 @@ namespace Lumina
         {
             if (this != &Other)
             {
-                ReleaseInternal();
+                T* const             OldObject = Object;
+                FCObjectEntry* const OldEntry  = Entry;
                 Object = Other.Object;
                 Entry  = Other.Entry;
                 Other.Object = nullptr;
                 Other.Entry  = nullptr;
+                ReleaseRef(OldObject, OldEntry);
             }
             return *this;
         }
@@ -121,8 +132,10 @@ namespace Lumina
         {
             if (Object != InObject)
             {
-                ReleaseInternal();
+                T* const             OldObject = Object;
+                FCObjectEntry* const OldEntry  = Entry;
                 AcquireInternal(InObject);
+                ReleaseRef(OldObject, OldEntry);
             }
             return *this;
         }

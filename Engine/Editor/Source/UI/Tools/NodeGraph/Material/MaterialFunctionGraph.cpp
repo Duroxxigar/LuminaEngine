@@ -23,6 +23,7 @@ namespace Lumina
         for (CEdGraphNode* Node : Nodes)
         {
             Node->ClearError();
+            Node->ClearWarning();
         }
 
         // Walks from every output node, so a branch feeding another output is still validated.
@@ -39,6 +40,7 @@ namespace Lumina
             Error.Description  = "Cycle detected in material function graph! Graph must be acyclic!";
             Error.Node        = CyclicNode;
             Compiler.AddError(Error);
+            ApplyDiagnosticsToNodes(Compiler);
             return;
         }
 
@@ -58,12 +60,6 @@ namespace Lumina
             static_cast<CMaterialGraphNode*>(Node)->GenerateDefinition(Compiler);
         }
 
-        for (auto& Error : Compiler.GetErrors())
-        {
-            if (Error.Node)
-            {
-                Error.Node->SetError(Error);
-            }
-        }
+        ApplyDiagnosticsToNodes(Compiler);
     }
 }

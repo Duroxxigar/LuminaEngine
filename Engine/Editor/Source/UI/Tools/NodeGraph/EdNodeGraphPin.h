@@ -43,6 +43,9 @@ namespace Lumina
         void SetHideDuringConnection(bool bHide) { bHidePinDuringConnection = bHide; }
         
         virtual uint32 GetPinColor() const { return PinColor; }
+
+        // Shader type this pin carries ("float2", ...); empty for graphs whose pins are untyped.
+        virtual FString GetPinTypeName() const { return FString(); }
         void SetPinColor(uint32 Color) { PinColor = Color;}
                 
         void AddConnection(CEdNodeGraphPin* Pin) { Connections.push_back(Pin); }

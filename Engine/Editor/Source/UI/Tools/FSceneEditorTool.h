@@ -102,6 +102,12 @@ namespace Lumina
         // The same for an edit that only adds entities, which records far less than a full snapshot.
         void RunCreationTransacted(FName Label, const TFunction<void()>& Mutate);
 
+        // The same for an edit that destroys Doomed, recording only what those entities reach.
+        void RunDestroyTransacted(FName Label, const TVector<ECS::FEntity>& Doomed, const TFunction<void()>& Mutate);
+
+        // Removes one component as its own undo step, recording only that component type on that entity.
+        void RemoveComponentTransacted(FName Label, ECS::FEntity Entity, CStruct* ComponentType);
+
     protected:
 
 

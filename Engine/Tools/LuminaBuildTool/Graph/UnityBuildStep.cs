@@ -81,8 +81,7 @@ public static class UnityBuildStep
                 Adaptive.WorkingSet.Count);
         }
 
-        // Packed before the working set is applied, so holding a file out punches a hole in one blob
-        // rather than shifting every file after it across a boundary and rewriting the lot.
+        // Packed before the working set applies, so holding a file out punches a hole rather than shifting every later file.
         List<List<FileItem>> Groups = GroupByByteBudget(Mergeable, Math.Max(1024, Target.Rules.UnityBuildBytesPerFile));
 
         for (int Index = 0; Index < Groups.Count; Index++)
@@ -121,8 +120,7 @@ public static class UnityBuildStep
 
             FileItem Blob = FileItem.Get(BlobPath);
 
-            // Declared, not left to the header scan: no dependency file exists on a first compile, and the blob's
-            // timestamp only moves when its membership changes.
+            // Declared rather than left to the header scan, since no dependency file exists on a first compile.
             Module.SubsumedSourceFiles[Blob.Location] = Groups[Index];
             Blobs.Add(Blob);
         }
@@ -156,7 +154,7 @@ public static class UnityBuildStep
     /// <summary>Whether a source has to keep its own translation unit, and why.</summary>
     private static bool MustCompileAlone(BuildModule Module, FileItem Source, out string Reason)
     {
-        // Merging would drop the flags and miscompile: the fiber scheduler needs /GT on exactly one file.
+        // Merging would drop the flags and miscompile, since the fiber scheduler needs /GT on exactly one file.
         if (Module.Rules.PerFileCompilerOptions.ContainsKey(Source.Name))
         {
             Reason = "has per-file compiler options";
@@ -197,8 +195,7 @@ public static class UnityBuildStep
 
         foreach (FileItem Source in Sources)
         {
-            // A file larger than the whole budget still lands somewhere; it simply gets a blob of
-            // its own rather than being split, which is not something a unity build can do.
+            // A file larger than the whole budget still lands somewhere, simply getting a blob of its own rather than split.
             if (Current.Count > 0 && CurrentBytes + Source.Length > BytesPerBlob)
             {
                 Groups.Add(Current);
@@ -233,8 +230,7 @@ public static class UnityBuildStep
 
         foreach (FileItem Member in Members)
         {
-            // Forward slashes because the path sits inside a C++ string literal, where a Windows
-            // separator would read as an escape sequence.
+            // Forward slashes because the path sits inside a C++ string literal, where a separator would read as an escape.
             Text.AppendLine($"#include \"{Member.Location.Replace('\\', '/')}\"");
         }
 

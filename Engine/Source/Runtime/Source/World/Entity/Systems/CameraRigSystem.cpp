@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "CameraRigSystem.h"
 #include "World/ECS/Registry.h"
 #include "Core/Math/Math.h"
@@ -15,9 +15,12 @@
 namespace Lumina
 {
     // SetEntityWorldTransform reads FRelationshipComponent, and CastSphere reads the physics scene.
-    FSystemAccess SCameraRigSystem::Access = FSystemAccess{}
-        .Write<STransformComponent, SCameraFollowComponent, SSpringArmComponent>()
-        .Read<SystemResource::PhysicsQuery, FRelationshipComponent>();
+    void SCameraRigSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::FrameEnd, EUpdatePriority::Medium);
+        Writes<STransformComponent, SCameraFollowComponent, SSpringArmComponent>();
+        Reads<SystemResource::PhysicsQuery, FRelationshipComponent>();
+    }
 
     namespace Detail
     {
@@ -59,8 +62,10 @@ namespace Lumina
         }
     }
 
-    void SCameraRigSystem::Update(const FSystemContext& Context) noexcept
+    void SCameraRigSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = Context.GetRegistry();

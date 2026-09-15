@@ -7,8 +7,15 @@
 
 namespace Lumina
 {
-    void SSequencerSystem::Update(const FSystemContext& SystemContext) noexcept
+    void SSequencerSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics, EUpdatePriority::High);
+    }
+
+    void SSequencerSystem::OnUpdate()
+    {
+        const FSystemContext& SystemContext = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         CWorld* World = SystemContext.GetWorld();

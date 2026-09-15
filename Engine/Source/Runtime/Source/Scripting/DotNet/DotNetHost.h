@@ -1,18 +1,17 @@
-﻿#pragma once
+#pragma once
+
+#include "Scripting/ManagedTypeRegistry.h"
 
 #include "Containers/Vector.h"
 #include "Containers/String.h"
 #include "Platform/GenericPlatform.h"
-#include "Core/UpdateStage.h"
 
 namespace Lumina
 {
-    struct FSystemContext;
     struct FInputActionState;
     class CObject;
     class CScriptStruct;
     class CWorld;
-    enum class EUpdateStage : uint8;
     namespace Scripting { struct FScriptExportSchema; struct FScriptPropertyEntry; struct FScriptButton; }
 }
 
@@ -25,8 +24,8 @@ namespace Lumina::DotNet
     // v5: native->managed exports resolved by name (ResolveManagedExport) instead of a mirrored struct/hash.
     // v6: managed system-descriptor sink carries declared read/write component-ops tokens (parallel C# systems).
     // v7: delegate properties replace hardcoded collision/perception dispatch; adds OnNativeDelegateDestroyed.
-    // v8: managed RenderScene bridge (C# world renderers via RenderSceneFactory).
-    inline constexpr int32 GAbiVersion = 11;
+    // v13 dropped the C# entity system bridge, since a C# system is now a CEntitySystem subclass.
+    inline constexpr int32 GAbiVersion = 13;
 
     // Boots the embedded runtime and runs the managed handshake.
     RUNTIME_API void Initialize();
@@ -47,7 +46,18 @@ namespace Lumina::DotNet
     // Latches a reload for the next frame start, since a reload destroys objects the frame may be using.
     RUNTIME_API void RequestScriptReload();
 
-    // Services a latched request. Called from the engine's frame start, never from inside a draw.
+    /**
+     * Reports that a file under a watched source tree changed, and latches a reload if it was one of ours.
+     *
+     * Owns both halves of the policy a caller would otherwise hard-code: which extensions are script sources,
+     * and how long to wait for the burst to end. A single edit reaches an editor as several inotify events,
+     * and a tool that writes a tree produces a great many, so the request is held open for a quiet period
+     * rather than fired per event. Thread-safe: watcher threads call this directly.
+     */
+    RUNTIME_API void NotifyScriptSourceChanged(FStringView Path);
+
+    // Services a latched request once its quiet period has elapsed. Called from the engine's frame start,
+    // never from inside a draw.
     RUNTIME_API void ProcessPendingScriptReload();
 
     // Cooked-game variant of ReloadScripts: loads the prebuilt script DLLs the packager staged under
@@ -77,6 +87,47 @@ namespace Lumina::DotNet
     // plugin's scripts) change per generation, so a caller that holds one must re-resolve when
     // GetScriptGeneration() changes (its pointer dangles once the old generation unloads). Game thread only.
     RUNTIME_API void* ResolveManagedExport(FStringView Name);
+
+    /**
+     * One managed engine export, named where it is used and resolved on first call.
+     *
+     * The alternative -- and what the host used to do for every export -- is a field in one central struct
+     * plus a typedef plus a line in a bootstrap resolve block, so a subsystem could not add a managed entry
+     * point without editing the host. Declaring the export beside its caller costs one line and nothing in
+     * the host at all.
+     *
+     * Only for exports in LuminaSharp.dll, which is loaded for the life of the process, so a resolved pointer
+     * stays valid across script reloads. A SCRIPT assembly's export dies with its generation and must be
+     * resolved per use instead of held here.
+     */
+    template<typename TSignature>
+    class TManagedExport
+    {
+    public:
+
+        explicit TManagedExport(const char* InName)
+            : Name(InName)
+        {}
+
+        /** Null until the host is up, and retried until it resolves, so declaration order does not matter. */
+        TSignature Get() const
+        {
+            if (Pointer == nullptr)
+            {
+                Pointer = reinterpret_cast<TSignature>(ResolveManagedExport(Name));
+            }
+            return Pointer;
+        }
+
+        explicit operator bool() const { return Get() != nullptr; }
+
+        const char* GetName() const { return Name; }
+
+    private:
+
+        const char*        Name;
+        mutable TSignature Pointer = nullptr;
+    };
 
     //~ C# runtime diagnostics
     struct FScriptDiagnostics
@@ -124,7 +175,9 @@ namespace Lumina::DotNet
         FString NativeBaseName;
         // Which ScriptEvents the C# subclass overrides. Type-uniform, so it is carried on the minted CClass
         // rather than per instance (CClass::ScriptOverrides); bit i == the wrapper's [ScriptEvent(i)].
-        uint64  OverrideFlags = 0;
+        /** Names of the ScriptEvents this type overrides. A list rather than a mask: an override is found
+         *  by name like any other function, so there is no index to agree on and no ceiling to hit. */
+        TVector<FString> OverriddenEvents;
         // EScriptUpdatePhase from the class's [UpdatePhase]; type-uniform, so it rides on the minted CClass.
         uint8   UpdatePhase = 0;
     };
@@ -155,6 +208,9 @@ namespace Lumina::DotNet
     };
 
     // Reports every loaded C# data type + its native base. Drives CScriptStruct minting + the editor pickers.
+    /** One crossing per type for everything the reload stages need, so no stage gathers for itself. */
+    RUNTIME_API void GatherManagedTypeDefinitions(TVector<Scripting::FManagedTypeDefinition>& Out);
+
     RUNTIME_API void GatherScriptStructTypes(TVector<FScriptStructTypeDesc>& Out);
 
     // Reads one data type's member schema, addressed by StableId. False when the type is unknown.
@@ -171,50 +227,6 @@ namespace Lumina::DotNet
      *  mint, after the CDO exists; every instance is then copied from it. */
     RUNTIME_API void ApplyScriptableDefaults(FStringView TypeName, void* DefaultObject);
 
-    struct FManagedSystemDesc
-    {
-        FString         TypeName;
-        EUpdateStage    Stage = EUpdateStage::PrePhysics;
-        int32           Priority = 128;
-        TVector<uint32> Writes;   // Component type ids written (empty => exclusive system)
-        TVector<uint32> Reads;    // Component type ids read
-    };
-
-    RUNTIME_API void GatherManagedSystemDescs(TVector<FManagedSystemDesc>& Out);
-
-
-    RUNTIME_API void* CreateManagedSystem(FStringView TypeName, uint64 World);
-
-    RUNTIME_API void StartupManagedSystem(void* Handle, const FSystemContext* Context);
-
-    RUNTIME_API void DestroyManagedSystem(void* Handle);
-
-    RUNTIME_API void TickManagedSystem(void* Handle, const FSystemContext* Context);
-
-    //~ Managed RenderScene bridge: a C# subclass of LuminaSharp's RenderScene drives a world's rendering
-    //  through the FManagedRenderScene proxy (see ManagedRenderScene.h). Create runs the managed ctor +
-    //  OnInit; Destroy runs OnShutdown and frees the GCHandle. Extract/GetExtent run on the game thread,
-    //  Render/GetDisplayTexture during the render phase (the CLR attaches threads on demand).
-
-    RUNTIME_API void GatherManagedRenderSceneTypes(TVector<FString>& Out);
-
-    RUNTIME_API void* CreateManagedRenderScene(FStringView TypeName, uint64 World);
-
-    RUNTIME_API void DestroyManagedRenderScene(void* Handle);
-
-    // View is a const FManagedSceneView* (blittable camera snapshot, see ManagedRenderScene.h).
-    RUNTIME_API void ManagedRenderSceneExtract(void* Handle, const void* View);
-
-    RUNTIME_API void ManagedRenderSceneRender(void* Handle, int32 FrameIndex);
-
-    RUNTIME_API void ManagedRenderSceneResize(void* Handle, uint32 Width, uint32 Height);
-
-    RUNTIME_API uint64 ManagedRenderSceneGetDisplayTexture(void* Handle);
-
-    RUNTIME_API uint32 ManagedRenderSceneGetDisplayResourceID(void* Handle);
-
-    RUNTIME_API void ManagedRenderSceneGetExtent(void* Handle, uint32* OutWidth, uint32* OutHeight);
-
     // Feeds a script's InputAction / InputAxis bindings this frame's evaluated action states. No-op for a
     // C++ script, which has no managed instance. States points into the owning FInputContext.
     RUNTIME_API void PollScriptInput(CObject* Script, const FInputActionState* States, int32 Count, uint32 Serial,
@@ -224,12 +236,6 @@ namespace Lumina::DotNet
 
     // Builds the [Property] schema + default values for a C# script type; false if the type isn't loaded.
     RUNTIME_API bool GatherScriptSchema(FStringView ScriptClass, Scripting::FScriptExportSchema& OutSchema, TVector<Scripting::FScriptPropertyEntry>& OutDefaults);
-
-    // The minted reflection layout for a C# script type, cached per script generation; null if not loaded.
-    RUNTIME_API const CScriptStruct* GetScriptStruct(FStringView ScriptClass);
-
-    // Resolves a script reference to its current full type name; empty if it resolves to no live type.
-    RUNTIME_API FString ResolveScriptClassName(FStringView ScriptClass);
 
     // Gathers the [Button] methods exposed on a C# script type (via managed reflection). Empty if the type
     // isn't loaded or declares no buttons.

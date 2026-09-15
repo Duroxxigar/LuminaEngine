@@ -38,11 +38,11 @@ namespace Lumina
         }
         else if (!bDynamicBlendSpace && BlendSpace.IsValid() && BlendSpace->Samples.empty())
         {
-            EdNodeGraph::FError Warning;
-            Warning.Name        = "Empty Blend Space";
-            Warning.Description = "Blend Space has no samples; it will evaluate to the bind pose.";
-            Warning.Node        = this;
-            Compiler.AddWarning(Warning);
+            EdNodeGraph::FError NodeWarning;
+            NodeWarning.Name        = "Empty Blend Space";
+            NodeWarning.Description = "Blend Space has no samples; it will evaluate to the bind pose.";
+            NodeWarning.Node        = this;
+            Compiler.AddWarning(NodeWarning);
         }
 
         const uint16 BlendSpaceIndex = bDynamicBlendSpace ? (uint16)BlendSpaceObjectReg

@@ -1838,47 +1838,135 @@ namespace Lumina::Reflection
             // The forwarding shim and its registration, in an anonymous namespace so both stay TU-local.
             Writer.Line("namespace");
             Writer.Line("{");
-            Writer.Linef("    class %s final : public %s", Shim.c_str(), Qualified);
-            Writer.Line("    {");
-            // The managed instance lives in the object's slot and the override mask on the CClass, so this is bare.
-            Writer.Line("    public:");
+
+            // The single crossing per event, so the shim and the reflection adapter share one marshalling.
             for (const FScriptEvent& E : Events)
             {
                 const FFnBinding& FB = E.FB;
                 const std::string& Name = E.Fn->Name;
-                std::string CppParams, BaseArgs, AbiTypes, AbiArgs;
+
+                std::string AbiParams, AbiTypes, AbiArgs;
+                for (size_t i = 0; i < FB.Args.size(); ++i)
+                {
+                    const std::string An = ArgIndexName('A', i);
+                    AbiParams += ", " + SeArgAbiCpp(FB.Args[i]) + " " + An;
+                    AbiTypes  += ", " + SeArgAbiCpp(FB.Args[i]);
+                    AbiArgs   += ", " + An;
+                }
+
+                Writer.Linef("    static %s __ScriptCall_%s_%s(void* __h%s)",
+                    SeRetAbiCpp(FB).c_str(), Friendly.c_str(), Name.c_str(), AbiParams.c_str());
+                Writer.Line("    {");
+                Writer.Linef("        typedef %s (*FThunk)(void*%s);", SeRetAbiCpp(FB).c_str(), AbiTypes.c_str());
+                // Zero-initialized to skip the thread-safe-static guard, and retried so an early miss is not cached.
+                Writer.Line("        static FThunk __t = nullptr;");
+                Writer.Linef("        if (__t == nullptr) { __t = (FThunk)Lumina::DotNet::ResolveManagedExport(\"__ScriptEvent_%s_%s\"); }",
+                    Friendly.c_str(), Name.c_str());
+                if (FB.bVoid)
+                {
+                    Writer.Line("        if (__t == nullptr) { return; }");
+                    Writer.Linef("        __t(__h%s);", AbiArgs.c_str());
+                }
+                else
+                {
+                    Writer.Line("        if (__t == nullptr) { return {}; }");
+                    Writer.Linef("        return __t(__h%s);", AbiArgs.c_str());
+                }
+                Writer.Line("    }");
+            }
+            Writer.Line();
+
+            Writer.Linef("    class %s final : public %s", Shim.c_str(), Qualified);
+            Writer.Line("    {");
+            // The managed instance lives in the object's slot and the override bits on the CClass, so this is bare.
+            Writer.Line("    public:");
+            for (size_t Slot = 0; Slot < Events.size(); ++Slot)
+            {
+                const FScriptEvent& E = Events[Slot];
+                const FFnBinding& FB = E.FB;
+                const std::string& Name = E.Fn->Name;
+                std::string CppParams, BaseArgs, AbiArgs;
                 for (size_t i = 0; i < FB.Args.size(); ++i)
                 {
                     const std::string An = ArgIndexName('A', i);
                     if (i) { CppParams += ", "; BaseArgs += ", "; }
                     CppParams += SeArgCppParam(FB.Args[i]) + " " + An;
                     BaseArgs  += An;
-                    AbiTypes  += ", " + SeArgAbiCpp(FB.Args[i]);
                     AbiArgs   += ", " + SeArgCppToAbi(FB.Args[i], An);
                 }
                 const std::string BaseCall = std::string(Qualified) + "::" + Name + "(" + BaseArgs + ")";
+                const std::string Call = "__ScriptCall_" + Friendly + "_" + Name + "(__h" + AbiArgs + ")";
+
                 Writer.Linef("        virtual %s %s(%s) override", SeRetCpp(FB).c_str(), Name.c_str(), CppParams.c_str());
                 Writer.Line("        {");
-                // The class-level test is one perfectly predicted load, so only then look up the managed instance.
-                Writer.Linef("            if (GetClass()->ScriptOverrides & (1ull << %d))", E.Index);
+                // A null covers both an unoverridden event and a declared one whose managed side is absent.
+                Writer.Linef("            if (void* __h = Lumina::Scriptable::GetOverrideInstance(this, %d))", (int)Slot);
                 Writer.Line("            {");
-                Writer.Line("                void* __h = Lumina::Scriptable::GetOrCreateInstance(this);");
-                Writer.Linef("                typedef %s (*FThunk)(void*%s);", SeRetAbiCpp(FB).c_str(), AbiTypes.c_str());
-                Writer.Linef("                static FThunk __t = (FThunk)Lumina::DotNet::ResolveManagedExport(\"__ScriptEvent_%s_%s\");", Friendly.c_str(), Name.c_str());
                 if (FB.bVoid)
                 {
-                    Writer.Linef("                if (__h && __t) { __t(__h%s); return; }", AbiArgs.c_str());
+                    Writer.Linef("                %s;", Call.c_str());
+                    Writer.Line("                return;");
                 }
                 else
                 {
-                    const std::string ThunkCall = std::string("__t(__h") + AbiArgs + ")";
-                    Writer.Linef("                if (__h && __t) { return %s; }", SeRetAbiToCpp(FB, ThunkCall).c_str());
+                    Writer.Linef("                return %s;", SeRetAbiToCpp(FB, Call).c_str());
                 }
                 Writer.Line("            }");
                 Writer.Linef("            %s%s;", FB.bVoid ? "" : "return ", BaseCall.c_str());
                 Writer.Line("        }");
             }
             Writer.Line("    };");
+
+            // One per event, for a caller arriving through the reflection system rather than the shim.
+            for (const FScriptEvent& E : Events)
+            {
+                const FFnBinding& FB = E.FB;
+                const std::string& Name = E.Fn->Name;
+                const std::string Parms = Names::FunctionParmsStruct(Type.DisplayName, Name);
+                const std::string QualifiedParms = Type.Namespace.empty() ? Parms : (Type.Namespace + "::" + Parms);
+
+                std::string AbiArgs;
+                for (size_t i = 0; i < FB.Args.size(); ++i)
+                {
+                    AbiArgs += ", " + SeArgCppToAbi(FB.Args[i], "__p." + E.Fn->Arguments[i].Name);
+                }
+                const std::string Call = "__ScriptCall_" + Friendly + "_" + Name + "(__h" + AbiArgs + ")";
+
+                Writer.Linef("    static void __ScriptDispatch_%s_%s(const Lumina::FFunction&, void* Context, void* Frame)",
+                    Friendly.c_str(), Name.c_str());
+                Writer.Line("    {");
+                if (FB.Args.empty() && FB.bVoid)
+                {
+                    Writer.Line("        (void)Frame;");
+                }
+                else
+                {
+                    Writer.Linef("        %s& __p = *(%s*)Frame;", QualifiedParms.c_str(), QualifiedParms.c_str());
+                }
+                Writer.Line("        void* __h = Lumina::Scriptable::GetOrCreateInstance((Lumina::CObject*)Context);");
+                Writer.Line("        if (__h == nullptr) { return; }");
+                if (FB.bVoid)
+                {
+                    Writer.Linef("        %s;", Call.c_str());
+                }
+                else
+                {
+                    const bool bObjectReturn = E.Fn->ReturnIndex >= 0
+                        && (size_t)E.Fn->ReturnIndex < E.Fn->ParameterObjectCastTypes.size()
+                        && !E.Fn->ParameterObjectCastTypes[E.Fn->ReturnIndex].empty();
+                    if (bObjectReturn)
+                    {
+                        Writer.Linef("        __p.ReturnValue = (Lumina::CObject*)%s;", Call.c_str());
+                    }
+                    else
+                    {
+                        Writer.Linef("        __p.ReturnValue = %s;", SeRetAbiToCpp(FB, Call).c_str());
+                    }
+                }
+                Writer.Line("    }");
+            }
+            Writer.Line();
+
             Writer.Linef("    struct __ScriptableReg_%s", Friendly.c_str());
             Writer.Line("    {");
             Writer.Linef("        __ScriptableReg_%s()", Friendly.c_str());
@@ -1888,6 +1976,11 @@ namespace Lumina::Reflection
             Writer.Linef("            __I.Factory = [](void* __m) -> Lumina::CObject* { return Lumina::Memory::ConstructAt(static_cast<%s*>(__m)); };", Shim.c_str());
             Writer.Linef("            __I.ShimSize = (uint32)sizeof(%s);", Shim.c_str());
             Writer.Linef("            __I.ShimAlign = (uint32)alignof(%s);", Shim.c_str());
+            for (const FScriptEvent& E : Events)
+            {
+                Writer.Linef("            __I.EventThunks.push_back({ \"%s\", &__ScriptDispatch_%s_%s });",
+                    E.Fn->Name.c_str(), Friendly.c_str(), E.Fn->Name.c_str());
+            }
             Writer.Linef("            Lumina::FScriptableRegistry::RegisterNative(\"%s\", __I);", Type.DisplayName.c_str());
             Writer.Line("        }");
             Writer.Line("    };");

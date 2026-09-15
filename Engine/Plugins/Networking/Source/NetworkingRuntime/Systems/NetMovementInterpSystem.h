@@ -11,16 +11,14 @@ namespace Lumina
     // sees the step that just ran and Kinematic proxy bodies follow the next one. Separate
     // from SNetworkSystem because that system is exclusive (transport pump, Lua, structural spawn/destroy);
     // this one declares a disjoint write set so the scheduler can overlap it.
-    REFLECT(System)
-    struct NETWORKINGRUNTIME_API SNetMovementInterpSystem
+    REFLECT()
+    class NETWORKINGRUNTIME_API SNetMovementInterpSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PostPhysics, EUpdatePriority::High))
-
     public:
 
-        static FSystemAccess Access;
+        void Configure() override;
 
-        static void Update(const FSystemContext& Context) noexcept;
+        void OnUpdate() override;
     };
 }

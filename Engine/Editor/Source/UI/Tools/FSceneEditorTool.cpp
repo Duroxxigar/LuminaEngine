@@ -2040,6 +2040,33 @@ namespace Lumina
         bDetailsDirty = true;
     }
 
+    void FSceneEditorTool::RunDestroyTransacted(FName Label, const TVector<ECS::FEntity>& Doomed,
+        const TFunction<void()>& Mutate)
+    {
+        if (!Mutate)
+        {
+            return;
+        }
+
+        BeginDestroyTransaction(Doomed);
+        Mutate();
+        EndTransaction(Label);
+
+        MarkSceneDirty();
+        OutlinerListView.MarkTreeDirty();
+        bDetailsDirty = true;
+    }
+
+    void FSceneEditorTool::RemoveComponentTransacted(FName Label, ECS::FEntity Entity, CStruct* ComponentType)
+    {
+        BeginComponentTransaction(TVector<ECS::FEntity>{ Entity }, ComponentType);
+        RemoveComponent(Entity, ComponentType);
+        EndTransaction(Label);
+
+        OutlinerListView.MarkTreeDirty();
+        bDetailsDirty = true;
+    }
+
     ECS::FEntity FSceneEditorTool::SpawnEntityTransacted(FName Name, FName TransactionLabel,
         const TFunction<void(ECS::FEntity)>& Decorate)
     {

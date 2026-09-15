@@ -57,6 +57,8 @@ namespace Lumina
         void* (*EmplaceDefault)(ECS::FRegistry&, ECS::FEntity);   // emplace_or_replace a default instance
         void* (*EmplaceSerialized)(ECS::FRegistry&, ECS::FEntity, FArchive&); // read one, then emplace_or_replace
 
+        // Creates the pool up front, so a name keyed access declaration can fill FSystemAccess::PoolAssurers.
+        void (*Assure)(ECS::FRegistry&);
     };
 
     // The ops live on the CStruct; reach them with CStruct::GetComponentOps once you have the type.
@@ -169,6 +171,7 @@ namespace Lumina
                         return &R.EmplaceOrReplace<TComponent>(E, Move(Value));
                     }
                 },
+                +[](ECS::FRegistry& R) { (void)R.GetStorage<TComponent>(); },
             };
             return Ops;
         }

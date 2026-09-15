@@ -7,13 +7,13 @@ namespace Lumina
 {
     // FObjectProperty counterpart for soft refs; Serialize routes through FSoftObjectPath::operator<<
     // so the saver records a Soft ImportTable entry.
-    class FSoftObjectProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FSoftObjectProperty : public FProperty
     {
     public:
         DECLARE_FPROPERTY(EPropertyTypeFlags::SoftObject)
 
-        FSoftObjectProperty(const FFieldOwner& InOwner, const FSoftObjectPropertyParams* Params)
-            : FProperty(InOwner, Params)
+        explicit FSoftObjectProperty(const FSoftObjectPropertyParams* Params)
+            : FProperty(Params)
         {
             ObjectClass = Params->ClassFunc ? Params->ClassFunc() : nullptr;
             // Storage is FSoftObjectPath (path + GUID). TSoftObjectPtr<T> is
@@ -21,8 +21,8 @@ namespace Lumina
             SetElementSize(sizeof(FSoftObjectPath));
         }
 
-        void Serialize(FArchive& Ar, void* Value) override;
-        void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
+        RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
+        RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
 
         // Storage holds an FString; a raw memcpy (base impl) would share the heap buffer between
         // Dst and Src (double-free), and a byte memcmp would compare heap pointers + CachedGUID

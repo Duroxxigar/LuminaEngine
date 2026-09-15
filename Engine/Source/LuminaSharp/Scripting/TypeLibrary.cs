@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -11,9 +11,6 @@ namespace LuminaSharp;
 internal sealed class TypeLibrary
 {
     private readonly Dictionary<string, TypeDescription> EntityScripts = new();
-    private readonly Dictionary<string, Type> EntitySystems = new();
-    // C# world renderers (RenderScene subclasses); native drives one per Game world when present.
-    private readonly Dictionary<string, Type> RenderScenes = new();
     // C# subclasses of REFLECT(Scriptable) native CObjects, keyed by full name; the host mints a CClass per one.
     private readonly Dictionary<string, Type> Scriptables = new();
     // Types carrying a ScriptStructBase marker, keyed by StableId (the simple type name). The host mints a
@@ -42,14 +39,9 @@ internal sealed class TypeLibrary
             {
                 EntityScripts[FullName] = Describe(Type);
             }
-            else if (typeof(EntitySystem).IsAssignableFrom(Type)
-                     && Type.GetCustomAttribute<EntitySystemAttribute>() != null)
+            else if (typeof(EntitySystem).IsAssignableFrom(Type))
             {
-                EntitySystems[FullName] = Type;
-            }
-            else if (typeof(RenderScene).IsAssignableFrom(Type))
-            {
-                RenderScenes[FullName] = Type;
+                ++EntitySystemCount;
             }
 
             // NOT an "else": the roles above describe what a type is FOR, and being a Scriptable is a
@@ -164,23 +156,8 @@ internal sealed class TypeLibrary
         return false;
     }
 
-    /// <summary>Every discovered EntitySystem type (carries [EntitySystem]); for the native scheduler.</summary>
-    public IReadOnlyCollection<Type> EntitySystemTypes => EntitySystems.Values;
-
-    /// <summary>Every discovered RenderScene subclass; native picks one to render Game worlds with.</summary>
-    public IReadOnlyCollection<Type> RenderSceneTypes => RenderScenes.Values;
-
-    /// <summary>A RenderScene type by full name, or null if unknown.</summary>
-    public Type? GetRenderScene(string FullName)
-    {
-        return RenderScenes.TryGetValue(FullName, out Type? Type) ? Type : null;
-    }
-
-    /// <summary>An EntitySystem type by full name, or null if unknown.</summary>
-    public Type? GetEntitySystem(string FullName)
-    {
-        return EntitySystems.TryGetValue(FullName, out Type? Type) ? Type : null;
-    }
+    // Discovery is the native class walk, so this only feeds the scripting diagnostics report.
+    public int EntitySystemCount { get; private set; }
 
     /// <summary>The description for an EntityScript by full name, falling back through class aliases.</summary>
     public TypeDescription? GetEntityScript(string FullName)
@@ -194,16 +171,6 @@ internal sealed class TypeLibrary
             return EntityScripts.TryGetValue(Current, out Description) ? Description : null;
         }
         return null;
-    }
-
-    /// <summary>The canonical current full name for a script name, or null if it resolves to no live type.</summary>
-    public string? ResolveScriptName(string Name)
-    {
-        if (EntityScripts.ContainsKey(Name))
-        {
-            return Name;
-        }
-        return ScriptAliases.TryGetValue(Name, out string? Current) ? Current : null;
     }
 
     /// <summary>Get-or-build the description for any type (used recursively for nested struct members).</summary>
@@ -305,6 +272,17 @@ internal sealed class TypeLibrary
         {
             return new ScriptType { Kind = EPropertyType.SoftObject, Clr = Type, TargetClass = "" };
         }
+        // A nullable is an optional over its payload, matching the native TOptional a C++ one reflects as.
+        if (Nullable.GetUnderlyingType(Type) is Type Payload)
+        {
+            ScriptType Inner = ResolveType(Payload, Depth + 1, Visiting);
+            if (Inner.Kind == EPropertyType.None)
+            {
+                return new ScriptType { Kind = EPropertyType.None, Clr = Type };
+            }
+            return new ScriptType { Kind = EPropertyType.Optional, Clr = Type, Element = Inner };
+        }
+
         if (Type.IsGenericType)
         {
             Type Definition = Type.GetGenericTypeDefinition();
@@ -680,6 +658,7 @@ internal sealed class TypeDescription
     public Type Type { get; }
     public IReadOnlyList<ScriptProperty> Properties { get; private set; } = Array.Empty<ScriptProperty>();
     public IReadOnlyList<ScriptButton> Buttons { get; private set; } = Array.Empty<ScriptButton>();
+    public IReadOnlyList<ScriptFunction> Functions { get; private set; } = Array.Empty<ScriptFunction>();
     private IReadOnlyList<ScriptProperty> InputBindings = Array.Empty<ScriptProperty>();
     public bool HasInputBindings { get; private set; }
 
@@ -692,8 +671,64 @@ internal sealed class TypeDescription
     {
         Properties = Library.BuildMembers(Type, 0, new HashSet<Type>());
         Buttons = ComputeButtons(Type);
+        Functions = ComputeFunctions(Type, Library);
         InputBindings = ComputeInputBindings(Properties);
         HasInputBindings = InputBindings.Count > 0;
+    }
+
+    // The [ScriptFunction] methods, described the same way a property is: a parameter is a field of the call
+    // frame, so it goes through the same type resolver and needs no description of its own.
+    private static IReadOnlyList<ScriptFunction> ComputeFunctions(Type Type, TypeLibrary Library)
+    {
+        List<ScriptFunction>? Found = null;
+
+        foreach (MethodInfo Method in Type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+        {
+            if (Method.GetCustomAttribute<ScriptFunctionAttribute>() == null)
+            {
+                continue;
+            }
+
+            if (Method.IsGenericMethod)
+            {
+                Debug.LogError($"[ScriptFunction] {Type.Name}.{Method.Name} is generic, which has no single call frame; it is not reflected.");
+                continue;
+            }
+
+            List<ScriptProperty> Params = new();
+            foreach (ParameterInfo Parameter in Method.GetParameters())
+            {
+                // A frame slot holds the value, so a by-ref parameter is described as the type behind it.
+                Type Declared = Parameter.ParameterType;
+                if (Declared.IsByRef)
+                {
+                    Declared = Declared.GetElementType()!;
+                }
+
+                Params.Add(new ScriptProperty
+                {
+                    Name = Parameter.Name ?? $"Arg{Params.Count}",
+                    Type = Library.ResolveType(Declared, 0, new HashSet<Type>()),
+                    ParamFlags = FrameMarshal.DirectionOf(Parameter),
+                });
+            }
+
+            int ReturnIndex = -1;
+            if (Method.ReturnType != typeof(void))
+            {
+                ReturnIndex = Params.Count;
+                Params.Add(new ScriptProperty
+                {
+                    Name = "ReturnValue",
+                    Type = Library.ResolveType(Method.ReturnType, 0, new HashSet<Type>()),
+                });
+            }
+
+            Found ??= new List<ScriptFunction>();
+            Found.Add(new ScriptFunction(Method.Name, Params, ReturnIndex));
+        }
+
+        return (IReadOnlyList<ScriptFunction>?)Found ?? Array.Empty<ScriptFunction>();
     }
 
     // The [Property] members that are input bindings, gathered once per type so the per-frame poll is a

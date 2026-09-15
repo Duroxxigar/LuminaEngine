@@ -27,8 +27,7 @@ public static class CompileDatabaseStep
         IReadOnlyList<ProjectConfiguration> Configurations,
         IToolchain Toolchain)
     {
-        // The configuration developers actually read code in. Editor rather than Game because it is
-        // the superset: a Game target cannot describe the editor-only modules at all.
+        // The configuration developers actually read code in, Editor rather than Game since it is the superset.
         ProjectConfiguration? Preferred = Configurations
             .FirstOrDefault(C => C.Type == TargetType.Editor && C.Configuration == BuildConfiguration.Development);
 
@@ -111,8 +110,7 @@ public static class CompileDatabaseStep
 
             ByFile[SourceFile] = new CompileCommand
             {
-                // Absolute throughout, so the directory only has to exist. The module's
-                // intermediates may not yet, on a workspace that has never been built.
+                // Absolute throughout, so only the directory has to exist, since module intermediates may not yet.
                 Directory = Directories.OutputRoot,
                 File = SourceFile,
                 Command = PathUtils.Quote(Action.ToolPath) + " " + string.Join(' ', Translate(Arguments)),
@@ -124,8 +122,7 @@ public static class CompileDatabaseStep
     /// <summary>Adjusts the compiler's own arguments for a tool that is not that compiler.</summary>
     private static IEnumerable<string> Translate(IEnumerable<string> Arguments)
     {
-        // A module force-includes its own PCH header already, so translating /Yu would name it a
-        // second time. Harmless to the compiler, confusing to read.
+        // A module force-includes its own PCH header already, so translating /Yu would name it a second time.
         HashSet<string> ForcedIncludes = new(StringComparer.OrdinalIgnoreCase);
 
         foreach (string Argument in Arguments)

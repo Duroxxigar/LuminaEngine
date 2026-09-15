@@ -13,6 +13,8 @@
 #include "Tools/UI/ImGui/ImGuiFonts.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "UI/Tools/NodeGraph/Material/Nodes/MaterialNode_CustomSlang.h"
+#include "UI/Tools/NodeGraph/Material/Nodes/MaterialNode_Function.h"
+#include "UI/Tools/EditorToolContext.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/FileHelper.h"
 #include "Renderer/MaterialTypes.h"
@@ -105,6 +107,11 @@ namespace Lumina
                     GetPropertyTable()->SetObject(Node, Node->GetClass());
                 }
             }
+        });
+
+        NodeGraph->SetNodeDoubleClickedCallback([this](CEdGraphNode* Node)
+        {
+            OpenMaterialFunctionForNode(Node);
         });
 
         NodeGraph->SetPreNodeDeletedCallback([this](const CEdGraphNode* Node)
@@ -432,7 +439,7 @@ namespace Lumina
 
         if (ImGui::MenuItem(bPending ? LE_ICON_ALERT_CIRCLE " Compile*" : LE_ICON_RECEIPT_TEXT " Compile"))
         {
-            Compile();
+            Compile(false);
             OnSave();
         }
 
@@ -1166,6 +1173,23 @@ namespace Lumina
         ImGui::PopStyleVar(2);
     }
 
+    void FMaterialEditorTool::OpenMaterialFunctionForNode(CEdGraphNode* Node)
+    {
+        CMaterialExpression_MaterialFunctionCall* Call = Cast<CMaterialExpression_MaterialFunctionCall>(Node);
+        if (Call == nullptr || ToolContext == nullptr)
+        {
+            return;
+        }
+
+        if (!Call->Function.IsValid())
+        {
+            ImGuiX::Notifications::NotifyWarning("This Material Function node has no function assigned.");
+            return;
+        }
+
+        ToolContext->OpenAssetEditor(Call->Function->GetGUID());
+    }
+
     void FMaterialEditorTool::FocusGraphNode(CEdGraphNode* Node)
     {
         if (Node == nullptr || NodeGraph == nullptr)
@@ -1173,23 +1197,16 @@ namespace Lumina
             return;
         }
 
-        // May be called outside DrawGraph scope (e.g. stats panel); safe to set-act-clear manually.
-        ax::NodeEditor::EditorContext* PrevCtx = ax::NodeEditor::GetCurrentEditor();
-        ax::NodeEditor::EditorContext* OurCtx  = NodeGraph->GetEditorContext();
-        if (OurCtx == nullptr)
-        {
-            return;
-        }
+        NodeGraph->QueueFocusNode(Node);
 
-        ax::NodeEditor::SetCurrentEditor(OurCtx);
-        ax::NodeEditor::SelectNode(Node->GetNodeID(), false);
-        ax::NodeEditor::NavigateToSelection(false, 0.25f);
-        ax::NodeEditor::SetCurrentEditor(PrevCtx);
+        // The jump is invisible when the graph is tabbed behind the code editor.
+        ImGui::SetWindowFocus(GetToolWindowName(MaterialGraphName).c_str());
     }
 
-    void FMaterialEditorTool::Compile()
+    void FMaterialEditorTool::Compile(bool bNotifyResult)
     {
         CompilationResult = FCompilationResultInfo();
+        bHasCompiled = true;
         CMaterial* Material = Cast<CMaterial>(Asset.Get());
 
         // Shared with CompileMaterialGraph so the importer's procedural materials compile identically.
@@ -1198,10 +1215,25 @@ namespace Lumina
         ShaderStats       = CompileResult.Stats;
         bGLSLPreviewDirty = true;
 
+        const FString MaterialName = Material != nullptr ? FString(Material->GetName().c_str()) : FString("<unknown>");
+
+        // The shader stats tab is rarely the focused one while iterating, so every finding also goes to the console.
+        auto DiagnosticSource = [&MaterialName](const EdNodeGraph::FError& Diag)
+        {
+            FString Source = MaterialName;
+            if (Diag.Node != nullptr)
+            {
+                Source += "/" + Diag.Node->GetNodeFullName();
+            }
+            return Source;
+        };
+
         // Before the failure branch, since warnings survive a failed compile and belong in the log.
         for (const EdNodeGraph::FError& Warning : CompileResult.Warnings)
         {
             CompilationResult.CompilationLog += "WARNING - [" + Warning.Name + "]: " + Warning.Description + "\n";
+
+            LOG_WARN("Material '{0}' - [{1}] {2}", DiagnosticSource(Warning).c_str(), Warning.Name.c_str(), Warning.Description.c_str());
 
             FCompilationError Structured;
             Structured.Title       = Warning.Name;
@@ -1216,6 +1248,8 @@ namespace Lumina
             {
                 CompilationResult.CompilationLog += "ERROR - [" + Error.Name + "]: " + Error.Description + "\n";
 
+                LOG_ERROR("Material '{0}' - [{1}] {2}", DiagnosticSource(Error).c_str(), Error.Name.c_str(), Error.Description.c_str());
+
                 FCompilationError Structured;
                 Structured.Title       = Error.Name;
                 Structured.Description = Error.Description;
@@ -1224,6 +1258,11 @@ namespace Lumina
             }
 
             CompilationResult.bIsError = true;
+
+            if (bNotifyResult)
+            {
+                NotifyCompileResult();
+            }
             return;
         }
 
@@ -1239,17 +1278,30 @@ namespace Lumina
 
         Material->GetPackage()->MarkDirty();
 
-        if (CompilationResult.Warnings.empty())
+        if (bNotifyResult)
+        {
+            NotifyCompileResult();
+        }
+
+        // Re-route asset to preview in case MaterialType changed during compile.
+        ApplyMaterialToPreview();
+    }
+
+    void FMaterialEditorTool::NotifyCompileResult()
+    {
+        if (CompilationResult.bIsError)
+        {
+            ImGuiX::Notifications::NotifyError("Material failed to compile: {0} error(s). See the console or the Shader Stats tab.",
+                (SIZE_T)CompilationResult.Errors.size());
+        }
+        else if (CompilationResult.Warnings.empty())
         {
             ImGuiX::Notifications::NotifySuccess("Material compiled.");
         }
         else
         {
-            ImGuiX::Notifications::NotifyWarning("Material compiled with {} warnings.", (SIZE_T)CompilationResult.Warnings.size());
+            ImGuiX::Notifications::NotifyWarning("Material compiled with {0} warnings.", (SIZE_T)CompilationResult.Warnings.size());
         }
-
-        // Re-route asset to preview in case MaterialType changed during compile.
-        ApplyMaterialToPreview();
     }
 
     void FMaterialEditorTool::OnSave()
@@ -1258,10 +1310,16 @@ namespace Lumina
         const CMaterialEditorSettings* Settings = GetDefault<CMaterialEditorSettings>();
         if (Settings != nullptr && Settings->bCompileOnSave && NeedsCompile())
         {
-            Compile();
+            Compile(false);
         }
 
         FAssetEditorTool::OnSave();
+
+        // After the package toast, or a failed compile reads as a successful save.
+        if (bHasCompiled)
+        {
+            NotifyCompileResult();
+        }
     }
 
     void FMaterialEditorTool::InitializeDockingLayout(ImGuiID InDockspaceID, const ImVec2& InDockspaceSize) const

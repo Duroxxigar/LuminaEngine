@@ -14,17 +14,42 @@
 // RmlUiRenderer.cpp.
 struct FUIMaterialArgs
 {
-    FMaterialUniforms* Materials;   // 0
-    uint  MaterialIndex;            // 8
-    float Time;                     // 12
-    uint4 ScreenSize;               // 16 -- .xy = brush resolution
+    GPUSpan<FMaterialUniforms> Materials;   // 0
+    uint  MaterialIndex;            // 16
+    float Time;                     // 20
+    uint2 _Pad0;                    // 24
+    uint4 ScreenSize;               // 32 -- .xy = brush resolution
 };
 
 FUIMaterialArgs* UIArgs() { return GetArgs<FUIMaterialArgs>(); }
 
-float  GetMaterialScalar (uint MatIndex, uint Index) { return UIArgs().Materials[MatIndex].Scalars[Index];  }
-float4 GetMaterialVec4   (uint MatIndex, uint Index) { return UIArgs().Materials[MatIndex].Vectors[Index];  }
-uint   GetMaterialTexture(uint MatIndex, uint Index) { return UIArgs().Materials[MatIndex].Textures[Index]; }
+// Narrow field reads through SpanAt, as in SceneGlobals, since the element is 592 B.
+float GetMaterialScalar(uint MatIndex, uint Index)
+{
+    if (!SpanContains(&UIArgs().Materials, MatIndex))
+    {
+        return 0.0;
+    }
+    return SpanAt(&UIArgs().Materials, MatIndex).Scalars[Index];
+}
+
+float4 GetMaterialVec4(uint MatIndex, uint Index)
+{
+    if (!SpanContains(&UIArgs().Materials, MatIndex))
+    {
+        return float4(0.0);
+    }
+    return loadAligned<16>(&SpanAt(&UIArgs().Materials, MatIndex).Vectors[Index]);
+}
+
+uint GetMaterialTexture(uint MatIndex, uint Index)
+{
+    if (!SpanContains(&UIArgs().Materials, MatIndex))
+    {
+        return 0u;
+    }
+    return SpanAt(&UIArgs().Materials, MatIndex).Textures[Index];
+}
 
 uint2  GetScreenSize() { return UIArgs().ScreenSize.xy; }
 float  GetTime()       { return UIArgs().Time; }

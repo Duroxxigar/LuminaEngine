@@ -1,4 +1,5 @@
 ﻿#include "RuntimePCH.h"
+#include "Core/Reflection/Type/Function.h"
 #include "Core/Object/Class.h"
 #include "Core/Object/Class/StructTraits.h"
 #include "Core/Object/Field.h"
@@ -47,7 +48,7 @@ namespace Lumina
             Ops->Copy(Dest, Src);
             return;
         }
-        for (FProperty* Current = LinkedProperty; Current; Current = static_cast<FProperty*>(Current->Next))
+        for (FProperty* Current : AllProperties)
         {
             Current->CopyCompleteValue_InContainer(Dest, Src);
         }
@@ -59,7 +60,7 @@ namespace Lumina
         {
             return Ops->Equals(A, B);
         }
-        for (FProperty* Current = LinkedProperty; Current; Current = static_cast<FProperty*>(Current->Next))
+        for (FProperty* Current : AllProperties)
         {
             if (!Current->Identical_InContainer(A, B))
             {
@@ -113,7 +114,6 @@ namespace Lumina
 
     void CStruct::Link()
     {
-
         if (bLinked)
         {
             return;
@@ -125,30 +125,35 @@ namespace Lumina
             SuperStruct->Link();
         }
 
-        if (SuperStruct && SuperStruct->LinkedProperty)
-        {
-            FProperty* SuperProperty = SuperStruct->LinkedProperty;
+        Flatten();
+    }
 
-            if (LinkedProperty == nullptr)
-            {
-                LinkedProperty = SuperProperty;
-            }
-            else
-            {
-                FProperty* Current = LinkedProperty;
-                while (Current->Next != nullptr)
-                {
-                    Current = (FProperty*)Current->Next;
-                }
-                Current->Next = SuperProperty;
-            }
+    void CStruct::Flatten()
+    {
+        // Copied, not spliced: a struct with no own properties used to adopt the super's list head outright,
+        // so a later AddProperty walked into the super and appended there instead.
+        AllProperties = OwnProperties;
+        if (SuperStruct != nullptr)
+        {
+            AllProperties.insert(AllProperties.end(),
+                SuperStruct->AllProperties.begin(), SuperStruct->AllProperties.end());
+        }
+
+        // Derived first, so FindFunction reaches an override before the declaration it replaces.
+        AllFunctions = OwnFunctions;
+        if (SuperStruct != nullptr)
+        {
+            AllFunctions.insert(AllFunctions.end(),
+                SuperStruct->AllFunctions.begin(), SuperStruct->AllFunctions.end());
         }
     }
 
     void CStruct::Unlink()
     {
-        // Past Link the tail is the SUPER's chain, spliced on rather than copied, so the super is untouched.
-        LinkedProperty = nullptr;
+        OwnProperties.clear();
+        AllProperties.clear();
+        OwnFunctions.clear();
+        AllFunctions.clear();
         bLinked = false;
     }
 
@@ -161,7 +166,7 @@ namespace Lumina
     
     FProperty* CStruct::GetProperty(const FName& Name) const
     {
-        for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+        for (FProperty* Current : AllProperties)
         {
             if (Current->Name == Name)
             {
@@ -174,36 +179,55 @@ namespace Lumina
 
     void CStruct::AddProperty(FProperty* Property)
     {
-        if (LinkedProperty == nullptr)
+        OwnProperties.push_back(Property);
+
+        // Link caches the flattened list, so a member arriving after it would otherwise never be seen.
+        if (bLinked)
         {
-            LinkedProperty = Property;
+            Flatten();
         }
-        else
+    }
+
+    void CStruct::AddFunction(FFunction* Function)
+    {
+        OwnFunctions.push_back(Function);
+
+        if (bLinked)
         {
-            FProperty* Current = LinkedProperty;
-            while (Current->Next != nullptr)
+            Flatten();
+        }
+    }
+
+    FFunction* CStruct::FindFunction(const FName& Name) const
+    {
+        // AllFunctions is derived-first, so the nearest declaration is the first match.
+        for (FFunction* Current : AllFunctions)
+        {
+            if (Current->GetFunctionName() == Name)
             {
-                Current = (FProperty*)Current->Next;
+                return Current;
             }
-            Current->Next = Property;
         }
-        
-        Property->Next = nullptr;
+
+        return nullptr;
     }
     
-    static bool ReadNumericValue(FArchive& Ar, const FName& TypeName, double& OutValue)
+    static bool ReadNumericValue(FArchive& Ar, EPropertyTypeFlags Type, double& OutValue)
     {
-        if (TypeName == "Int8Property") { int8 v; Ar << v; OutValue = v; return true; }
-        if (TypeName == "Int16Property") { int16 v; Ar << v; OutValue = v; return true; }
-        if (TypeName == "Int32Property") { int32 v; Ar << v; OutValue = v; return true; }
-        if (TypeName == "Int64Property") { int64 v; Ar << v; OutValue = (double)v; return true; }
-        if (TypeName == "UInt8Property") { uint8 v; Ar << v; OutValue = v; return true; }
-        if (TypeName == "UInt16Property") { uint16 v; Ar << v; OutValue = v; return true; }
-        if (TypeName == "UInt32Property") { uint32 v; Ar << v; OutValue = v; return true; }
-        if (TypeName == "UInt64Property") { uint64 v; Ar << v; OutValue = (double)v; return true; }
-        if (TypeName == "FloatProperty") { float v; Ar << v; OutValue = v; return true; }
-        if (TypeName == "DoubleProperty") { Ar << OutValue; return true; }
-        return false;
+        switch (Type)
+        {
+        case EPropertyTypeFlags::Int8:   { int8   v; Ar << v; OutValue = v; return true; }
+        case EPropertyTypeFlags::Int16:  { int16  v; Ar << v; OutValue = v; return true; }
+        case EPropertyTypeFlags::Int32:  { int32  v; Ar << v; OutValue = v; return true; }
+        case EPropertyTypeFlags::Int64:  { int64  v; Ar << v; OutValue = (double)v; return true; }
+        case EPropertyTypeFlags::UInt8:  { uint8  v; Ar << v; OutValue = v; return true; }
+        case EPropertyTypeFlags::UInt16: { uint16 v; Ar << v; OutValue = v; return true; }
+        case EPropertyTypeFlags::UInt32: { uint32 v; Ar << v; OutValue = v; return true; }
+        case EPropertyTypeFlags::UInt64: { uint64 v; Ar << v; OutValue = (double)v; return true; }
+        case EPropertyTypeFlags::Float:  { float  v; Ar << v; OutValue = v; return true; }
+        case EPropertyTypeFlags::Double: { Ar << OutValue; return true; }
+        default:                         return false;
+        }
     }
     
     void CStruct::SerializeTaggedProperties(FArchive& Ar, void* Data) const
@@ -220,7 +244,7 @@ namespace Lumina
             int64 NumPropertiesWritePos = Ar.Tell();
             Ar << NumProperties;
             
-            for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+            for (FProperty* Current : AllProperties)
             {
                 if (!Current->ShouldSerialize())
                 {
@@ -233,16 +257,14 @@ namespace Lumina
                 }
 
                 FPropertyTag PropertyTag;
-                PropertyTag.Type = Current->GetTypeName();
+                PropertyTag.Type = Current->GetType();
                 PropertyTag.Name = Current->GetPropertyName();
 
-                // Placeholder tag; rewritten with final size after serialize.
+                // placeholder rewritten with the final size, so nothing in the tag may be variable length
                 int64 TagPosition = Ar.Tell();
                 Ar << PropertyTag;
                 int64 AfterTagPosition = Ar.Tell();
-            
-                PropertyTag.Offset = AfterTagPosition;
-                
+
                 void* ValuePtr = Current->GetValuePtr<void>(Data);
 
                 Current->Serialize(Ar, ValuePtr);
@@ -276,7 +298,7 @@ namespace Lumina
                 return;
             }
 
-            FProperty* Current = LinkedProperty;
+            size_t NextInOrder = 0;
             for (uint32 i = 0; i < NumProperties; ++i)
             {
                 FPropertyTag Tag;
@@ -286,17 +308,17 @@ namespace Lumina
         
                 FProperty* FoundProperty = nullptr;
 
-                // O(n) fast path assuming order is unchanged.
-                if (Current && Current->GetPropertyName() == Tag.Name)
+                // O(1) fast path assuming order is unchanged.
+                if (NextInOrder < AllProperties.size() && AllProperties[NextInOrder]->GetPropertyName() == Tag.Name)
                 {
-                    FoundProperty = Current;
-                    Current = (FProperty*)Current->Next;
+                    FoundProperty = AllProperties[NextInOrder];
+                    ++NextInOrder;
                 }
 
-                // O(n^2) fallback for reordered properties.
+                // O(n) fallback for reordered properties.
                 if (FoundProperty == nullptr)
                 {
-                    for (FProperty* Search = LinkedProperty; Search; Search = (FProperty*)Search->Next)
+                    for (FProperty* Search : AllProperties)
                     {
                         if (Search->GetPropertyName() == Tag.Name)
                         {
@@ -309,13 +331,13 @@ namespace Lumina
                 // Match old tag names against the ';'-joined Aliases metadata of renamed properties.
                 if (FoundProperty == nullptr)
                 {
-                    for (FProperty* Search = LinkedProperty; Search; Search = (FProperty*)Search->Next)
+                    for (FProperty* Search : AllProperties)
                     {
                         if (!Search->HasMetadata("Aliases"))
                         {
                             continue;
                         }
-                        const FString& Aliases = Search->GetMetadata("Aliases");
+                        const FCStringView Aliases = Search->GetMetadata("Aliases");
                         for (size_t Start = 0; Start <= Aliases.size(); )
                         {
                             size_t End = Aliases.find(';', Start);
@@ -347,35 +369,35 @@ namespace Lumina
                         continue;
                     }
                     
-                    if (FoundProperty->GetTypeName() == Tag.Type)
+                    if (FoundProperty->GetType() == Tag.Type)
                     {
                         void* ValuePtr = FoundProperty->GetValuePtr<void>(Data);
                         FoundProperty->Serialize(Ar, ValuePtr);
                     }
-                    else if (IsPropertyNumeric(FoundProperty->GetTypeName()) && IsPropertyNumeric(Tag.Type))
+                    else if (IsPropertyNumeric(FoundProperty->GetType()) && IsPropertyNumeric(Tag.Type))
                     {
                         double OldValue = 0.0;
                         if (!ReadNumericValue(Ar, Tag.Type, OldValue))
                         {
                             LOG_ERROR("Failed to read numeric value for property '{}'", Tag.Name);
                         }
-                        else if (IsValueValidForType(OldValue, FoundProperty->GetTypeName()))
+                        else if (IsValueValidForType(OldValue, FoundProperty->GetType()))
                         {
                             FoundProperty->SetValue(Data, OldValue);
-                                            
-                            LOG_WARN("Property '{}' type changed from '{}' to '{}', converted value to new type.", 
-                            Tag.Name, Tag.Type, FoundProperty->GetTypeName());
+
+                            LOG_WARN("Property '{}' type changed from '{}' to '{}', converted value to new type.",
+                            Tag.Name, PropertyTypeToString(Tag.Type), PropertyTypeToString(FoundProperty->GetType()));
                         }
                         else
                         {
-                            LOG_WARN("Property '{}' type changed from '{}' to '{}', but the value cannot fit in the new type.", 
-                            Tag.Name, Tag.Type, FoundProperty->GetTypeName());
+                            LOG_WARN("Property '{}' type changed from '{}' to '{}', but the value cannot fit in the new type.",
+                            Tag.Name, PropertyTypeToString(Tag.Type), PropertyTypeToString(FoundProperty->GetType()));
                         }
                     }
                 }
                 else
                 {
-                    LOG_WARN("Property '{}' of type '{}' not found in struct, skipping", Tag.Name.ToString(), Tag.Type.ToString());
+                    LOG_WARN("Property '{}' of type '{}' not found in struct, skipping", Tag.Name.ToString(), PropertyTypeToString(Tag.Type));
                 }
         
                 Ar.Seek(DataStartPos + Tag.Size);
@@ -385,7 +407,7 @@ namespace Lumina
 
     void CStruct::SerializeTaggedProperties(IStructuredArchive::FRecord& Record, void* Data, void const* Defaults) const
     {
-        for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+        for (FProperty* Current : AllProperties)
         {
             if (!Current->ShouldSerialize())
             {
@@ -401,7 +423,7 @@ namespace Lumina
     void CStruct::NetSerializeProperties(FNetArchive& Ar, void* Data) const
     {
         // Walk the same PROPERTY(Replicated) fields. NetSerialize reads or writes per the archive's mode.
-        for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+        for (FProperty* Current : AllProperties)
         {
             if (!Current->ShouldSerialize() || Current->IsEditorOnly() || !Current->IsReplicated())
             {
@@ -423,7 +445,7 @@ namespace Lumina
         }
 
         // No Replicated filter here, since the struct is serialized as a unit.
-        for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+        for (FProperty* Current : AllProperties)
         {
             if (!Current->ShouldSerialize())
             {
@@ -442,7 +464,7 @@ namespace Lumina
     uint32 CStruct::GetNetReplicatedPropertyCount() const
     {
         uint32 Count = 0;
-        for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+        for (FProperty* Current : AllProperties)
         {
             if (IsNetReplicatedField(Current))
             {
@@ -471,7 +493,7 @@ namespace Lumina
         Tmp.NameToNetIndex     = HookSource.NameToNetIndex;
         Tmp.NetIndexToName     = HookSource.NetIndexToName;
 
-        for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+        for (FProperty* Current : AllProperties)
         {
             if (!IsNetReplicatedField(Current))
             {
@@ -489,7 +511,7 @@ namespace Lumina
     void CStruct::NetReadReplicatedMasked(FNetArchive& Ar, void* Data, const uint8* Mask) const
     {
         uint32 Index = 0;
-        for (FProperty* Current = LinkedProperty; Current; Current = (FProperty*)Current->Next)
+        for (FProperty* Current : AllProperties)
         {
             if (!IsNetReplicatedField(Current))
             {

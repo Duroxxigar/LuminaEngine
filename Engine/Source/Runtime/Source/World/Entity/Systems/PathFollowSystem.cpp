@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "PathFollowSystem.h"
 #include "World/ECS/Registry.h"
 
@@ -16,9 +16,12 @@
 namespace Lumina
 {
     // STransformComponent is READ-only here, so this batches in parallel with other readers.
-    FSystemAccess SPathFollowSystem::Access = FSystemAccess{}
-        .Write<SPathFollowComponent, SCharacterControllerComponent>()
-        .Read<STransformComponent, FRelationshipComponent, SNavMeshComponent, SystemResource::Significance>();
+    void SPathFollowSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::PrePhysics);
+        Writes<SPathFollowComponent, SCharacterControllerComponent>();
+        Reads<STransformComponent, FRelationshipComponent, SNavMeshComponent, SystemResource::Significance>();
+    }
 
     namespace
     {
@@ -28,9 +31,13 @@ namespace Lumina
             for (int32 i = 0; i < N; ++i)
             {
                 Comp.PathCorners[i] = Path.Corners[i];
+                Comp.PathCornerFlags[i] = i < (int32)Path.CornerFlags.size() ? Path.CornerFlags[i] : 0;
             }
             Comp.CornerCount = N;
             Comp.CurrentCorner = 0;
+            Comp.PathEpoch = Path.Epoch;
+            Comp.bPathPartial = Path.bPartial;
+            Comp.bPathTruncated = Path.bTruncated || (int32)Path.Corners.size() > N;
         }
 
         // Caller must flush dirty transforms before calling from a parallel body.
@@ -54,8 +61,10 @@ namespace Lumina
         }
     }
 
-    void SPathFollowSystem::Update(const FSystemContext& Context) noexcept
+    void SPathFollowSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
         
         constexpr FVector3 Lift(0.0f, 0.1f, 0.0f);
@@ -104,14 +113,43 @@ namespace Lumina
                 const bool bMovedTarget = Math::Length(Goal - Comp.PathSourceTarget) > Comp.RepathDistance;
                 const float RepathInterval = Significance::ScaleInterval(SignificanceState, Entity, Comp.RepathInterval);
                 const bool bIntervalElapsed = Comp.TimeSinceLastPath > RepathInterval;
+
+                // The epoch is mesh-wide, so one streamed tile would otherwise repath every agent alive.
+                bool bMeshChanged = false;
+                if (NavMesh && Comp.CornerCount > 0 && Comp.PathEpoch != NavMesh->GetTopologyEpoch())
+                {
+                    FVector3 CorridorMin = AgentPos;
+                    FVector3 CorridorMax = AgentPos;
+                    for (int32 i = Comp.CurrentCorner; i < Comp.CornerCount; ++i)
+                    {
+                        CorridorMin = Math::Min(CorridorMin, Comp.PathCorners[i]);
+                        CorridorMax = Math::Max(CorridorMax, Comp.PathCorners[i]);
+                    }
+                    const FVector3 Margin(Comp.AcceptanceRadius);
+                    bMeshChanged = NavMesh->HasTileChangedSince(Comp.PathEpoch, CorridorMin - Margin, CorridorMax + Margin);
+                    if (!bMeshChanged)
+                    {
+                        // Banked so the same untouched corridor is not re-tested against every later change.
+                        Comp.PathEpoch = NavMesh->GetTopologyEpoch();
+                    }
+                }
                 // No CornerCount==0 trigger, or an unreachable goal would re-query every tick.
-                const bool bNeedRepath = Comp.bPathDirty || bMovedTarget || bIntervalElapsed;
+                const bool bNeedRepath = Comp.bPathDirty || bMovedTarget || bIntervalElapsed || bMeshChanged;
 
                 if (bNeedRepath)
                 {
                     FNavPath Path;
                     FNavQueryFilter Filter;
-                    if (NavMesh && NavMesh->FindPath(AgentPos, Goal, Filter, Path) && Path.bValid)
+                    Filter.MaxCorners = SPathFollowComponent::MaxCorners;
+                    const bool bFound = NavMesh && NavMesh->FindPath(AgentPos, Goal, Filter, Path) && Path.bValid;
+
+                    // Nothing was asked of the navmesh, so this is not a route failure.
+                    if (!bFound && Path.bQueryUnavailable)
+                    {
+                        return;
+                    }
+
+                    if (bFound)
                     {
                         StorePath(Comp, Path);
                         Comp.PathSourceTarget = Goal;
@@ -127,6 +165,11 @@ namespace Lumina
                         ++Comp.ConsecutiveFailures;
                         Comp.TimeSinceLastPath = 0.0f;
                         Comp.bPathDirty = false;
+                        // Banked even though the query failed, or a mesh that keeps changing retries every tick.
+                        if (NavMesh)
+                        {
+                            Comp.PathEpoch = NavMesh->GetTopologyEpoch();
+                        }
                         if (Comp.CornerCount == 0)
                         {
                             return;
@@ -148,9 +191,15 @@ namespace Lumina
 
                 if (Comp.CurrentCorner >= Comp.CornerCount)
                 {
+                    // The route continued past the buffer, so repath rather than call a cut corner the destination.
+                    if (Comp.bPathTruncated)
+                    {
+                        Comp.bPathDirty = true;
+                        return;
+                    }
                     if (Comp.Status == EPathFollowStatus::Following)
                     {
-                        Comp.Status = EPathFollowStatus::Reached;
+                        Comp.Status = Comp.bPathPartial ? EPathFollowStatus::Failed : EPathFollowStatus::Reached;
                     }
                     return;
                 }

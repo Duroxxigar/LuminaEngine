@@ -8,8 +8,8 @@ namespace Lumina
     {
     public:
 
-        FStringProperty(const FFieldOwner& InOwner, const FPropertyParams* Params)
-            :FProperty(InOwner, Params)
+        explicit FStringProperty(const FPropertyParams* Params)
+            : FProperty(Params)
         {
             SetElementSize(sizeof(FString));
         }
@@ -28,18 +28,18 @@ namespace Lumina
     };
 
 
-    class FNameProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FNameProperty : public FProperty
     {
     public:
         
-        FNameProperty(FFieldOwner InOwner, const FPropertyParams* Params)
-            :FProperty(InOwner, Params)
+        explicit FNameProperty(const FPropertyParams* Params)
+            : FProperty(Params)
         {
             SetElementSize(sizeof(FName));
         }
 
-        void Serialize(FArchive& Ar, void* Value) override;
-        void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
+        RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
+        RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
 
         // Tight: a compact net index when the archive binds the name-index hooks (string exported once via
         // NameExport), else the raw string.

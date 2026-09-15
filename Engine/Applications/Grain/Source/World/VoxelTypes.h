@@ -55,8 +55,30 @@ namespace Grain
         Ore,
         Crystal,
         Lava,
+
+        //~ Past this point the materials belong to entities and props, not to terrain generation.
+
+        Amethyst,
+        Gold,
+        Ice,
+        Ember,
+        Obsidian,
+        Bone,
+        Cloth,
+        Metal,
+        Skin,
+        Eye,
+        Rune,
+        Husk,
+        Wisp,
+        Blood,
+        Slate,
+        Thatch,
         Count,
     };
+
+    // Generation only picks from the terrain range, so a node palette never holds an entity material.
+    inline constexpr int32 kTerrainMaterialCount = int32(EMaterial::Lava) + 1;
 
     inline constexpr uint32 kFlagSolid   = 1u << 0;
     inline constexpr uint32 kFlagUniform = 1u << 1;

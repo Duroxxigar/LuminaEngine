@@ -5,7 +5,7 @@ using LuminaBuildTool.Rules;
 
 namespace LuminaBuildTool.Graph;
 
-/// <summary>Resolves a target name into a build graph: rules, sources, dependencies, settings, outputs.</summary>
+/// <summary>Resolves a target name into a build graph, with rules, sources, dependencies, settings, outputs.</summary>
 public sealed class TargetAssembler
 {
     private readonly RulesAssembly Assembly;
@@ -34,8 +34,7 @@ public sealed class TargetAssembler
         Info = TargetInfo;
         TargetRules = Assembly.CreateTargetRules(TargetName, Info);
 
-        // First pass reads what the target decided about itself. Those answers go back into a second
-        // TargetInfo so target and module rules see the settled values, not the requested ones.
+        // The first pass reads what the target decided, fed back into a second TargetInfo so rules see settled values.
         BuildConfiguration EffectiveConfiguration = TargetRules.ConfigurationOverride ?? Info.Configuration;
 
         if (EffectiveConfiguration != Info.Configuration)
@@ -94,8 +93,7 @@ public sealed class TargetAssembler
 
         Target.Modules.AddRange(TopologicallySort(ModulesByName.Values));
 
-        // Before any environment is built, because a layering violation makes the environments
-        // meaningless and the error should be about the graph rather than about what came of it.
+        // Before any environment is built, since a layering violation makes them meaningless and clouds the error.
         ModuleLayerCheck.Verify(Target);
 
         foreach (BuildModule Module in Target.Modules)
@@ -236,7 +234,7 @@ public sealed class TargetAssembler
                 + (ResolutionStack.Count > 0 ? $" Referenced from: {string.Join(" -> ", ResolutionStack)}" : string.Empty));
         }
 
-        // Resolved before scanning: being its own loadable image decides which sources compile.
+        // Resolved before scanning, since being its own loadable image decides which sources compile.
         ModuleBinaryType EffectiveBinaryType = ResolveEffectiveBinaryType(Rules.BinaryType);
 
         ModuleSourceSet Sources = SourceFileScanner.Scan(Rules, EffectiveBinaryType.IsLoadableImage());
@@ -245,8 +243,7 @@ public sealed class TargetAssembler
         {
             BinaryType = EffectiveBinaryType,
 
-            // Module registration runs from static constructors nothing references, so a folded
-            // module must be linked whole or it vanishes.
+            // Module registration runs from static constructors nothing references, so a folded module must be linked whole.
             bRequiresWholeArchive = EffectiveBinaryType != Rules.BinaryType,
         };
 
@@ -356,8 +353,7 @@ public sealed class TargetAssembler
             TargetRules.AdaptiveUnityMaxFiles.ToString(),
         };
 
-        // Order matters for the hash but not for the build, so these are sorted: two targets that
-        // declare the same set in a different order still share.
+        // Order matters for the hash but not the build, so these are sorted and a differently ordered set still shares.
         Inputs.AddRange(TargetRules.GlobalDefinitions.OrderBy(D => D, StringComparer.Ordinal));
         Inputs.Add("|");
         Inputs.AddRange(TargetRules.GlobalCompilerOptions.OrderBy(O => O, StringComparer.Ordinal));
@@ -373,8 +369,7 @@ public sealed class TargetAssembler
 
     private void AssignOutputPaths(BuildTarget Target, BuildModule Module)
     {
-        // Engine modules keep their intermediates and generated code in the engine tree, so a
-        // project builds the engine once and shares it rather than duplicating it per project.
+        // Engine modules keep intermediates in the engine tree, so a project shares them rather than duplicating.
         string OutputRoot = Directories.GetOutputRootFor(Module.Rules.ModuleDirectory);
         string TargetKey = ResolveIntermediateKey(Module);
 
@@ -398,8 +393,7 @@ public sealed class TargetAssembler
 
         if (Module.Rules.bEnableReflection)
         {
-            // The generator always emits the full shard set, stubbing the ones with no types, so
-            // the compile inputs are known before it has run.
+            // The generator always emits the full shard set, stubbing empty ones, so compile inputs precede the run.
             foreach (string Shard in ReflectionStep.EnumerateUnityShardPaths(Module.GeneratedCodeDirectory))
             {
                 Module.GeneratedSourceFiles.Add(FileItem.Get(Shard));
@@ -429,8 +423,7 @@ public sealed class TargetAssembler
             }
         }
 
-        // What the toolchain compiles, before any unity merge. UnityBuildStep rewrites this on the
-        // build path; project generation never sees blobs because it reads Sources instead.
+        // What the toolchain compiles before any unity merge, which UnityBuildStep rewrites on the build path.
         Module.CppCompileInputs.AddRange(Module.Sources.CppFiles);
         Module.CppCompileInputs.AddRange(Module.GeneratedSourceFiles);
 
@@ -444,8 +437,7 @@ public sealed class TargetAssembler
                 break;
 
             case ModuleBinaryType.StaticLibrary:
-                // Static libraries stay in the intermediate tree, keyed like this module's objects: a per-target
-                // directory made every target relink the engine's DLLs against its own third-party copies.
+                // Static libraries stay in the intermediate tree keyed like this module's objects, not per target.
                 Module.OutputDirectory = Path.Combine(
                     OutputRoot,
                     "Intermediates",
@@ -524,7 +516,7 @@ public sealed class TargetAssembler
         public List<string> LibraryPaths { get; } = new();
     }
 
-    /// <summary>Root of a module's headers: the module directory if flat, its Source subdirectory otherwise.</summary>
+    /// <summary>Root of a module's headers, the module directory if flat, its Source subdirectory otherwise.</summary>
     private static string GetSourceRoot(ModuleRules Rules)
     {
         return Rules.ResolveSourceRoot();
@@ -539,8 +531,7 @@ public sealed class TargetAssembler
 
         PublicExports Exports = new();
 
-        // Insert before recursing so a dependency cycle resolves to the partial set instead of
-        // recursing forever. The topological sort has already rejected true cycles.
+        // Insert before recursing so a cycle resolves to the partial set, since the topological sort rejects true cycles.
         ExportCache[Module.Name] = Exports;
 
         ModuleRules Rules = Module.Rules;
@@ -564,8 +555,7 @@ public sealed class TargetAssembler
             Exports.IncludePaths.Add(GetSourceRoot(Rules));
         }
 
-        // Plugins also export their containing Source dir, so a dependent can qualify "Plugin/Types.h" when
-        // two plugins ship the same header name. Plugins only: a game module's directory is the project root.
+        // Plugins also export their containing Source dir, so a dependent can qualify "Plugin/Types.h" when names collide.
         if (Module.bIsPlugin && !Rules.bIsThirdParty)
         {
             string? ContainingDirectory = Path.GetDirectoryName(Rules.ModuleDirectory);
@@ -649,8 +639,7 @@ public sealed class TargetAssembler
 
         AddUnique(Module.CompileIncludePaths, IncludePaths);
 
-        // A directory already reachable as first-party surface stays a -I path: the compiler lets
-        // -isystem win over -I for the same directory, which would mute warnings we want to see.
+        // A directory already reachable as first-party surface stays a -I path, since -isystem would mute warnings we want.
         HashSet<string> Regular = new(Module.CompileIncludePaths, StringComparer.OrdinalIgnoreCase);
         AddUnique(Module.SystemIncludePaths, SystemIncludePaths.Where(Candidate => !Regular.Contains(Candidate)));
 
@@ -668,8 +657,7 @@ public sealed class TargetAssembler
     {
         foreach (BuildModule Visible in Module.EnumerateDependencyClosure())
         {
-            // Only a module that produces its own shared library has anything to export. A
-            // monolithic link folds them all into one image, where the macros must vanish.
+            // Only a module producing its own shared library has anything to export, and a monolithic link must vanish them.
             if (Visible.DeclaredBinaryType != ModuleBinaryType.SharedLibrary)
             {
                 continue;
@@ -725,7 +713,7 @@ public sealed class TargetAssembler
         AddUnique(Module.LinkLibraryPaths, LibraryPaths);
     }
 
-    /// <summary>What a dependent puts on its link line: import library, archive, or nothing.</summary>
+    /// <summary>What a dependent puts on its link line, an import library, archive, or nothing.</summary>
     private static string? GetLinkInput(BuildModule Module)
     {
         return Module.BinaryType switch

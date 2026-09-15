@@ -1,6 +1,8 @@
 ﻿#include "RuntimePCH.h"
 #include "ObjectBase.h"
 #include "Class.h"
+#include "Cast.h"
+#include "ScriptClass.h"
 #include "DeferredRegistry.h"
 #include "Lumina.h"
 #include "ManagedInstance.h"
@@ -8,6 +10,7 @@
 #include "ObjectArray.h"
 #include "ObjectHash.h"
 #include "Core/Console/ConsoleVariable.h"
+#include "Core/Templates/LuminaTemplate.h"
 #include "Log/Log.h"
 #include "Memory/Memory.h"
 #include "Package/Package.h"
@@ -54,7 +57,10 @@ namespace Lumina
         // Gated on the flag so reaching through ClassPrivate is confined to objects with script storage.
         if (HasAnyFlag(OF_ScriptProperties) && ClassPrivate != nullptr)
         {
-            ClassPrivate->DestructScriptProperties(this);
+            if (const CScriptClass* ScriptClass = ToScriptClass(ClassPrivate))
+            {
+                ScriptClass->DestructScriptProperties(this);
+            }
         }
 
         // Guarded on the slot, so an object that was never wrapped pays only a compare.
@@ -204,6 +210,19 @@ namespace Lumina
         FObjectHashTables::Get().AddObject(this);
     }
 
+    void CObjectBase::HandleGUIDChange(const FGuid& NewGUID) noexcept
+    {
+        if (NewGUID == GUIDPrivate)
+        {
+            return;
+        }
+
+        // The hash is keyed on the GUID, so it has to come out before the value moves under it.
+        FObjectHashTables::Get().RemoveObject(this);
+        GUIDPrivate = NewGUID;
+        FObjectHashTables::Get().AddObject(this);
+    }
+
     void CObjectBase::AddToRoot()
     {
         FScopeLock Lock(RootMutex);
@@ -280,7 +299,7 @@ namespace Lumina
         if (Index != INDEX_NONE)
         {
             Pending.erase(Pending.begin() + Index);
-            Object->FinishRegister(CClass::StaticClass(), TEXT(""));
+            Object->FinishRegister(static_cast<CClass*>(Object)->GetMetaClass(), TEXT(""));
         }
     }
     
@@ -310,8 +329,22 @@ namespace Lumina
         StructRegistry.ProcessRegistrations();
     }
 
+    // Re-entrancy guard for SettleDeferredRegistrations. The pass creates default objects itself, and a CDO
+    // must not restart the pass that is building it.
+    static bool GProcessingNewlyLoadedCObjects = false;
+
+    void SettleDeferredRegistrations()
+    {
+        if (!GProcessingNewlyLoadedCObjects)
+        {
+            ProcessNewlyLoadedCObjects();
+        }
+    }
+
     void ProcessNewlyLoadedCObjects()
     {
+        const TGuardValue<bool> Guard(GProcessingNewlyLoadedCObjects, true);
+
         FClassDeferredRegistry& ClassRegistry = FClassDeferredRegistry::Get();
         FEnumDeferredRegistry& EnumRegistry = FEnumDeferredRegistry::Get();
         FStructDeferredRegistry& StructRegistry = FStructDeferredRegistry::Get();

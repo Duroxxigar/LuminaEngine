@@ -37,8 +37,7 @@ public static class RulesCompiler
             return LoadAssembly(AssemblyPath);
         }
 
-        // Several builds can start at once, and they would all write this assembly. Whoever gets
-        // the lock compiles it; the rest find it current and just load it.
+        // Several builds can start at once, so whoever gets the lock compiles this assembly and the rest load it.
         using BuildLock CompileLock = BuildLock.Acquire(
             Directories.OutputRoot,
             "rules|" + CacheDirectory,

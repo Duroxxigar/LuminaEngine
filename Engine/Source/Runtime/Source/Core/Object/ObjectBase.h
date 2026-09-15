@@ -61,6 +61,9 @@ namespace Lumina
         RUNTIME_API int32 GetInternalIndex() const { return InternalIndex; }
 
         /** Roots the object, preventing destruction. */
+        /** Re-keys this object's GUID in the object hash, so another object can take the one it had. */
+        RUNTIME_API void HandleGUIDChange(const FGuid& NewGUID) noexcept;
+
         RUNTIME_API void AddToRoot();
         RUNTIME_API void RemoveFromRoot();
 
@@ -219,6 +222,10 @@ namespace Lumina
 
     
     RUNTIME_API void ProcessNewlyLoadedCObjects();
+
+    // Runs the deferred pass unless one is already running, so a caller that needs a settled class set can
+    // ask for one without knowing whether it is inside that pass.
+    RUNTIME_API void SettleDeferredRegistrations();
 
     /** How many compiled-in registrations are queued, per registry. */
     struct FDeferredRegistrationSnapshot

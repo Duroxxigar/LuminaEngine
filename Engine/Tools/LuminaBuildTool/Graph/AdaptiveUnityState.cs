@@ -4,10 +4,8 @@ using LuminaBuildTool.Core;
 
 namespace LuminaBuildTool.Graph;
 
-/// <summary>
-/// Remembers which sources were edited recently so they compile on their own instead of dragging a
-/// whole unity blob with them. Persisted per module, in the same directory as the blobs it steers.
-/// </summary>
+/// <summary>Remembers which sources were edited recently so they compile alone rather than dragging a unity blob.</summary>
+/// <remarks>Persisted per module, in the same directory as the blobs it steers.</remarks>
 public sealed class AdaptiveUnityState
 {
     private const string FileName = "AdaptiveUnity.json";
@@ -38,8 +36,7 @@ public sealed class AdaptiveUnityState
 
     public bool Contains(string NormalizedPath) => Data.Files.ContainsKey(NormalizedPath);
 
-    // Keyed with the blobs it steers, not with the target. Several targets share one module's
-    // intermediates, and a per-target working set makes each rewrite the other's blobs forever.
+    // Keyed with the blobs it steers, not the target, or targets sharing intermediates rewrite each other's blobs.
     public static AdaptiveUnityState Load(BuildModule Module)
     {
         string Path_ = Path.Combine(Module.IntermediateDirectory, FileName);
@@ -67,16 +64,13 @@ public sealed class AdaptiveUnityState
         return new AdaptiveUnityState(Path_, new Payload());
     }
 
-    /// <summary>
-    /// Admits sources edited since the last build and evicts the least recently edited past the cap.
-    /// Returns the paths that entered or left, which is what forces a blob to be rewritten.
-    /// </summary>
+    /// <summary>Admits sources edited since the last build and evicts the least recently edited past the cap.</summary>
+    /// <returns>The paths that entered or left, which is what forces a blob to be rewritten.</returns>
     public void Observe(IEnumerable<FileItem> Sources, int MaxFiles)
     {
         long Build = Data.Build + 1;
 
-        // With no previous build to compare against, every source reads as edited. Take this one as
-        // the baseline and admit nothing, so the first build after a clone is a plain unity build.
+        // With no previous build every source reads as edited, so this one becomes the baseline and admits nothing.
         if (PreviousSeenUtc != default)
         {
             foreach (FileItem Source in Sources)

@@ -59,6 +59,19 @@ LUMINA_DOTNET_EXPORT(const void*, World_GetSystemContext)(uint64 World)
     return W ? &W->GetSystemContext() : nullptr;
 }
 
+// Resolved by class name, so a C# subsystem and a C++ one are found through exactly the same call.
+LUMINA_DOTNET_EXPORT(void*, World_GetSubsystem)(uint64 World, const char* ClassName, int32 NameLen)
+{
+    CWorld* W = AsWorld(World);
+    if (W == nullptr || ClassName == nullptr || NameLen <= 0)
+    {
+        return nullptr;
+    }
+
+    const CClass* Class = FindObject<CClass>(FName(FStringView(ClassName, (size_t)NameLen)));
+    return Class != nullptr ? W->GetSubsystem(Class) : nullptr;
+}
+
 LUMINA_DOTNET_EXPORT(int32, World_IsValidEntity)(uint64 World, uint32 Entity)
 {
     CWorld* W = AsWorld(World);
@@ -955,6 +968,9 @@ struct FLmNavPath
     int32 Count;
     int32 bValid;
     int32 bPartial;
+
+    // A route longer than the caller's buffer, so the last corner written is not the goal.
+    int32 bTruncated;
 };
 LE_REGISTER_LAYOUT("NavPathWire", FLmNavPath);
 
@@ -975,14 +991,15 @@ LUMINA_DOTNET_EXPORT(FLmNavPath, Nav_FindPath)(uint64 World, FVector3 Start, FVe
 {
     FLmNavPath Result{};
     FNavPath Path;
-    if (!Nav::FindPath(AsWorld(World), Start, End, Path) || !Path.bValid)
+    if (!Nav::FindPath(AsWorld(World), Start, End, MaxCorners, Path) || !Path.bValid)
     {
         return Result;
     }
 
     int32 Count = (int32)Path.Corners.size();
     const int32 Cap = MaxCorners > 0 ? MaxCorners : 0;
-    if (Count > Cap)
+    const bool bCut = Count > Cap;
+    if (bCut)
     {
         Count = Cap;
     }
@@ -991,9 +1008,10 @@ LUMINA_DOTNET_EXPORT(FLmNavPath, Nav_FindPath)(uint64 World, FVector3 Start, FVe
         OutCorners[i] = Path.Corners[i];
     }
 
-    Result.Count    = Count;
-    Result.bValid   = 1;
-    Result.bPartial = Path.bPartial ? 1 : 0;
+    Result.Count      = Count;
+    Result.bValid     = 1;
+    Result.bPartial   = (Path.bPartial || Path.bTruncated || bCut) ? 1 : 0;
+    Result.bTruncated = (Path.bTruncated || bCut) ? 1 : 0;
     return Result;
 }
 
@@ -1009,16 +1027,22 @@ LUMINA_DOTNET_EXPORT(FLmNavPoint, Nav_ProjectPoint)(uint64 World, FVector3 Point
     return Result;
 }
 
+// bFound means a wall stopped the walk, so a clear line reports not-found and the caller sees null.
 LUMINA_DOTNET_EXPORT(FLmNavPoint, Nav_Raycast)(uint64 World, FVector3 Start, FVector3 End)
 {
     FLmNavPoint Result{};
-    FVector3 Out;
-    if (Nav::Raycast(AsWorld(World), Start, End, Out))
+    FNavRaycastResult Hit;
+    if (Nav::Raycast(AsWorld(World), Start, End, Hit) && Hit.bHit)
     {
         Result.bFound = 1;
-        Result.Point  = Out;
+        Result.Point  = Hit.Point;
     }
     return Result;
+}
+
+LUMINA_DOTNET_EXPORT(int32, Nav_IsWalkableLine)(uint64 World, FVector3 Start, FVector3 End)
+{
+    return Nav::IsWalkableLine(AsWorld(World), Start, End) ? 1 : 0;
 }
 
 LUMINA_DOTNET_EXPORT(FLmNavPoint, Nav_FindRandomReachablePoint)(uint64 World, FVector3 Origin, float Radius)

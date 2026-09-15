@@ -79,6 +79,7 @@ namespace Lumina::Reflection
     X(NoDrag,               Flag,   Editor,    "Disables click-drag editing on a numeric property.") \
     X(Multiline,            Flag,   Editor,    "Draws a string property as a multi-line text box.") \
     X(FilePath,             Flag,   Editor,    "Draws a string property with a file browse button.") \
+    X(RawJson,              Flag,   Editor,    "Marks a string property in an agent tool's parameters as carrying any JSON value, which the tool server encodes as text before the struct is read.") \
     X(Picker,               Value,  Editor,    "Draws a name or string property as the named picker, resolved from the editor picker registry. Built in kinds are Bone, Socket, Curve, Parameter, ObjectParameter and InputAction.") \
     X(AssetType,            Value,  Editor,    "Restricts an asset reference picker to the named asset class.") \
     X(RowType,              Value,  Editor,    "Restricts a data table row handle picker to the named row struct.") \

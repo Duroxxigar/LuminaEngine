@@ -32,8 +32,7 @@ public static class RulesProjectGenerator
         Xml.AppendLine("    <TargetFramework>net10.0</TargetFramework>");
         Xml.AppendLine("    <LangVersion>latest</LangVersion>");
 
-        // Matches RulesCompiler: annotations without warnings, and no implicit usings, so a
-        // missing using shows up in the editor exactly as it does in a build.
+        // Matches RulesCompiler, with annotations without warnings and no implicit usings, so the editor matches a build.
         Xml.AppendLine("    <Nullable>annotations</Nullable>");
         Xml.AppendLine("    <ImplicitUsings>disable</ImplicitUsings>");
 
@@ -41,7 +40,7 @@ public static class RulesProjectGenerator
         Xml.AppendLine("    <AssemblyName>LuminaRules</AssemblyName>");
         Xml.AppendLine("    <RootNamespace></RootNamespace>");
 
-        // Left at defaults: the project sits under Intermediates, and redirecting here is too late anyway.
+        // Left at defaults, since the project sits under Intermediates and redirecting here is too late anyway.
         Xml.AppendLine("  </PropertyGroup>");
         Xml.AppendLine();
 
@@ -57,8 +56,7 @@ public static class RulesProjectGenerator
 
         foreach (RulesFile File in Assembly.RulesFiles.OrderBy(F => F.Location, StringComparer.OrdinalIgnoreCase))
         {
-            // Linked so the solution view groups them the way the source tree does, rather than
-            // showing one flat list of same-named files.
+            // Linked so the solution view groups them the way the source tree does, not as one flat list.
             Xml.AppendLine($"""    <Compile Include="{Escape(File.Location)}">""");
             Xml.AppendLine($"      <Link>{Escape(MakeLinkPath(File))}</Link>");
             Xml.AppendLine("    </Compile>");

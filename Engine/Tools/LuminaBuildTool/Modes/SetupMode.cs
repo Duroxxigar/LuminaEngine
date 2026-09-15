@@ -8,7 +8,7 @@ using LuminaBuildTool.Platform;
 
 namespace LuminaBuildTool.Modes;
 
-/// <summary>First-time setup: fetch the dependency bundle, persist LUMINA_DIR, configure git hooks.</summary>
+/// <summary>First-time setup, fetching the dependency bundle, persisting LUMINA_DIR, configuring git hooks.</summary>
 public static class SetupMode
 {
     private const string ReleaseUrl =

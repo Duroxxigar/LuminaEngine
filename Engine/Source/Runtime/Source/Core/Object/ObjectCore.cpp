@@ -1,11 +1,14 @@
 ﻿#include "RuntimePCH.h"
+#include "Containers/Algorithm.h"
 
 #include <atomic>
 
 #include "ObjectCore.h"
 #include "Class.h"
 #include "Object.h"
+#include "Cast.h"
 #include "ObjectAllocator.h"
+#include "ScriptClass.h"
 #include "ObjectHash.h"
 #include "ObjectIterator.h"
 #include "Assets/AssetManager/AssetManager.h"
@@ -13,6 +16,7 @@
 #include "Core/Engine/Engine.h"
 #include "Core/Math/Math.h"
 #include "Core/Reflection/Type/LuminaTypes.h"
+#include "Core/Reflection/Type/PropertyRegistry.h"
 #include "Core/Reflection/Type/Properties/ArrayProperty.h"
 #include "Core/Reflection/Type/Properties/MapProperty.h"
 #include "Core/Reflection/Type/Properties/ClassProperty.h"
@@ -52,8 +56,10 @@ namespace Lumina
 
         NewObject->ConstructInternal(FObjectInitializer(Params.Package, Params));
 
-        // The flag is what lets the destructor skip its class unless there is trailing storage.
-        if (Params.Class->ConstructScriptProperties(NewObject))
+        // Only a runtime-minted class has a trailing block, so the cast is the test. The flag is what lets
+        // the destructor skip its class unless there is trailing storage.
+        if (const CScriptClass* ScriptClass = ToScriptClass(Params.Class);
+            ScriptClass != nullptr && ScriptClass->ConstructScriptProperties(NewObject))
         {
             NewObject->SetFlag(OF_ScriptProperties);
         }
@@ -252,214 +258,118 @@ namespace Lumina
         }
     }
 
-    bool IsValueValidForType(double Value, const FName& TypeName)
+    EPropertyTypeFlags PropertyTypeFromName(const FName& TypeName)
     {
-        if (TypeName == "Int8Property")
+        // only reached by a pre-PACKAGE_NAME_TABLE load, so the table is built on the first such file
+        struct FNames
         {
-            return Value >= INT8_MIN && Value <= INT8_MAX;
-        }
-        if (TypeName == "Int16Property")
+            FNames()
+            {
+                for (size_t Index = 0; Index < std::size(Entries); ++Index)
+                {
+                    Entries[Index] = FName(PropertyTypeFlagNames[Index]);
+                }
+            }
+
+            FName Entries[(size_t)EPropertyTypeFlags::Count];
+        };
+        static const FNames Table;
+
+        for (size_t Index = 0; Index < std::size(Table.Entries); ++Index)
         {
-            return Value >= INT16_MIN && Value <= INT16_MAX;
+            if (Table.Entries[Index] == TypeName)
+            {
+                return (EPropertyTypeFlags)Index;
+            }
         }
-        if (TypeName == "IntProperty")
-        {
-            return Value >= INT32_MIN && Value <= INT32_MAX;
-        }
-        if (TypeName == "Int64Property")
-        {
-            return Value >= (double)INT64_MIN && Value <= (double)INT64_MAX;
-        }
-        if (TypeName == "UInt8Property")
-        {
-            return Value >= 0 && Value <= UINT8_MAX;
-        }
-        if (TypeName == "UInt16Property")
-        {
-            return Value >= 0 && Value <= UINT16_MAX;
-        }
-        if (TypeName == "UInt32Property")
-        {
-            return Value >= 0 && Value <= UINT32_MAX;
-        }
-        if (TypeName == "UInt64Property")
-        {
-            return Value >= 0 && Value <= (double)UINT64_MAX;
-        }
-        if (TypeName == "FloatProperty" || TypeName == "DoubleProperty")
-        {
-            return true;
-        }
-        return false;
+
+        return EPropertyTypeFlags::None;
     }
 
-    bool IsPropertyNumeric(const FName& Type)
+    bool IsValueValidForType(double Value, EPropertyTypeFlags Type)
     {
-        return Type == "Int8Property" ||
-            Type == "Int16Property" ||
-            Type == "Int32Property" ||
-            Type == "Int64Property" ||
-            Type == "UInt8Property" ||
-            Type == "UInt16Property" ||
-            Type == "UInt32Property" ||
-            Type == "UInt64Property" ||
-            Type == "FloatProperty" || 
-            Type == "DoubleProperty";
-    }
-
-    static void ConstructPropertyMetadata(FProperty* NewProperty, uint16 NumMetadata, const FMetaDataPairParam* ParamArray)
-    {
-        for (uint16 i = 0; i < NumMetadata; ++i)
+        switch (Type)
         {
-            const FMetaDataPairParam& Param = ParamArray[i];
-            NewProperty->Metadata.AddValue(Param.NameUTF8, Param.ValueUTF8);
+        case EPropertyTypeFlags::Int8:   return Value >= INT8_MIN && Value <= INT8_MAX;
+        case EPropertyTypeFlags::Int16:  return Value >= INT16_MIN && Value <= INT16_MAX;
+        case EPropertyTypeFlags::Int32:  return Value >= INT32_MIN && Value <= INT32_MAX;
+        case EPropertyTypeFlags::Int64:  return Value >= (double)INT64_MIN && Value <= (double)INT64_MAX;
+        case EPropertyTypeFlags::UInt8:  return Value >= 0 && Value <= UINT8_MAX;
+        case EPropertyTypeFlags::UInt16: return Value >= 0 && Value <= UINT16_MAX;
+        case EPropertyTypeFlags::UInt32: return Value >= 0 && Value <= UINT32_MAX;
+        case EPropertyTypeFlags::UInt64: return Value >= 0 && Value <= (double)UINT64_MAX;
+        case EPropertyTypeFlags::Float:
+        case EPropertyTypeFlags::Double: return true;
+        default:                         return false;
         }
-        
-        NewProperty->OnMetadataFinalized();
     }
 
-    template<typename TPropertyType, typename TPropertyParamType>
-    TPropertyType* NewFProperty(FFieldOwner Owner, const FPropertyParams* Param)
+    bool IsPropertyNumeric(EPropertyTypeFlags Type)
     {
-        const TPropertyParamType* TypedParam = static_cast<const TPropertyParamType*>(Param);
-        TPropertyType* Type = nullptr;
-        
-        if(Param->GetterFunc || Param->SetterFunc)
+        switch (Type)
         {
-            Type = Memory::New<TPropertyWithSetterAndGetter<TPropertyType>>(Owner, TypedParam);
+        case EPropertyTypeFlags::Int8:
+        case EPropertyTypeFlags::Int16:
+        case EPropertyTypeFlags::Int32:
+        case EPropertyTypeFlags::Int64:
+        case EPropertyTypeFlags::UInt8:
+        case EPropertyTypeFlags::UInt16:
+        case EPropertyTypeFlags::UInt32:
+        case EPropertyTypeFlags::UInt64:
+        case EPropertyTypeFlags::Float:
+        case EPropertyTypeFlags::Double: return true;
+        default:                         return false;
+        }
+    }
+
+    // The emitter's table is a static constexpr array that outlives the binary, so it is pointed at, not copied.
+    static void ConstructPropertyMetadata(FPropertyArena& Arena, FProperty* NewProperty, uint16 NumMetadata, const FMetaDataPairParam* ParamArray)
+    {
+        NewProperty->SetMetadata(ParamArray, NumMetadata);
+        NewProperty->OnMetadataFinalized(Arena);
+    }
+
+    // Sized from the widest property, so one type's whole set lands in a single block; an undershoot only
+    // costs another block, never a move, so nothing that already points into the arena is disturbed.
+    static constexpr size_t kArenaBytesPerProperty = 192;
+
+    // The function itself plus the pointer array for its parameters; the parameters are properties and
+    // already counted through the reservation above.
+    static constexpr size_t kArenaBytesPerFunction = 128;
+
+    void ConstructProperties(const FPropertyOwner& Owner, const FPropertyParams* const*& Properties, uint32& NumProperties)
+    {
+        const FPropertyParams* Param = *--Properties;
+        const FPropertyKindOps& Ops = GetPropertyKindOps(Param->TypeFlags);
+
+        FProperty* NewProperty = nullptr;
+        if (!Ops.IsValid())
+        {
+            LOG_CRITICAL("Unsupported property type found while creating: {}", Param->Name);
         }
         else
         {
-            Type = Memory::New<TPropertyType>(Owner, TypedParam);
-        }
-        
-        if (TypedParam->NumMetaData)
-        {
-            ConstructPropertyMetadata(Type, TypedParam->NumMetaData, TypedParam->MetaDataArray);
-        }
-        return Type;
-    }
-    
-    
-    void ConstructProperties(const FFieldOwner& FieldOwner, const FPropertyParams* const*& Properties, uint32& NumProperties)
-    {
-        const FPropertyParams* Param = *--Properties;
+            NewProperty = Ops.Construct(Owner, Param);
 
-        // Non-zero if property has an inner property next in Properties list.
-        uint32 ReadMore = 0;
-
-        
-        FProperty* NewProperty = nullptr;
-    
-        switch (Param->TypeFlags)
-        {
-        case EPropertyTypeFlags::Int8:
-            NewFProperty<FInt8Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Int16:
-            NewFProperty<FInt16Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Int32:
-            NewFProperty<FInt32Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Int64:
-            NewFProperty<FInt64Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::UInt8:
-            NewFProperty<FUInt8Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::UInt16:
-            NewFProperty<FUInt16Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::UInt32:
-            NewFProperty<FUInt32Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::UInt64:
-            NewFProperty<FUInt64Property, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Float:
-            NewFProperty<FFloatProperty, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Double:
-            NewFProperty<FDoubleProperty, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Bool:
-            NewFProperty<FBoolProperty, FNumericPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Object:
-            NewFProperty<FObjectProperty, FObjectPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::SoftObject:
-            NewFProperty<FSoftObjectProperty, FSoftObjectPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Class:
-            NewFProperty<FClassProperty, FClassPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Name:
-            NewFProperty<FNameProperty, FNamePropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::String:
-            NewFProperty<FStringProperty, FStringPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Struct:
-            NewFProperty<FStructProperty, FStructPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::SubStruct:
-            NewFProperty<FSubStructProperty, FSubStructPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::InstancedStruct:
-            NewFProperty<FInstancedStructProperty, FInstancedStructPropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Delegate:
-            NewFProperty<FDelegateProperty, FDelegatePropertyParams>(FieldOwner, Param);
-            break;
-        case EPropertyTypeFlags::Enum:
+            uint16 NumMetaData = 0;
+            const FMetaDataPairParam* MetaDataArray = nullptr;
+            Ops.GetMetadata(Param, NumMetaData, MetaDataArray);
+            if (NumMetaData != 0)
             {
-                NewProperty = NewFProperty<FEnumProperty, FEnumPropertyParams>(FieldOwner, Param);
-                
-                ReadMore = 1;
+                ConstructPropertyMetadata(*Owner.Arena, NewProperty, NumMetaData, MetaDataArray);
             }
-            break;
-        case EPropertyTypeFlags::Vector:
-            {
-                NewProperty = NewFProperty<FArrayProperty, FArrayPropertyParams>(FieldOwner, Param);
-
-                ReadMore = 1;
-            }
-            break;
-        case EPropertyTypeFlags::Map:
-            {
-                // The emitter lays them out so the recursion attaches Key on the first pass and Value on the second.
-                NewProperty = NewFProperty<FMapProperty, FMapPropertyParams>(FieldOwner, Param);
-
-                ReadMore = 2;
-            }
-            break;
-        case EPropertyTypeFlags::Optional:
-            {
-                // Like Vector/Enum, the next FPropertyParams describes the inner payload type.
-                NewProperty = NewFProperty<FOptionalProperty, FOptionalPropertyParams>(FieldOwner, Param);
-
-                ReadMore = 1;
-            }
-            break;
-        default:
-            {
-                LOG_CRITICAL("Unsupported property type found while creating: {}", Param->Name);
-            }
-            break;
         }
 
         --NumProperties;
-        for (; ReadMore; --ReadMore)
+
+        // An inner is the next params entry, and the kind is what says how many of them to expect.
+        for (uint8 Remaining = Ops.NumInnerParams; Remaining != 0 && NewProperty != nullptr; --Remaining)
         {
-            FFieldOwner Owner;
-            Owner.Emplace<FField*>(NewProperty);
-            ConstructProperties(Owner, Properties, NumProperties);
+            ConstructProperties(Owner.Inner(NewProperty), Properties, NumProperties);
         }
 
-        // The inner only gets its own size after Init has already run AddProperty.
-        if (Param->TypeFlags == EPropertyTypeFlags::Enum)
+        // The inner only gets its own size after it has already been attached to the enum property.
+        if (Param->TypeFlags == EPropertyTypeFlags::Enum && NewProperty != nullptr)
         {
             FEnumProperty* EnumProperty = static_cast<FEnumProperty*>(NewProperty);
             if (const FNumericProperty* Inner = EnumProperty->GetInnerProperty())
@@ -471,13 +381,67 @@ namespace Lumina
 
     void InitializeAndCreateFProperties(CStruct* Outer, const FPropertyParams* const* PropertyArray, uint32 NumProperties)
     {
+        FPropertyArena& Arena = Outer->GetPropertyArena();
+        Arena.Reserve(NumProperties * kArenaBytesPerProperty);
+
+        const FPropertyOwner Owner{ &Arena, Outer, nullptr };
+
         // Iterates backwards.
         PropertyArray += NumProperties;
         while (NumProperties)
         {
-            FFieldOwner Owner;
-            Owner.Emplace<CStruct*>(Outer);
             ConstructProperties(Owner, PropertyArray, NumProperties);
+        }
+    }
+
+    void InitializeAndCreateFFunctions(CStruct* Outer, const FFunctionParams* const* FunctionArray, uint32 NumFunctions)
+    {
+        if (NumFunctions == 0)
+        {
+            return;
+        }
+
+        FPropertyArena& Arena = Outer->GetPropertyArena();
+        Arena.Reserve(NumFunctions * kArenaBytesPerFunction);
+
+        TVector<FProperty*> Collected;
+        TVector<FProperty*> Ordered;
+
+        for (uint32 Index = 0; Index < NumFunctions; ++Index)
+        {
+            const FFunctionParams& Params = *FunctionArray[Index];
+
+            Ordered.clear();
+
+            // One call consumes exactly one top-level parameter plus its inners, and only the top-level one
+            // reaches the collector, so taking them one at a time is what makes the argument order exact
+            // rather than inferred from where inners happen to sit.
+            const FPropertyParams* const* Walk = Params.Params + Params.NumParamEntries;
+            uint32 Remaining = Params.NumParamEntries;
+            while (Remaining != 0)
+            {
+                Collected.clear();
+                const FPropertyOwner Owner{ &Arena, nullptr, nullptr, &Collected };
+                ConstructProperties(Owner, Walk, Remaining);
+
+                if (Collected.size() != 1)
+                {
+                    LOG_CRITICAL("Reflected function '{}' produced {} top-level parameters from one entry",
+                        Params.Name, Collected.size());
+                    continue;
+                }
+
+                Ordered.push_back(Collected[0]);
+            }
+
+            // The walk runs from the end of the array, so reversing lands declaration order.
+            Algo::Reverse(Ordered);
+
+            FFunction* Function = FFunctionBuilder::Build(Arena, Outer, Params, Ordered);
+            if (Function != nullptr)
+            {
+                Outer->AddFunction(Function);
+            }
         }
     }
 
@@ -506,15 +470,17 @@ namespace Lumina
         
         FinalClass = Params.RegisterFunc();
 
-        CObjectForceRegistration(FinalClass);
-        
         InitializeAndCreateFProperties(FinalClass, Params.Params, Params.NumProperties);
-        
+        InitializeAndCreateFFunctions(FinalClass, Params.Functions, Params.NumFunctions);
+
         for (uint16 i = 0; i < Params.NumMetaData; ++i)
         {
             const FMetaDataPairParam& Param = Params.MetaDataArray[i];
             FinalClass->Metadata.AddValue(Param.NameUTF8, Param.ValueUTF8);
         }
+
+        // Last, so a walk of the object array never reaches a class whose properties are still arriving.
+        CObjectForceRegistration(FinalClass);
     }
 
     void ConstructCEnum(CEnum** OutEnum, const FEnumParams& Params)
@@ -568,7 +534,8 @@ namespace Lumina
         CObjectForceRegistration(FinalClass);
         
         InitializeAndCreateFProperties(FinalClass, Params.Params, Params.NumProperties);
-        
+        InitializeAndCreateFFunctions(FinalClass, Params.Functions, Params.NumFunctions);
+
         for (uint16 i = 0; i < Params.NumMetaData; ++i)
         {
             const FMetaDataPairParam& Param = Params.MetaDataArray[i];

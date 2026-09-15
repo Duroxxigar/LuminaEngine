@@ -34,6 +34,7 @@ namespace ECSBench
     void RunLayoutSweepCases(size_t EntityCount, size_t Passes);
     void RunExcludeCostCases(size_t EntityCount, size_t Passes);
     void RunEntityMapCases(size_t EntityCount, size_t Passes);
+    void RunGroupHeadroomCases(size_t EntityCount, size_t Passes);
 
     bool RunSelfCheck();
 }
@@ -66,5 +67,6 @@ int main(int Argc, char** Argv)
     RunExcludeCostCases(Count, Passes);
     RunEntityMapCases(Count, Passes);
     RunLayoutSweepCases(Count, Passes);
+    RunGroupHeadroomCases(Count, Passes);
     return 0;
 }

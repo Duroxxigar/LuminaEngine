@@ -80,10 +80,8 @@ public abstract class ModuleRules
     /// <summary>Include paths visible only to this module.</summary>
     public List<string> PrivateIncludePaths { get; } = new();
 
-    /// <summary>
-    /// Headers a module consumes but does not own, reached through -isystem so their diagnostics are
-    /// not reported against us. For vendored SDKs pulled in by a module that is not itself third-party.
-    /// </summary>
+    /// <summary>Headers a module consumes but does not own, reached through -isystem so the warnings are not ours.</summary>
+    /// <remarks>For vendored SDKs pulled in by a module that is not itself third-party.</remarks>
     public List<string> PublicSystemIncludePaths { get; } = new();
 
     // Preprocessor.
@@ -102,7 +100,7 @@ public abstract class ModuleRules
     /// <summary>Dependencies used only by this module's implementation. Their public settings stop here.</summary>
     public List<string> PrivateDependencyModuleNames { get; } = new();
 
-    /// <summary>Modules built before this one but not linked: code generators, runtime-loaded assemblies.</summary>
+    /// <summary>Modules built before this one but not linked, such as code generators and loaded assemblies.</summary>
     public List<string> BuildOrderDependencyModuleNames { get; } = new();
 
     // Libraries.
@@ -146,7 +144,7 @@ public abstract class ModuleRules
     /// <summary>Sources that keep their own translation unit, by file name.</summary>
     public List<string> ExcludeFromUnity { get; } = new();
 
-    /// <summary>Sources belonging to the image, not the module: compiled only when this module is its own binary.</summary>
+    /// <summary>Sources belonging to the image, not the module, compiled only when this module is its own binary.</summary>
     public List<string> PerImageSourceFiles { get; } = new();
 
     /// <summary>Compile only what ExtraSourceFiles lists, skipping the directory walk.</summary>
@@ -213,8 +211,7 @@ public abstract class ModuleRules
         RuntimeDependencies.Add(new RuntimeDependency(ModulePath(SourcePath), bOptional));
     }
 
-    // Tests. A Tests directory beside the Build.cs becomes a console binary of its own, linking this
-    // module with its private include paths visible, so a test can reach an internal header.
+    // A Tests directory beside the Build.cs becomes its own console binary, linking this module with private includes.
 
     // Modules the test binary links on top of this one and its own dependencies.
     public List<string> TestDependencyModuleNames { get; } = new();

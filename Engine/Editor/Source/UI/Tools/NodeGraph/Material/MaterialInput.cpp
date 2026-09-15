@@ -1,8 +1,14 @@
 ﻿#include "MaterialInput.h"
+#include "MaterialCompiler.h"
 #include "Nodes/MaterialGraphNode.h"
 
 namespace Lumina
 {
+    FString CMaterialInput::GetPinTypeName() const
+    {
+        return FMaterialCompiler::GetHLSLTypeName(InputType);
+    }
+
     float CMaterialInput::DrawPin()
     {
         float ReturnSize = 1.5f;

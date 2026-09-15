@@ -105,13 +105,12 @@ public static class BuildMode
         return 0;
     }
 
-    /// <summary>Default parallelism: core count less one, capped to what the machine's memory holds.</summary>
+    /// <summary>Default parallelism, core count less one, capped to what the machine's memory holds.</summary>
     private static int DefaultParallelism()
     {
         int FromCores = Math.Max(1, Environment.ProcessorCount - 1);
 
-        // TotalAvailableMemoryBytes is the cgroup limit where one applies and physical RAM
-        // otherwise, so this reads a container's real allowance rather than the host's.
+        // TotalAvailableMemoryBytes is the cgroup limit where one applies, so this reads a container's real allowance.
         long TotalBytes = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
 
         if (TotalBytes <= 0)
@@ -130,8 +129,7 @@ public static class BuildMode
             return FromCores;
         }
 
-        // Worth saying out loud. A build running at half the width of the machine looks like a bug
-        // in the scheduler unless the reason is on screen, and the flag to override it is right here.
+        // Worth saying out loud, since a build at half the machine's width looks like a scheduler bug without a reason.
         Log.Info(
             "Limiting to {0} parallel actions for {1:F1} GiB of usable memory ({2} cores available). Override with -MaxParallel=<n>.",
             FromMemory,
@@ -232,8 +230,7 @@ public static class BuildMode
 
             try
             {
-                // A reflection generator or other host tool is built to produce this target, not shipped
-                // with it, so the profile the caller asked for is not its to collect.
+                // A host tool produces this target rather than shipping with it, so the profile is not its concern.
                 TargetInfo Info = new(
                     TargetName, TypeValue, PlatformValue, ConfigurationValue, Directories,
                     bIsPrimary ? Options : Options.WithoutPgo());
@@ -247,8 +244,7 @@ public static class BuildMode
                 BuildTarget Target = new TargetAssembler(Assembly, Directories, PlatformSupport).Assemble(TargetName, Info);
                 Phase($"  Assemble {TargetName}", AssembleTimer);
 
-                // Prerequisite tools, such as the reflection generator, must exist before this
-                // target's graph is built, because the graph references their output.
+                // Prerequisite tools must exist before this target's graph is built, since it references their output.
                 foreach (string Prerequisite in Target.Rules.PreBuildTargetNames)
                 {
                     Log.Verbose("Target '{0}' requires '{1}'", TargetName, Prerequisite);
@@ -267,8 +263,7 @@ public static class BuildMode
                     }
                 }
 
-                // Built at this target's own type, and as the engine's own build: an engine target with a project
-                // attached would put engine intermediates and generated bindings under that project.
+                // Built at this target's own type and as the engine's build, so engine intermediates stay out of a project.
                 if (Target.Rules.RequiredTargetNames.Count > 0)
                 {
                     BuildDirectories EngineOnly = Directories.ProjectRoot is null
@@ -314,8 +309,7 @@ public static class BuildMode
         {
             Stopwatch Timer = Stopwatch.StartNew();
 
-            // Held for the whole build, keyed on platform/type/configuration and rooted at the engine, because
-            // that is where the shared binaries and objects live.
+            // Held for the whole build, keyed on platform, type and configuration, and rooted where shared binaries live.
             string OutputKey =
                 $"output|{Target.Directories.EngineRoot}|{Target.Info.PlatformName}|{Target.Info.Type}|{Target.Info.Configuration}";
 
@@ -397,8 +391,7 @@ public static class BuildMode
                 History.Save();
                 HeaderDependencies.Save();
 
-                // Written even for a failed build: a build that died partway is exactly when you
-                // want to see what had run and what was still waiting.
+                // Written even for a failed build, since a build that died partway is exactly when the timeline matters.
                 Timeline?.Write(Path.Combine(
                     Target.Directories.BuildToolIntermediatesDirectory,
                     $"Timeline-{Target.Name}-{Target.Info.Type}-{Target.Info.Configuration}.json"));

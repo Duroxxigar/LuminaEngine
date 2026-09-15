@@ -1,7 +1,6 @@
 namespace LuminaBuildTool.Configuration;
 
-// Names the TargetRules class a synthesized test suite is built from, since the tool cannot know the
-// tree's own base class. Without one a suite falls back to bare TargetRules and no global definitions.
+// Names the TargetRules base a synthesized test suite builds from, without which it falls back to bare TargetRules.
 [AttributeUsage(AttributeTargets.Class)]
 public sealed class TestSuiteTargetTemplateAttribute : Attribute
 {

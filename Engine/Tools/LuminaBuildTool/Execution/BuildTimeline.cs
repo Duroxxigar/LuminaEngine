@@ -76,7 +76,7 @@ public sealed class BuildTimeline
             Math.Max(LaneEnds.Count, 1));
     }
 
-    /// <summary>Logs the longest actions: the tail of a parallel build is what sets its wall time.</summary>
+    /// <summary>Logs the longest actions, since the tail of a parallel build is what sets its wall time.</summary>
     public void LogSlowest(int Count)
     {
         List<TimelineSpan> Slowest = Spans

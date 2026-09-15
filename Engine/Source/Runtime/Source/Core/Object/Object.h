@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "ObjectBase.h"
+#include "Core/Reflection/Type/ObjectReferenceVisitor.h"
 #include "ObjectMacros.h"
 #include "Core/Serialization/Archiver.h"
 #include "Core/Serialization/Structured/StructuredArchive.h"
@@ -40,6 +41,14 @@ namespace Lumina
         {}
 
         RUNTIME_API virtual void Serialize(FArchive& Ar);
+
+        /**
+         * Object references this type holds in state reflection cannot describe, such as an ECS registry.
+         *
+         * Overriding this is how a type takes part in reinstancing and reference replacement without either
+         * of them knowing it exists. The reflected properties are walked already; add only what they miss.
+         */
+        RUNTIME_API virtual void VisitAdditionalObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) {}
 
         /** Structured-archive serialize (packaging, network). */
         RUNTIME_API virtual void SerializeStructured(IStructuredArchive::FRecord& Record);

@@ -6,7 +6,7 @@
 
 namespace Lumina::Paths
 {
-    void InitializePaths();
+    RUNTIME_API void InitializePaths();
     
     
     RUNTIME_API FString GetEngineDirectory();

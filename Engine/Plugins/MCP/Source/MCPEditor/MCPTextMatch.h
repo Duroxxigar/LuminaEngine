@@ -11,6 +11,29 @@ namespace Lumina::MCP
         return Needle.empty() || Haystack.find(FStringView(Needle)) != FStringView::npos;
     }
 
+    NODISCARD inline bool EqualsTextFold(FStringView A, FStringView B)
+    {
+        if (A.size() != B.size())
+        {
+            return false;
+        }
+
+        const auto Lower = [](char Character)
+        {
+            return (Character >= 'A' && Character <= 'Z') ? static_cast<char>(Character - 'A' + 'a') : Character;
+        };
+
+        for (size_t Index = 0; Index < A.size(); ++Index)
+        {
+            if (Lower(A[Index]) != Lower(B[Index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     NODISCARD inline bool ContainsTextFold(FStringView Haystack, const FString& Needle)
     {
         if (Needle.empty())

@@ -17,9 +17,13 @@ namespace Lumina
     static TConsoleVar<bool> CVarSignificanceEnabled("Significance.Enabled", true,
         "Score entity significance each frame. Off makes every lookup report full significance.");
 
-    FSystemAccess SSignificanceSystem::Access = FSystemAccess{}
-        .Write<SystemResource::Significance>()
-        .Read<STransformComponent, SStaticMeshComponent, SSkeletalMeshComponent, SDynamicMeshComponent>();
+    void SSignificanceSystem::Configure()
+    {
+        RequireUpdate(EUpdateStage::FrameStart, EUpdatePriority::Highest);
+        RequireUpdate(EUpdateStage::Paused, EUpdatePriority::Highest);
+        Writes<SystemResource::Significance>();
+        Reads<STransformComponent, SStaticMeshComponent, SSkeletalMeshComponent, SDynamicMeshComponent>();
+    }
 
     namespace
     {
@@ -42,13 +46,17 @@ namespace Lumina
         }
     }
 
-    void SSignificanceSystem::Startup(const FSystemContext& Context) noexcept
+    void SSignificanceSystem::OnStartup()
     {
+        const FSystemContext& Context = GetContext();
+
         Context.GetRegistry().Ctx().Emplace<FSignificanceState>();
     }
 
-    void SSignificanceSystem::Update(const FSystemContext& Context) noexcept
+    void SSignificanceSystem::OnUpdate()
     {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         FSignificanceState* StatePtr = Context.GetRegistry().Ctx().Find<FSignificanceState>();

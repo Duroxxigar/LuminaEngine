@@ -59,6 +59,45 @@ public sealed class SkipHotReloadAttribute : Attribute
 }
 
 /// <summary>
+/// Reflected property flags. A hand-written mirror of native <c>Lumina::EPropertyFlags</c>, single-sourced
+/// there from <c>EPropertyFlags.inl</c> and checked member-by-member at bootstrap: a wrong bit is a field that
+/// quietly stops replicating rather than a crash, so it fails loudly at startup instead.
+/// </summary>
+[Flags]
+public enum EPropertyFlags : uint
+{
+    None               = 0,
+
+    /// <summary>Shown in the details panel. Implied by <see cref="PropertyAttribute"/>.</summary>
+    Editable           = 1u << 0,
+    /// <summary>Shown but not editable.</summary>
+    ReadOnly           = 1u << 1,
+    /// <summary>Never written to a package.</summary>
+    NoSerialize        = 1u << 2,
+    /// <summary>Not writable through reflection at all.</summary>
+    Const              = 1u << 3,
+    /// <summary>Stripped from cooked packages.</summary>
+    EditorOnly         = 1u << 11,
+    /// <summary>Participates in network replication.</summary>
+    Replicated         = 1u << 12,
+    /// <summary>Duplication resets this to its default rather than copying it.</summary>
+    DuplicateTransient = 1u << 16,
+}
+
+// The parameter half of native EPropertyFlags, kept apart because neither is anything a [Property] declares.
+[Flags]
+internal enum EScriptParamFlags : uint
+{
+    None     = 0,
+
+    // The caller reads this frame slot back after the call, which is what the dispatcher writes back into.
+    OutParam = 1u << 17,
+
+    // An out parameter the callee also sees the incoming value of, so C# ref rather than C# out.
+    RefParam = 1u << 18,
+}
+
+/// <summary>
 /// Exposes a script field/property to the editor (and saves it).
 /// </summary>
 [AttributeUsage(AttributeTargets.Field | AttributeTargets.Property, AllowMultiple = false)]
@@ -84,6 +123,14 @@ public sealed class PropertyAttribute : Attribute
 
     /// <summary>Draw a color picker for a Vector3/Vector4 value instead of drag fields.</summary>
     public bool Color { get; set; }
+
+    /// <summary>
+    /// Reflected flags for this property, on top of the Editable one <see cref="PropertyAttribute"/> implies.
+    ///
+    /// This is how a script field says the things the engine already understood but C# could not express:
+    /// <c>Replicated</c>, <c>ReadOnly</c>, <c>EditorOnly</c>, <c>Const</c>, <c>DuplicateTransient</c>.
+    /// </summary>
+    public EPropertyFlags Flags { get; set; } = EPropertyFlags.None;
 
     public bool HasMin => !float.IsNaN(Min);
     public bool HasMax => !float.IsNaN(Max);
@@ -133,6 +180,20 @@ public sealed class ScriptEventAttribute : Attribute
 
     /// <summary>The override-flag bit index for this event within its declaring Scriptable class.</summary>
     public int Index { get; }
+}
+
+/// <summary>
+/// Publishes this method as a reflected function on the minted class, so native and other scripts can find
+/// it by name and call it without a generated binding.
+/// </summary>
+/// <remarks>
+/// Parameters and the return value become real FPropertys describing the call frame, so they are limited to
+/// kinds the reflection system can describe. A method whose signature cannot be described is reported at
+/// mint time and left unreflected rather than half-bound.
+/// </remarks>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+public sealed class ScriptFunctionAttribute : Attribute
+{
 }
 
 /// <summary>Exposes a parameterless method as a clickable button in the script component's inspector.

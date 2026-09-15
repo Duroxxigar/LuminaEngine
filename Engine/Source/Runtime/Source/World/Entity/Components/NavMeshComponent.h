@@ -2,6 +2,7 @@
 
 #include "AI/Navigation/NavMesh.h"
 #include "AI/Navigation/NavMeshBuilder.h"
+#include "AI/Navigation/NavTileStreamer.h"
 #include "AI/Navigation/NavTypes.h"
 #include "Memory/SmartPtr.h"
 #include "NavMeshComponent.generated.h"
@@ -36,7 +37,9 @@ namespace Lumina
     struct FNavMeshRuntime
     {
         TUniquePtr<FNavMesh>            Mesh;
-        TUniquePtr<FNavBakeHandle>      ActiveBake;
+
+        /** Shared with the bake worker, so dropping this mid-bake leaves the worker a live handle. */
+        TSharedPtr<FNavBakeHandle>      ActiveBake;
 
         /** Async hydration job; bDone -> consume ResultMesh, State -> Ready. */
         TSharedPtr<FNavInitJob>         PendingInit;
@@ -57,8 +60,11 @@ namespace Lumina
         /** Layout fed to BakeSingleTile so coords align with live mesh. */
         FNavBuildOutput                         LiveLayout;
 
-        int32                                   TilesX = 0;
-        int32                                   TilesY = 0;
+        /** Decides which baked tiles are resident in Mesh. Inert while StreamLoadRadius is 0. */
+        FNavTileStreamer                        Streamer;
+
+        // Whether Mesh hydrated empty for the streamer to fill, rather than seeded with every tile.
+        bool                                    bStreamedInit = false;
 
         /** Entity world scale, mirrored each tick; multiplies Extents into the effective bake volume. */
         FVector3                                WorldScale = FVector3(1.0f);
@@ -90,6 +96,8 @@ namespace Lumina
             , Tiles(Other.Tiles)
             , Origin(Other.Origin)
             , TileWorldSize(Other.TileWorldSize)
+            , TilesX(Other.TilesX)
+            , TilesY(Other.TilesY)
             , MaxPolysPerTile(Other.MaxPolysPerTile)
         {
         }
@@ -105,6 +113,8 @@ namespace Lumina
                 Tiles           = Other.Tiles;
                 Origin          = Other.Origin;
                 TileWorldSize   = Other.TileWorldSize;
+                TilesX          = Other.TilesX;
+                TilesY          = Other.TilesY;
                 MaxPolysPerTile = Other.MaxPolysPerTile;
                 Runtime         = FNavMeshRuntime{};
             }
@@ -144,6 +154,14 @@ namespace Lumina
         /** Tile size in world units. */
         PROPERTY(Category = "NavMesh|Baked")
         float TileWorldSize = 0.0f;
+
+        /** Grid the baked tile coords index into. Serialized so a hot rebake still lines up after the
+         *  volume is moved or rescaled without a full re-bake. */
+        PROPERTY(Category = "NavMesh|Baked")
+        int32 TilesX = 0;
+
+        PROPERTY(Category = "NavMesh|Baked")
+        int32 TilesY = 0;
 
         /** Cap fed to dtNavMeshParams. */
         PROPERTY(Category = "NavMesh|Baked")

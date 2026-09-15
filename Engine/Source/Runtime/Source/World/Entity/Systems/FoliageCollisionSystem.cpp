@@ -8,12 +8,17 @@
 
 namespace Lumina
 {
-    FSystemAccess SFoliageCollisionSystem::Access = FSystemAccess{}
-        .Write<SFoliageComponent>()
-        .Write<SystemResource::PhysicsQuery>();
-
-    void SFoliageCollisionSystem::Update(const FSystemContext& Context) noexcept
+    void SFoliageCollisionSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PrePhysics);
+        Writes<SFoliageComponent>();
+        Writes<SystemResource::PhysicsQuery>();
+    }
+
+    void SFoliageCollisionSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         Physics::IPhysicsScene* Scene = Context.GetPhysicsScene();
@@ -91,8 +96,10 @@ namespace Lumina
         });
     }
 
-    void SFoliageCollisionSystem::Teardown(const FSystemContext& Context) noexcept
+    void SFoliageCollisionSystem::OnTeardown()
     {
+        const FSystemContext& Context = GetContext();
+
         Physics::IPhysicsScene* Scene = Context.GetPhysicsScene();
 
         Context.CreateView<SFoliageComponent>().ForEach([&](SFoliageComponent& Foliage)

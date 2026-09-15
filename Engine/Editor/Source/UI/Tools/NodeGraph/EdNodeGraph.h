@@ -138,6 +138,15 @@ namespace Lumina
         // Screen to canvas conversion needs the editor context, so callers outside DrawGraph queue instead.
         void QueueNodePlacement(CEdGraphNode* Node, ImVec2 ScreenPos);
 
+        // Selects Node and pans to it; queued because navigation needs the laid-out canvas.
+        void QueueFocusNode(CEdGraphNode* Node);
+
+        // The pin carrying this GUID, or null. Linear, and only walked for the one pin under the cursor.
+        CEdNodeGraphPin* FindPinByGUID(uint32 PinID) const;
+
+        // Hover tooltip for a pin. Drawn inside a Suspend block, so plain ImGui calls are safe here.
+        virtual void DrawPinTooltip(CEdNodeGraphPin* Pin);
+
         // Runs at the tail of DrawGraph with the host window current, the only place a canvas-wide drop target works.
         virtual void DrawCanvasDropTarget() {}
 
@@ -227,6 +236,9 @@ namespace Lumina
             ImVec2                   ScreenPos;
         };
         TVector<FPendingPlacement> PendingPlacements;
+
+        // Focus requested outside the draw loop, applied (and cleared) on the next DrawGraph.
+        TObjectPtr<CEdGraphNode> PendingFocusNode;
 
         // Applied on the next draw, since menus are drawn inside a Suspend block.
         bool           bHasPendingAlignment = false;

@@ -1,4 +1,4 @@
-﻿#include "RuntimePCH.h"
+#include "RuntimePCH.h"
 #include "Systems/NetMovementInterpSystem.h"
 #include "World/ECS/Registry.h"
 
@@ -16,13 +16,18 @@
 namespace Lumina
 {
     // Dirty-tagging happens in the serial tail, covered by the transform write domain.
-    FSystemAccess SNetMovementInterpSystem::Access = FSystemAccess{}
-        .Write<STransformComponent>()
-        .Write<FRepTransform>()               // per-entity SmoothedInterpDelay is updated in the parallel body
-        .Read<SNetworkComponent, FRelationshipComponent>();
-
-    void SNetMovementInterpSystem::Update(const FSystemContext& Context) noexcept
+    void SNetMovementInterpSystem::Configure()
     {
+        RequireUpdate(EUpdateStage::PostPhysics, EUpdatePriority::High);
+        Writes<STransformComponent>();
+        Writes<FRepTransform>();
+        Reads<SNetworkComponent, FRelationshipComponent>();
+    }
+
+    void SNetMovementInterpSystem::OnUpdate()
+    {
+        const FSystemContext& Context = GetContext();
+
         LUMINA_PROFILE_SCOPE();
 
         ECS::FRegistry& Registry = Context.GetRegistry();

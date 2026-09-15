@@ -10,6 +10,12 @@ namespace Grain
 
         void SetPosition(const FVector3& InPosition) { Position = InPosition; }
 
+        void SetOrientation(float InYaw, float InPitch)
+        {
+            Yaw = InYaw;
+            Pitch = Math::Clamp(InPitch, -1.53f, 1.53f);
+        }
+
         void Look(float DeltaX, float DeltaY)
         {
             Yaw += DeltaX * 0.0026f;

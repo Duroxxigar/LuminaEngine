@@ -975,8 +975,15 @@ dtStatus dtNavMesh::addTile(unsigned char* data, int dataSize, int flags,
 	m_posLookup[h] = tile;
 	
 	// Patch header pointers.
+#ifdef DT_POLYREF64
+	// Lumina: polysSize is always a multiple of sizeof(dtPoly), so aligning these two
+	// to 8 is what keeps the links block that follows them 8-byte aligned.
+	const int headerSize = dtAlign8(sizeof(dtMeshHeader));
+	const int vertsSize = dtAlign8(sizeof(float)*3*header->vertCount);
+#else
 	const int headerSize = dtAlign4(sizeof(dtMeshHeader));
 	const int vertsSize = dtAlign4(sizeof(float)*3*header->vertCount);
+#endif
 	const int polysSize = dtAlign4(sizeof(dtPoly)*header->polyCount);
 	const int linksSize = dtAlign4(sizeof(dtLink)*(header->maxLinkCount));
 	const int detailMeshesSize = dtAlign4(sizeof(dtPolyDetail)*header->detailMeshCount);

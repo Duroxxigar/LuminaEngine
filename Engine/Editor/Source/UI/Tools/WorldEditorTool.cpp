@@ -3775,6 +3775,17 @@ namespace Lumina
         SetWorldPlayInEditor(false);
     }
 
+    bool FWorldEditorTool::StartPlayInEditor()
+    {
+        if (HasSimulatingWorld())
+        {
+            return false;
+        }
+
+        SetWorldPlayInEditor(true);
+        return true;
+    }
+
     void FWorldEditorTool::DrawPlaySettingsPopup()
     {
         if (!ImGui::BeginPopup("PlaySettingsPopup"))

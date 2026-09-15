@@ -19,11 +19,11 @@ namespace Lumina
 
         if (ParameterName.IsNone())
         {
-            EdNodeGraph::FError Warning;
-            Warning.Name        = "Unbound Object Parameter";
-            Warning.Description = "Get Object Parameter has no field assigned, so it will always evaluate to nothing.";
-            Warning.Node        = this;
-            Compiler.AddWarning(Warning);
+            EdNodeGraph::FError NodeWarning;
+            NodeWarning.Name        = "Unbound Object Parameter";
+            NodeWarning.Description = "Get Object Parameter has no field assigned, so it will always evaluate to nothing.";
+            NodeWarning.Node        = this;
+            Compiler.AddWarning(NodeWarning);
         }
 
         const int32 ParamIndex = Compiler.AddObjectParameter(ParameterName, ObjectType);

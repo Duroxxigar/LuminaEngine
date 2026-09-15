@@ -5,6 +5,9 @@
 #include "Containers/String.h"
 #include "Core/Delegates/ScriptDelegate.h"
 #include "Core/Object/Class.h"
+#include "Core/Reflection/Type/Function.h"
+#include "Core/Templates/IntegerCompare.h"
+#include "Core/Object/Package/Package.h"
 #include "Core/Reflection/Type/Properties/OptionalProperty.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/ObjectHandleTyped.h"
@@ -72,6 +75,12 @@ LUMINA_DOTNET_EXPORT(const void*, FindProperty)(const char* Type, int TLen, cons
 LUMINA_DOTNET_EXPORT(int32, PropertyOffset)(const void* Prop)
 {
     return Prop ? (int32)static_cast<const FProperty*>(Prop)->Offset : -1;
+}
+
+// The width of one value in a container or a call frame, which for an enum is its underlying width.
+LUMINA_DOTNET_EXPORT(int32, PropertySize)(const void* Prop)
+{
+    return Prop ? (int32)static_cast<const FProperty*>(Prop)->GetElementSize() : -1;
 }
 
 // One crossing resolves type and property to an offset, which the blittable path caches.
@@ -232,6 +241,83 @@ LUMINA_DOTNET_EXPORT(void*, FindClassByName)(const char* Name, int Len)
     return FindObject<CClass>(FName(FStringView(Name, (size_t)Len)));
 }
 
+/**
+ * Constructs a CObject from script, the managed face of NewObject.
+ *
+ * Package null means the engine transient package, so an object a script makes is not accidentally part of
+ * anything that gets saved. Name empty means the class picks a unique one, exactly as native construction does.
+ *
+ * The object comes back with no strong reference held on its behalf, which is what native construction does
+ * too: the caller is expected to store it somewhere that owns it, a [Property] holding a TObjectPtr being the
+ * usual answer. Nothing collects it in the meantime, since lifetime here is refcounting rather than a GC.
+ */
+LUMINA_DOTNET_EXPORT(void*, NewObject)(void* Class, void* Package, const char* Name, int NameLen)
+{
+    CClass* ObjectClass = static_cast<CClass*>(Class);
+    if (ObjectClass == nullptr)
+    {
+        LOG_ERROR("NewObject from script was given no class");
+        return nullptr;
+    }
+
+    // Defensive: every generated class carries a factory, but a hand-written one may omit DEFINE_CLASS_FACTORY,
+    // and EmplaceInstance would assert on it rather than saying which class was at fault.
+    if (ObjectClass->FactoryFunction == nullptr)
+    {
+        LOG_ERROR("NewObject from script: '{}' cannot be instantiated, it has no factory", ObjectClass->GetName());
+        return nullptr;
+    }
+
+    CPackage* Outer = (Package != nullptr) ? static_cast<CPackage*>(Package) : CPackage::GetTransientPackage();
+
+    const FName ObjectName = (Name != nullptr && NameLen > 0)
+        ? FName(FStringView(Name, (size_t)NameLen))
+        : NAME_None;
+
+    return NewObject(ObjectClass, Outer, ObjectName, FGuid::New());
+}
+
+//~ Reflected functions. The managed dispatcher walks these to read a call frame, which it can do with the
+//  property accessors above because a frame is a container like any other.
+
+LUMINA_DOTNET_EXPORT(int32, FunctionParamCount)(const void* Function)
+{
+    return Function ? (int32)static_cast<const FFunction*>(Function)->GetArguments().size() : 0;
+}
+
+LUMINA_DOTNET_EXPORT(const void*, FunctionParamAt)(const void* Function, int32 Index)
+{
+    if (Function == nullptr || Index < 0)
+    {
+        return nullptr;
+    }
+    const TSpan<FProperty* const> Arguments = static_cast<const FFunction*>(Function)->GetArguments();
+    return Cmp::Less(Index, Arguments.size()) ? Arguments[Index] : nullptr;
+}
+
+LUMINA_DOTNET_EXPORT(const void*, FunctionReturnParam)(const void* Function)
+{
+    return Function ? static_cast<const FFunction*>(Function)->GetReturnParam() : nullptr;
+}
+
+LUMINA_DOTNET_EXPORT(int32, FunctionGetName)(const void* Function, char* Buf, int Cap)
+{
+    if (Function == nullptr)
+    {
+        return 0;
+    }
+    const FName& Name = static_cast<const FFunction*>(Function)->GetFunctionName();
+    const char* S = Name.c_str();
+    const int L = S ? (int)Name.length() : 0;
+    // The caller sizes its buffer from the length returned here, so a reserved terminator costs a character.
+    if (S && Buf && Cap > 0)
+    {
+        const int Count = L < Cap ? L : Cap;
+        Memory::Memcpy(Buf, (void*)S, (size_t)Count);
+    }
+    return L;
+}
+
 LUMINA_DOTNET_EXPORT(int32, ClassGetName)(void* Class, char* Buf, int Cap)
 {
     if (Class == nullptr)
@@ -254,6 +340,18 @@ LUMINA_DOTNET_EXPORT(int32, ClassGetName)(void* Class, char* Buf, int Cap)
 LUMINA_DOTNET_EXPORT(void*, ClassGetDefaultObject)(void* Class)
 {
     return Class != nullptr ? static_cast<CClass*>(Class)->GetDefaultObject() : nullptr;
+}
+
+// Returning a struct by value. The property owns the copy, since only it knows whether the members own memory.
+LUMINA_DOTNET_EXPORT(void, PropCopyStruct)(void* C, const void* Prop, const void* Source)
+{
+    if (C == nullptr || Prop == nullptr || Source == nullptr)
+    {
+        return;
+    }
+
+    const FProperty* Property = static_cast<const FProperty*>(Prop);
+    Property->CopyCompleteValue(Property->GetValuePtr<void>(C), Source);
 }
 
 // The struct analog of the TSubclassOf pair, with MetaStruct standing in for MetaClass.
@@ -438,6 +536,20 @@ static void* OptionalMember(void* Container, const void* Prop)
 {
     const auto* Optional = static_cast<const FOptionalProperty*>(Prop);
     return (Container != nullptr && Optional != nullptr) ? Optional->GetValuePtr<void>(Container) : nullptr;
+}
+
+// The payload property, so the managed side can size its copy of the value behind the optional.
+LUMINA_DOTNET_EXPORT(const void*, PropOptionalInner)(const void* Prop)
+{
+    if (Prop == nullptr)
+    {
+        return nullptr;
+    }
+
+    const FProperty* Property = static_cast<const FProperty*>(Prop);
+    return Property->GetType() == EPropertyTypeFlags::Optional
+        ? static_cast<const FOptionalProperty*>(Property)->GetInternalProperty()
+        : nullptr;
 }
 
 LUMINA_DOTNET_EXPORT(int32, PropOptionalHasValue)(void* C, const void* Prop)

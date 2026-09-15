@@ -15,11 +15,7 @@ namespace Lumina
     // concurrently. Two systems conflict (must serialize) if their writes overlap, or one writes what
     // the other reads. IDs are component type id values for the component or SystemResource:: tag types.
     //
-    // A system opts in by adding a static member `Access`, e.g.:
-    //     static inline FSystemAccess Access = FSystemAccess{}.Write<SSkeletalMeshComponent>()
-    //                                                          .Read<SAnimationGraphComponent>();
-    // A system with NO Access member is treated as EXCLUSIVE (conflicts with everything → runs alone),
-    // which is the safe default for anything doing structural changes, Lua, or unknown access.
+    // A system opts in from CEntitySystem::Configure; one that declares nothing runs exclusive.
     struct FSystemAccess
     {
         TVector<uint32> Writes;

@@ -80,8 +80,7 @@ public sealed class MsvcToolchain : IToolchain
             return Actions;
         }
 
-        // What a C++ compile is was settled when the graph was assembled: a source on its own, or
-        // a unity blob standing in for several.
+        // What a C++ compile is was settled when the graph was assembled, a source alone or a unity blob.
         List<FileItem> CppFiles = Module.CppCompileInputs;
         List<FileItem> CFiles = Module.Sources.CFiles;
 
@@ -173,8 +172,7 @@ public sealed class MsvcToolchain : IToolchain
             "/Zc:inline",
             "/Zc:__cplusplus",
 
-            // Conformance switches /permissive- does not imply, so MSVC rejects what GCC rejects.
-            // /Zc:enumTypes is deliberately absent: it changes enum underlying types, an ABI break.
+            // Conformance switches /permissive- does not imply, without /Zc:enumTypes, which would be an ABI break.
             "/Zc:templateScope",
             "/Zc:externConstexpr",
             "/Zc:throwingNew",
@@ -184,8 +182,7 @@ public sealed class MsvcToolchain : IToolchain
             Module.Rules.bIsThirdParty ? "/W0" : $"/W{Target.Rules.WarningLevel}",
             $"/Fo{PathUtils.Quote(ObjectFile)}",
 
-            // Emits the full header closure as JSON, which is what drives header-change rebuilds.
-            // The path must stay on the flag's own line or cl reports D8004.
+            // Emits the full header closure as JSON, on the flag's own line or cl reports D8004.
             $"/sourceDependencies {PathUtils.Quote(DependencyFile)}",
         };
 
@@ -212,8 +209,7 @@ public sealed class MsvcToolchain : IToolchain
         AddConfigurationFlags(Target, Arguments);
         AddProfileGuidedCompileFlags(Target, Module, Arguments);
 
-        // /Z7 keeps debug info in the object file, which avoids serializing every compile
-        // through a single mspdbsrv instance.
+        // /Z7 keeps debug info in the object file, avoiding serializing every compile through one mspdbsrv.
         if (Target.Rules.bDebugSymbols)
         {
             Arguments.Add("/Z7");
@@ -229,8 +225,7 @@ public sealed class MsvcToolchain : IToolchain
             Arguments.Add($"/I{PathUtils.Quote(IncludePath)}");
         }
 
-        // /external:I is the MSVC counterpart of -isystem: third-party headers still resolve, but
-        // their diagnostics are held at /external:W0 rather than the target's warning level.
+        // /external:I is the MSVC counterpart of -isystem, holding third-party diagnostics at /external:W0.
         if (Module.SystemIncludePaths.Count > 0)
         {
             Arguments.Add("/external:W0");
@@ -241,8 +236,7 @@ public sealed class MsvcToolchain : IToolchain
             }
         }
 
-        // The precompiled header must be force-included first so /Yu finds its marker in every
-        // translation unit, including the ones that never write the #include themselves.
+        // The precompiled header is force-included first so /Yu finds its marker in every translation unit.
         if (Pch != PchMode.None && Module.Rules.PrecompiledHeader is not null)
         {
             Arguments.Add($"/FI{PathUtils.Quote(Module.Rules.PrecompiledHeader.Header)}");
@@ -370,8 +364,7 @@ public sealed class MsvcToolchain : IToolchain
             return;
         }
 
-        // Deferring codegen to link time re-runs the flow analysis there, where a vendored source's
-        // warnings are reported against the link and the module's own /W0 no longer covers them.
+        // Deferring codegen to link time reports a vendored source's warnings against the link, past its /W0.
         if (Module.Rules.bIsThirdParty)
         {
             return;
@@ -394,8 +387,8 @@ public sealed class MsvcToolchain : IToolchain
         }
     }
 
-    /// <summary>The .pgd for one linked image. Beside it, because that is the only place LINK looks for
-    /// the .pgc run files the instrumented binary drops next to itself.</summary>
+    /// <summary>The .pgd for one linked image, beside it because that is the only place LINK looks.</summary>
+    /// <remarks>LINK looks there for the .pgc run files the instrumented binary drops beside itself.</remarks>
     private static string GetProfileDatabase(BuildModule Module)
     {
         return Path.ChangeExtension(Module.OutputFile, ".pgd");
@@ -409,8 +402,7 @@ public sealed class MsvcToolchain : IToolchain
             return;
         }
 
-        // Mirrors the compile side. An image built entirely from objects that skipped /GL has nothing to
-        // instrument, and LINK rejects /GENPROFILE with LNK1264 rather than ignoring it.
+        // Mirrors the compile side, since an image built from objects that skipped /GL fails /GENPROFILE with LNK1264.
         if (Module.Rules.bIsThirdParty)
         {
             return;
@@ -439,9 +431,7 @@ public sealed class MsvcToolchain : IToolchain
                 + "representative workload, then build again with -Pgo=optimize.");
         }
 
-        // LINK merges these itself, but only warns when it finds none, and the image then quietly ships
-        // with no profile applied. A workload that never loaded this DLL is normal, so this is not fatal,
-        // but it has to be loud enough that nobody reads the result as a profiled build.
+        // LINK only warns when it finds none, so this is loud enough that nobody reads the result as a profiled build.
         string RunPattern = Path.GetFileNameWithoutExtension(Database) + "!*.pgc";
         string SearchDirectory = Path.GetDirectoryName(Database) ?? Target.BinariesDirectory;
 
@@ -524,15 +514,13 @@ public sealed class MsvcToolchain : IToolchain
     /// <summary>Mirrors the module's layout under Intermediates so same-named sources cannot collide.</summary>
     private static string GetObjectFilePath(BuildModule Module, FileItem Source)
     {
-        // Generated sources live outside the module tree; give them their own stable subdirectory
-        // rather than letting them fall into the external hash bucket.
+        // Generated sources live outside the module tree, so they get their own stable subdirectory.
         if (Module.GeneratedCodeDirectory.Length > 0 && PathUtils.IsUnder(Source.Location, Module.GeneratedCodeDirectory))
         {
             return Path.Combine(Module.IntermediateDirectory, "Generated", Path.ChangeExtension(Source.Name, ".obj"));
         }
 
-        // Unity files are generated into the intermediates rather than the module tree, so they
-        // would otherwise be keyed by a hash of a directory that moves with the configuration.
+        // Unity files are generated into the intermediates, so they would otherwise be keyed by a moving directory.
         if (PathUtils.IsUnder(Source.Location, Path.Combine(Module.IntermediateDirectory, UnityBuildStep.BlobDirectoryName)))
         {
             return Path.ChangeExtension(Source.Location, ".obj");
@@ -700,8 +688,7 @@ public sealed class MsvcToolchain : IToolchain
             Arguments.Add($"/LIBPATH:{PathUtils.Quote(LibraryPath)}");
         }
 
-        // Monolithic: module registration happens in static constructors that nothing references,
-        // so the linker would discard those objects without being told to take the whole archive.
+        // Monolithic, since module registration happens in static constructors nothing references.
         foreach (BuildModule Dependency in Module.EnumerateDependencyClosure())
         {
             if (Dependency.bRequiresWholeArchive && Dependency.OutputFile.Length > 0)

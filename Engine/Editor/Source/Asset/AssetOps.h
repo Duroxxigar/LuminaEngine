@@ -3,8 +3,19 @@
 #include "Containers/String.h"
 #include "Containers/StringView.h"
 
+namespace Lumina
+{
+    class IEditorToolContext;
+}
+
 namespace Lumina::AssetOps
 {
+    struct FDeleteAssetResult
+    {
+        bool    bDeleted = false;
+        FString Error;
+    };
+
     struct FPathOpResult
     {
         bool    bSucceeded = false;
@@ -39,4 +50,11 @@ namespace Lumina::AssetOps
     NODISCARD EDITOR_API FPathOpResult MovePath(FStringView OldPath, FStringView NewPath);
 
     NODISCARD EDITOR_API FPathOpResult CreateFolder(FStringView VirtualPath);
+
+    NODISCARD EDITOR_API bool IsAnyWorldPlayingOrSimulating();
+
+    NODISCARD EDITOR_API bool IsLoadedWorldAsset(FStringView AssetPath);
+
+    // Destroys one .lasset: prefab instances first, then its editor, its package and its file. Not undoable.
+    NODISCARD EDITOR_API FDeleteAssetResult DeleteAsset(FStringView AssetPath, IEditorToolContext* Context);
 }

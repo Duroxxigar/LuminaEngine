@@ -94,3 +94,19 @@ namespace Lumina
         bOpen = false;
     }
 }
+
+namespace Lumina
+{
+    void FTransactionManager::VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func)
+    {
+        for (FTransaction& Transaction : UndoStack)
+        {
+            Transaction.VisitObjectReferences(Func);
+        }
+        for (FTransaction& Transaction : RedoStack)
+        {
+            Transaction.VisitObjectReferences(Func);
+        }
+        Open.VisitObjectReferences(Func);
+    }
+}

@@ -133,8 +133,7 @@ public sealed class BuildOptions
                 Options.Pgo = PgoValue;
             }
 
-            // A feature is overridable by name, so -Tracy=off works without the tool knowing what
-            // Tracy is. Only names already present in the config file, plus any explicitly passed.
+            // Overridable by name, so -Tracy=off needs no knowledge of Tracy, limited to config names plus any passed.
             foreach (string Feature in Options.Modes.Keys.ToList())
             {
                 if (TryParseMode(Arguments.GetString(Feature), out FeatureMode Mode))

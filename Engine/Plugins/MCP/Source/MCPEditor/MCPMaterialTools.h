@@ -248,7 +248,7 @@ namespace Lumina
         FString Path;
 
         /** The new value as JSON, so a bare number, a quoted name, or a braced object. */
-        PROPERTY()
+        PROPERTY(RawJson)
         FString Value;
     };
 

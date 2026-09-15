@@ -462,6 +462,9 @@ inline unsigned int dtIlog2(unsigned int v)
 
 inline int dtAlign4(int x) { return (x+3) & ~3; }
 
+// Lumina: dtLink carries a dtPolyRef, so under DT_POLYREF64 the links block needs 8-byte alignment.
+inline int dtAlign8(int x) { return (x+7) & ~7; }
+
 inline int dtOppositeTile(int side) { return (side+4) & 0x7; }
 
 inline void dtSwapByte(unsigned char* a, unsigned char* b)

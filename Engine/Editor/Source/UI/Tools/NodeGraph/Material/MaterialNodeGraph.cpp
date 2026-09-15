@@ -224,6 +224,27 @@ namespace Lumina
         return CountA >= CountB ? AType : BType;
     }
 
+    // What an output pin actually carries, which is not its declared type until emit stamps the promotion.
+    static EMaterialInputType InferOutputPinType(CMaterialOutput* OutputPin, int32 Depth = 0)
+    {
+        if (OutputPin == nullptr)
+        {
+            return EMaterialInputType::Float;
+        }
+
+        // Bounded like ResolveThroughReroutes, since a cyclic graph must not recurse forever.
+        constexpr int32 MaxDepth = 64;
+        if (Depth < MaxDepth)
+        {
+            if (CMaterialExpression_Math* Math = Cast<CMaterialExpression_Math>(OutputPin->GetOwningNode()))
+            {
+                return InferMathOutputType(Math, Depth);
+            }
+        }
+
+        return OutputPin->InputType;
+    }
+
     static EMaterialInputType InferOutputType(CEdNodeGraphPin* InputPin, int32 Depth)
     {
         if (InputPin == nullptr || !InputPin->HasConnection())
@@ -238,17 +259,7 @@ namespace Lumina
             return EMaterialInputType::Float;
         }
 
-        // Bounded like ResolveThroughReroutes, since a cyclic graph must not recurse forever.
-        constexpr int32 MaxDepth = 64;
-        if (Depth < MaxDepth)
-        {
-            if (CMaterialExpression_Math* Math = Cast<CMaterialExpression_Math>(SourcePin->GetOwningNode()))
-            {
-                return InferMathOutputType(Math, Depth);
-            }
-        }
-
-        return SourcePin->InputType;
+        return InferOutputPinType(SourcePin, Depth);
     }
 
     // A pre-emit type check, catching mismatches where no math op fires and no promotion happens.
@@ -363,6 +374,7 @@ namespace Lumina
         for (CEdGraphNode* Node : Nodes)
         {
             Node->ClearError();
+            Node->ClearWarning();
         }
 
         // Every walk below resolves a switch through whichever branch is stamped here, so this runs first.
@@ -389,6 +401,7 @@ namespace Lumina
             Error.Node          = CyclicNode;
             Compiler.AddError(Error);
 
+            ApplyDiagnosticsToNodes(Compiler);
             return;
         }
 
@@ -505,7 +518,73 @@ namespace Lumina
         // Restore default cursor.
         Compiler.SetStage(EMaterialCompileStage::Pixel);
 
-        for (auto& Error : Compiler.GetErrors())
+        ApplyDiagnosticsToNodes(Compiler);
+    }
+
+    void CMaterialNodeGraph::DrawPinTooltip(CEdNodeGraphPin* Pin)
+    {
+        constexpr ImVec4 TypeColor(0.60f, 0.80f, 1.00f, 1.0f);
+        constexpr ImVec4 MismatchColor(1.00f, 0.72f, 0.30f, 1.0f);
+        constexpr float  ValueColumn = 70.0f;
+
+        if (CMaterialOutput* Output = Cast<CMaterialOutput>(Pin))
+        {
+            const EMaterialInputType Produced = InferOutputPinType(Output);
+            ImGui::TextColored(TypeColor, "%s", FMaterialCompiler::GetHLSLTypeName(Produced).c_str());
+            ImGui::SameLine();
+            ImGui::TextUnformatted(Output->GetPinName().c_str());
+            return;
+        }
+
+        CMaterialInput* Input = Cast<CMaterialInput>(Pin);
+        if (Input == nullptr)
+        {
+            Super::DrawPinTooltip(Pin);
+            return;
+        }
+
+        ImGui::TextUnformatted(Input->GetPinName().c_str());
+        ImGui::Separator();
+
+        const EMaterialInputType Expected = Input->GetInputType();
+        ImGui::TextUnformatted("expects");
+        ImGui::SameLine(ValueColumn);
+        ImGui::TextColored(TypeColor, "%s", FMaterialCompiler::GetHLSLTypeName(Expected).c_str());
+
+        if (!Input->HasConnection())
+        {
+            return;
+        }
+
+        const EMaterialInputType Incoming = InferOutputType(Input);
+        const bool bWidthDiffers = FMaterialCompiler::GetComponentCount(Incoming)
+                                != FMaterialCompiler::GetComponentCount(Expected);
+
+        ImGui::TextUnformatted("receives");
+        ImGui::SameLine(ValueColumn);
+        ImGui::TextColored(bWidthDiffers ? MismatchColor : TypeColor, "%s",
+            FMaterialCompiler::GetHLSLTypeName(Incoming).c_str());
+
+        CMaterialOutput* SourcePin = ResolveOutputThroughReroutes(Input->GetConnection<CMaterialOutput>(0));
+        if (SourcePin != nullptr && SourcePin->GetOwningNode() != nullptr)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("from %s", SourcePin->GetOwningNode()->GetNodeFullName().c_str());
+        }
+    }
+
+    void CMaterialNodeGraph::ApplyDiagnosticsToNodes(const FMaterialCompiler& Compiler)
+    {
+        // Warnings first, so a node carrying both keeps the error as its status.
+        for (const EdNodeGraph::FError& Warning : Compiler.GetWarnings())
+        {
+            if (Warning.Node)
+            {
+                Warning.Node->SetWarning(Warning);
+            }
+        }
+
+        for (const EdNodeGraph::FError& Error : Compiler.GetErrors())
         {
             if (Error.Node)
             {

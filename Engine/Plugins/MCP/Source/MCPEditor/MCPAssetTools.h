@@ -45,6 +45,10 @@ namespace Lumina
         /** How many to return at most, so a large project cannot flood the reply. */
         PROPERTY()
         int32 Limit = 50;
+
+        /** How many matches to skip first, so a list longer than Limit can be paged. */
+        PROPERTY()
+        int32 Offset = 0;
     };
 
     REFLECT()

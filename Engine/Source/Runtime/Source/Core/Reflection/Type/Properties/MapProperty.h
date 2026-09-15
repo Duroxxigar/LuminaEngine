@@ -8,11 +8,11 @@ namespace Lumina
 {
     // Reflected THashMap<K,V>: the associative analogue of FArrayProperty. Holds a Key and a Value inner property
     // and operates on the container through a type-erased FMapOps table.
-    class FMapProperty : public FProperty
+    class LUMINA_VISIBLE_TYPE FMapProperty : public FProperty
     {
     public:
-        FMapProperty(const FFieldOwner& InOwner, const FMapPropertyParams* Params)
-            : FProperty(InOwner, Params)
+        explicit FMapProperty(const FMapPropertyParams* Params)
+            : FProperty(Params)
         {
             Ops = Params->GetOpsFn ? Params->GetOpsFn() : nullptr;
         }
@@ -22,12 +22,12 @@ namespace Lumina
         // Value). Do NOT reorder these assignments -- the order is the ABI contract with the emitter.
         void AddProperty(FProperty* Property) override
         {
-            if (!KeyProperty) { KeyProperty.reset(Property); }
-            else              { ValueProperty.reset(Property); }
+            if (!KeyProperty) { KeyProperty = Property; }
+            else              { ValueProperty = Property; }
         }
 
-        void Serialize(FArchive& Ar, void* Value) override;
-        void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
+        RUNTIME_API void Serialize(FArchive& Ar, void* Value) override;
+        RUNTIME_API void SerializeItem(IStructuredArchive::FSlot Slot, void* Value, void const* Defaults) override;
 
         RUNTIME_API void NetSerialize(FNetArchive& Ar, void* Value) override;
 
@@ -44,8 +44,8 @@ namespace Lumina
         /** The key/value ops table. Exposed so C# can build a Lumina.THashMap<K,V> view over any map property. */
         const FMapOps* GetOps() const { return Ops; }
 
-        FProperty* GetKeyProperty()   const { return KeyProperty.get(); }
-        FProperty* GetValueProperty() const { return ValueProperty.get(); }
+        FProperty* GetKeyProperty()   const { return KeyProperty; }
+        FProperty* GetValueProperty() const { return ValueProperty; }
 
         SIZE_T GetNum(const void* InContainer) const { return Ops->Size(InContainer); }
 
@@ -83,7 +83,7 @@ namespace Lumina
 
         const FMapOps*          Ops = nullptr;
 
-        TUniquePtr<FProperty>   KeyProperty;
-        TUniquePtr<FProperty>   ValueProperty;
+        FProperty*              KeyProperty = nullptr;
+        FProperty*              ValueProperty = nullptr;
     };
 }

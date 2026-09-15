@@ -14,6 +14,7 @@ public class MCPEditor : LuminaModuleRules
 
         PrivateDependencyModuleNames.AddRange(new[]
         {
+            "AgentCore",
             "Editor",
             "NlohmannJson",
             "RPMalloc",

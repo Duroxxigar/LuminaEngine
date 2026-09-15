@@ -3,11 +3,16 @@
 
 #include "Assets/AssetRegistry/AssetRegistry.h"
 #include "Assets/AssetRegistry/TextAssetTypes.h"
+#include "Assets/AssetTypes/Prefabs/Prefab.h"
 #include "Containers/StringFormat.h"
 #include "Core/CoreEditorDelegates.h"
+#include "Core/Object/ObjectCore.h"
 #include "Core/Object/Package/Package.h"
 #include "FileSystem/FileSystem.h"
 #include "Paths/Paths.h"
+#include "UI/Tools/EditorToolContext.h"
+#include "World/World.h"
+#include "World/WorldManager.h"
 
 namespace Lumina::AssetOps
 {
@@ -219,5 +224,82 @@ namespace Lumina::AssetOps
         }
 
         return FPathOpResult::Ok();
+    }
+
+    bool IsAnyWorldPlayingOrSimulating()
+    {
+        if (GWorldManager == nullptr)
+        {
+            return false;
+        }
+
+        for (const TUniquePtr<FWorldContext>& Context : GWorldManager->GetContexts())
+        {
+            if (Context && (Context->Type == EWorldType::Game || Context->Type == EWorldType::Simulation))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    bool IsLoadedWorldAsset(FStringView AssetPath)
+    {
+        if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
+        {
+            if (CObject* Object = FindObject<CObject>(Data->AssetGUID))
+            {
+                return Object->IsA<CWorld>();
+            }
+        }
+
+        return false;
+    }
+
+    FDeleteAssetResult DeleteAsset(FStringView AssetPath, IEditorToolContext* Context)
+    {
+        FDeleteAssetResult Result;
+
+        if (IsAnyWorldPlayingOrSimulating())
+        {
+            Result.Error = "Cannot delete while a world is playing or simulating.";
+            return Result;
+        }
+
+        if (IsLoadedWorldAsset(AssetPath))
+        {
+            Result.Error = Lumina::Format("{} is the loaded world; open another world first.", AssetPath);
+            return Result;
+        }
+
+        CObject* AliveObject = nullptr;
+        if (const FAssetData* Data = FAssetRegistry::Get().GetAssetByPath(AssetPath))
+        {
+            AliveObject = FindObject<CObject>(Data->AssetGUID);
+        }
+
+        // Pinned first, since dropping the instances' strong refs could free the prefab out from under us.
+        TObjectPtr<CObject> KeepAlive = AliveObject;
+        if (AliveObject != nullptr && AliveObject->IsA<CPrefab>())
+        {
+            static_cast<CPrefab*>(AliveObject)->DestroyAllInstancesInLoadedWorlds();
+        }
+
+        if (AliveObject != nullptr && Context != nullptr)
+        {
+            Context->OnDestroyAsset(AliveObject);
+        }
+
+        if (!CPackage::DestroyPackage(AssetPath))
+        {
+            Result.Error = Lumina::Format("Could not destroy the package at {}.", AssetPath);
+            return Result;
+        }
+
+        FCoreEditorDelegates::OnAssetDeleted.Broadcast(AssetPath);
+
+        Result.bDeleted = true;
+        return Result;
     }
 }

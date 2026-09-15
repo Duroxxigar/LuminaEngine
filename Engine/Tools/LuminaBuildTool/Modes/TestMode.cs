@@ -42,8 +42,7 @@ public static class TestMode
         BuildPlatform PlatformValue = Arguments.GetEnum("Platform", BuildPlatformRegistry.HostPlatform);
         BuildConfiguration ConfigurationValue = Arguments.GetEnum("Configuration", BuildConfiguration.Development);
 
-        // A suite testing an editor module only exists in an editor target, and asking for one by name
-        // should not require knowing that.
+        // A suite testing an editor module only exists in an editor target, which asking by name should not require knowing.
         TargetType TypeValue = Arguments.GetEnum("TargetType", TargetType.Editor);
 
         bool bRunAfterBuild = !Arguments.HasFlag("BuildOnly");
@@ -187,8 +186,7 @@ public static class TestMode
             WorkingDirectory = Path.GetDirectoryName(Executable) ?? string.Empty,
         };
 
-        // A project's suite links the engine's module DLLs but is written beside the project's own binaries,
-        // so without this the loader finds nothing and the process dies before main.
+        // A project's suite links the engine's module DLLs but sits beside the project's binaries, so the loader needs this.
         if (EngineBinaries.Length > 0)
         {
             string Existing = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;

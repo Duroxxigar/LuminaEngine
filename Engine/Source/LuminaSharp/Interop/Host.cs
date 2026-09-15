@@ -10,7 +10,7 @@ namespace LuminaSharp;
 public static unsafe partial class Host
 {
     // Must equal Lumina::DotNet::GAbiVersion. Bump on ABI breaks.
-    private const int AbiVersion = 11;
+    private const int AbiVersion = 13;
 
     // Logical name for the engine module hosting this assembly (Runtime); resolved to a native handle via ModuleHandle.
     public const string NativeLibrary = "LuminaNative";
@@ -225,7 +225,7 @@ public static unsafe partial class Host
 
             Diag.Generation        = Scripts?.Generation ?? 0;
             Diag.EntityScriptCount = Scripts?.EntityScripts?.TypeNames.Count ?? 0;
-            Diag.EntitySystemCount = Scripts?.EntitySystems?.TypeCount ?? 0;
+            Diag.EntitySystemCount = Scripts?.EntitySystemCount ?? 0;
             Diag.LoadedTypeCount   = Scripts?.LoadedTypeCount ?? 0;
             Diag.ScriptsOnline     = Scripts?.EntityScripts != null ? 1 : 0;
 
@@ -336,37 +336,6 @@ public static unsafe partial class Host
             Action<IntPtr>? Trampoline = Handle.Target as Action<IntPtr>;
             Handle.Free();
             Trampoline?.Invoke(Object);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Resolves a script reference to its current full name and writes it to the native sink, writing nothing if unresolved.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void ResolveEntityScriptName(byte* ScriptClass, int ClassLength, IntPtr Sink, IntPtr Context)
-    {
-        try
-        {
-            string? Resolved = Scripts?.EntityScripts?.ResolveName(Interop.GetString(ScriptClass, ClassLength));
-            if (Resolved == null || Sink == IntPtr.Zero)
-            {
-                return;
-            }
-
-            var Add = (delegate* unmanaged[Stdcall]<IntPtr, byte*, int, void>)Sink;
-            Span<byte> Scratch = stackalloc byte[256];
-            Interop.FInteropString Encoded = new(Resolved, Scratch);
-            try
-            {
-                Add(Context, Encoded.Pointer, Encoded.Length);
-            }
-            finally
-            {
-                Encoded.Free();
-            }
         }
         catch (Exception Exception)
         {
@@ -516,220 +485,6 @@ public static unsafe partial class Host
             {
                 Add(Context, Bytes, Blob.Length);
             }
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    // EntitySystem bridge: one instance per world; the GCHandle is the FStageSlot Self.
-
-    /// Reports every discovered EntitySystem to a native sink as (full name, stage, priority, write-ops, read-ops). Once per type.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void EnumerateEntitySystems(IntPtr Sink, IntPtr Context)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Enumerate(Sink, Context);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Instantiates an EntitySystem for a world; returns a strong GCHandle (as IntPtr) the native FStageSlot stores as Self, or IntPtr.Zero on failure.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static IntPtr CreateEntitySystem(byte* TypeName, int TypeNameLength, ulong World)
-    {
-        try
-        {
-            return Scripts?.EntitySystems?.Create(Interop.GetString(TypeName, TypeNameLength), World) ?? IntPtr.Zero;
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-            return IntPtr.Zero;
-        }
-    }
-
-    /// Starts one EntitySystem instance once, forwarding to OnStartup with the native FSystemContext*.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void StartupEntitySystem(IntPtr Handle, IntPtr SystemContext)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Startup(Handle, SystemContext);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Ticks one EntitySystem instance: forwards to OnUpdate with the native FSystemContext*.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void TickEntitySystem(IntPtr Handle, IntPtr SystemContext)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Tick(Handle, SystemContext);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void DestroyEntitySystem(IntPtr Handle)
-    {
-        try
-        {
-            Scripts?.EntitySystems?.Destroy(Handle);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    // RenderScene bridge: one instance drives one Game world's rendering through the native
-    // FManagedRenderScene proxy; the GCHandle is the proxy's Handle.
-
-    /// Reports every discovered RenderScene subclass to a native name sink. Once per type, sorted.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void EnumerateRenderScenes(IntPtr Sink, IntPtr Context)
-    {
-        try
-        {
-            Scripts?.RenderScenes?.Enumerate(Sink, Context);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Instantiates a RenderScene for a world and runs OnInit; returns a strong GCHandle (as IntPtr), or IntPtr.Zero on failure.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static IntPtr CreateRenderScene(byte* TypeName, int TypeNameLength, ulong World)
-    {
-        try
-        {
-            return Scripts?.RenderScenes?.Create(Interop.GetString(TypeName, TypeNameLength), World) ?? IntPtr.Zero;
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-            return IntPtr.Zero;
-        }
-    }
-
-    /// Runs OnShutdown and frees the instance's GCHandle.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void DestroyRenderScene(IntPtr Handle)
-    {
-        try
-        {
-            Scripts?.RenderScenes?.Destroy(Handle);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Game-thread frame snapshot; View is a const FManagedSceneView*.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void RenderSceneExtract(IntPtr Handle, IntPtr View)
-    {
-        try
-        {
-            Scripts?.RenderScenes?.Extract(Handle, View);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    /// Render-thread record + submit for one frame slot.
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void RenderSceneRender(IntPtr Handle, int FrameIndex)
-    {
-        try
-        {
-            Scripts?.RenderScenes?.Render(Handle, FrameIndex);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void RenderSceneResize(IntPtr Handle, uint Width, uint Height)
-    {
-        try
-        {
-            Scripts?.RenderScenes?.Resize(Handle, Width, Height);
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static ulong RenderSceneGetDisplayTexture(IntPtr Handle)
-    {
-        try
-        {
-            return Scripts?.RenderScenes?.GetDisplayTexture(Handle) ?? 0;
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-            return 0;
-        }
-    }
-
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static uint RenderSceneGetDisplayResourceID(IntPtr Handle)
-    {
-        try
-        {
-            return Scripts?.RenderScenes?.GetDisplayResourceID(Handle) ?? uint.MaxValue;
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-            return uint.MaxValue;
-        }
-    }
-
-    [ManagedExport]
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
-    public static void RenderSceneGetExtent(IntPtr Handle, uint* Width, uint* Height)
-    {
-        try
-        {
-            Scripts?.RenderScenes?.GetExtent(Handle, Width, Height);
         }
         catch (Exception Exception)
         {

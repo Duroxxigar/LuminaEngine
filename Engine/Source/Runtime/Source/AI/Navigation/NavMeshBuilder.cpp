@@ -1,6 +1,7 @@
 ﻿#include "RuntimePCH.h"
 #include "NavMeshBuilder.h"
 
+#include "Config/NavigationSettings.h"
 #include "Memory/SmartPtr.h"
 #include "Memory/Memory.h"
 #include "Memory/MemoryTracking.h"
@@ -242,6 +243,17 @@ namespace Lumina::NavMeshBuilder
                 return false;
             }
 
+            // Stamped after erosion so a Null volume carves a hole the agent radius cannot reopen.
+            for (const FNavAreaVolume& Volume : In.AreaVolumes)
+            {
+                if (Volume.Hull.size() < 3)
+                {
+                    continue;
+                }
+                rcMarkConvexPolyArea(&Ctx, reinterpret_cast<const float*>(Volume.Hull.data()), (int)Volume.Hull.size(),
+                                     Volume.MinY, Volume.MaxY, Volume.Area, *Compact);
+            }
+
             // Watershed regions; monotone is faster but yields thin polys.
             if (!rcBuildDistanceField(&Ctx, *Compact) ||
                 !rcBuildRegions(&Ctx, *Compact, Cfg.borderSize, Cfg.minRegionArea, Cfg.mergeRegionArea))
@@ -305,6 +317,30 @@ namespace Lumina::NavMeshBuilder
                 }
             }
 
+            // Detour keeps only the links whose start point lands inside this tile, so pass them all.
+            const int32 LinkCount = (int32)In.Links.size();
+            TVector<float>  LinkVerts;  LinkVerts.resize((size_t)LinkCount * 6);
+            TVector<float>  LinkRadii;  LinkRadii.resize(LinkCount);
+            TVector<uint8>  LinkDirs;   LinkDirs.resize(LinkCount);
+            TVector<uint8>  LinkAreas;  LinkAreas.resize(LinkCount);
+            TVector<uint16> LinkFlags;  LinkFlags.resize(LinkCount);
+            TVector<uint32> LinkIds;    LinkIds.resize(LinkCount);
+            for (int32 i = 0; i < LinkCount; ++i)
+            {
+                const FNavOffMeshLink& Link = In.Links[i];
+                LinkVerts[i * 6 + 0] = Link.Start.x;
+                LinkVerts[i * 6 + 1] = Link.Start.y;
+                LinkVerts[i * 6 + 2] = Link.Start.z;
+                LinkVerts[i * 6 + 3] = Link.End.x;
+                LinkVerts[i * 6 + 4] = Link.End.y;
+                LinkVerts[i * 6 + 5] = Link.End.z;
+                LinkRadii[i] = Link.Radius;
+                LinkDirs[i]  = Link.bBidirectional ? (uint8)DT_OFFMESH_CON_BIDIR : (uint8)0;
+                LinkAreas[i] = Link.Area;
+                LinkFlags[i] = Link.Flags;
+                LinkIds[i]   = Link.UserId;
+            }
+
             dtNavMeshCreateParams Params{};
             Params.verts            = PMesh->verts;
             Params.vertCount        = PMesh->nverts;
@@ -329,6 +365,16 @@ namespace Lumina::NavMeshBuilder
             Params.cs               = Cfg.cs;
             Params.ch               = Cfg.ch;
             Params.buildBvTree      = true;
+            if (LinkCount > 0)
+            {
+                Params.offMeshConVerts  = LinkVerts.data();
+                Params.offMeshConRad    = LinkRadii.data();
+                Params.offMeshConDir    = LinkDirs.data();
+                Params.offMeshConAreas  = LinkAreas.data();
+                Params.offMeshConFlags  = LinkFlags.data();
+                Params.offMeshConUserID = LinkIds.data();
+                Params.offMeshConCount  = LinkCount;
+            }
 
             uint8* NavData = nullptr;
             int    NavDataSize = 0;
@@ -359,12 +405,13 @@ namespace Lumina::NavMeshBuilder
         const uint32 TileCount = (uint32)(Grid.TilesX * Grid.TilesY);
 
         // A huge tile count is one Recast pipeline each and reads as stuck, so abort with a message.
-        constexpr uint32 kMaxTiles = 8192;
-        if (TileCount > kMaxTiles)
+        const uint32 MaxBakeTiles = (uint32)Math::Max(1, GetDefault<CNavigationSettings>()->MaxBakeTiles);
+        if (TileCount > MaxBakeTiles)
         {
             LOG_ERROR("NavMesh bake aborted: {} tiles ({}x{}) exceeds the {}-tile cap for TileWorldSize={:.1f}. "
-                      "The bake volume is too large, raise Settings.CellSize or TileSizeVoxels, or shrink the bounds / entity scale.",
-                      TileCount, Grid.TilesX, Grid.TilesY, kMaxTiles, Grid.TileWorldSize);
+                      "Raise Navigation settings MaxBakeTiles, raise Settings.CellSize or TileSizeVoxels, "
+                      "or shrink the bounds / entity scale.",
+                      TileCount, Grid.TilesX, Grid.TilesY, MaxBakeTiles, Grid.TileWorldSize);
             Handle.Output.Tiles.clear();
             Handle.TilesScheduled = 0;
             Handle.bDone.store(true, std::memory_order_release);
@@ -380,6 +427,8 @@ namespace Lumina::NavMeshBuilder
 
         Handle.Output.Origin = Grid.Origin;
         Handle.Output.TileWorldSize = Grid.TileWorldSize;
+        Handle.Output.TilesX = Grid.TilesX;
+        Handle.Output.TilesY = Grid.TilesY;
         Handle.Output.MaxTiles = (int32)TileCount;
         Handle.Output.MaxPolysPerTile = 1 << 14;
         Handle.Output.Tiles.resize(TileCount);
@@ -427,14 +476,13 @@ namespace Lumina::NavMeshBuilder
         Handle.bDone.store(true, std::memory_order_release);
     }
 
-    TUniquePtr<FNavBakeHandle> Bake(FNavBuildInput Input)
+    TSharedPtr<FNavBakeHandle> Bake(FNavBuildInput Input)
     {
-        TUniquePtr<FNavBakeHandle> Handle = MakeUnique<FNavBakeHandle>();
-        FNavBakeHandle* Raw = Handle.get();
+        TSharedPtr<FNavBakeHandle> Handle = MakeShared<FNavBakeHandle>();
 
-        Task::AsyncTask(1, 1, [Raw, In = std::move(Input)](uint32, uint32, uint32) mutable
+        Task::AsyncTask(1, 1, [Handle, In = std::move(Input)](uint32, uint32, uint32) mutable
         {
-            RunBake(In, *Raw);
+            RunBake(In, *Handle);
         }, ETaskPriority::Background);
 
         return Handle;
@@ -449,36 +497,97 @@ namespace Lumina::NavMeshBuilder
     }
 
 #if defined(LUMINA_HAS_RECAST)
-    bool BakeSingleTile(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, int32 TX, int32 TY, FNavTileData& Out)
+    namespace
     {
-        // Reuse pipeline with BaseLayout's origin/tile size for byte-exact hot-swap.
-        FTileGrid Grid{};
-        Grid.Origin = BaseLayout.Origin;
-        Grid.TileWorldSize = BaseLayout.TileWorldSize;
-        const int32 BorderVoxels = (int32)std::ceil(Input.Settings.AgentRadius / Input.Settings.CellSize) + 3;
-        Grid.BorderSize = (float)BorderVoxels * Input.Settings.CellSize;
-        Grid.TilesX = Math::Max(1, (int32)std::ceil((Input.BoundsMax.x - Input.BoundsMin.x) / Grid.TileWorldSize));
-        Grid.TilesY = Math::Max(1, (int32)std::ceil((Input.BoundsMax.z - Input.BoundsMin.z) / Grid.TileWorldSize));
+        // The layout, never the live bounds, or moving the volume shifts the clamps in TriTileRange.
+        FTileGrid GridFromLayout(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout)
+        {
+            FTileGrid Grid{};
+            Grid.Origin = BaseLayout.Origin;
+            Grid.TileWorldSize = BaseLayout.TileWorldSize;
+            const int32 BorderVoxels = (int32)std::ceil(Input.Settings.AgentRadius / Input.Settings.CellSize) + 3;
+            Grid.BorderSize = (float)BorderVoxels * Input.Settings.CellSize;
+            Grid.TilesX = Math::Max(1, BaseLayout.TilesX);
+            Grid.TilesY = Math::Max(1, BaseLayout.TilesY);
+            return Grid;
+        }
+    }
 
-        // A single tile culls the input to just this tile's overlapping triangles.
+    void BakeTiles(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout,
+                   const TVector<FNavTileCoord>& Coords, TVector<FNavTileData>& Out)
+    {
+        LUMINA_PROFILE_SCOPE();
+
+        Out.clear();
+        Out.resize(Coords.size());
+        if (Coords.empty())
+        {
+            return;
+        }
+
+        const FTileGrid Grid = GridFromLayout(Input, BaseLayout);
+
+        THashMap<uint64, int32> SlotByKey;
+        SlotByKey.reserve(Coords.size());
+        for (int32 i = 0; i < (int32)Coords.size(); ++i)
+        {
+            SlotByKey[NavTile::PackKey(Coords[i].X, Coords[i].Y)] = i;
+            Out[i].X = Coords[i].X;
+            Out[i].Y = Coords[i].Y;
+        }
+
+        // One pass over the geometry fills every requested tile, instead of one pass per tile.
+        TVector<TVector<int32>> Bins;
+        Bins.resize(Coords.size());
         const int32 NumTris = (int32)(Input.Indices.size() / 3);
-        TVector<int32> TileTris;
-        TileTris.reserve(64);
         for (int32 t = 0; t < NumTris; ++t)
         {
-            int32 tx0, ty0, tx1, ty1;
-            TriTileRange(Input, Grid, t, tx0, ty0, tx1, ty1);
-            if (TX >= tx0 && TX <= tx1 && TY >= ty0 && TY <= ty1)
+            int32 TX0, TY0, TX1, TY1;
+            TriTileRange(Input, Grid, t, TX0, TY0, TX1, TY1);
+            for (int32 ty = TY0; ty <= TY1; ++ty)
             {
-                TileTris.push_back(t);
+                for (int32 tx = TX0; tx <= TX1; ++tx)
+                {
+                    auto It = SlotByKey.find(NavTile::PackKey(tx, ty));
+                    if (It != SlotByKey.end())
+                    {
+                        Bins[It->second].push_back(t);
+                    }
+                }
             }
         }
-        return BakeTile(Input, Grid, TX, TY, TileTris.empty() ? nullptr : TileTris.data(), (int32)TileTris.size(), Out);
+
+        Task::ParallelFor((uint32)Coords.size(), [&](uint32 i)
+        {
+            const TVector<int32>& Tris = Bins[i];
+            BakeTile(Input, Grid, Coords[i].X, Coords[i].Y, Tris.empty() ? nullptr : Tris.data(), (int32)Tris.size(), Out[i]);
+        }, 1, ETaskPriority::Background);
+    }
+
+    bool BakeSingleTile(const FNavBuildInput& Input, const FNavBuildOutput& BaseLayout, int32 TX, int32 TY, FNavTileData& Out)
+    {
+        TVector<FNavTileCoord> Coords;
+        Coords.push_back(FNavTileCoord{ TX, TY });
+
+        TVector<FNavTileData> Baked;
+        BakeTiles(Input, BaseLayout, Coords, Baked);
+        if (Baked.empty())
+        {
+            return false;
+        }
+        Out = std::move(Baked[0]);
+        return true;
     }
 #else
     bool BakeSingleTile(const FNavBuildInput&, const FNavBuildOutput&, int32, int32, FNavTileData&)
     {
         return false;
+    }
+
+    void BakeTiles(const FNavBuildInput&, const FNavBuildOutput&, const TVector<FNavTileCoord>& Coords, TVector<FNavTileData>& Out)
+    {
+        Out.clear();
+        Out.resize(Coords.size());
     }
 #endif
 }

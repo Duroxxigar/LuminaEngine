@@ -21,6 +21,11 @@ namespace Lumina
         bool IsNoOp() const override { return Before == After; }
         FName GetName() const override { return Name; }
 
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override
+        {
+            Object = Func(Object.Get());
+        }
+
     private:
 
         void Capture(TVector<uint8>& Out) const;

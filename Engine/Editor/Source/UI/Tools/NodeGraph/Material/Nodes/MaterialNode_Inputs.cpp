@@ -13,7 +13,6 @@ namespace Lumina
         Super::BuildNode();
 
         UV = Cast<CMaterialInput>(CreatePin(CMaterialInput::StaticClass(), "UV", ENodePinDirection::Input));
-        UV->SetPinColor(IM_COL32(255, 10, 10, 255));
         UV->SetHideDuringConnection(false);
         UV->SetPinName("UV");
         UV->SetInputType(EMaterialInputType::Float2);

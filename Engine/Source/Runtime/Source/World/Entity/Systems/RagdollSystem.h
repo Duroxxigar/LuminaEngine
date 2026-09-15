@@ -8,15 +8,16 @@ namespace Lumina
     // Bridges SRagdollComponent to the physics scene: on PrePhysics it creates and destroys the ragdoll
     // (seeded from the current animation pose, so it must run after SAnimationSystem); on PostPhysics it
     // reads the simulated bodies back into the skeletal mesh's bone transforms.
-    REFLECT(System)
-    struct SRagdollSystem
+    REFLECT()
+    class SRagdollSystem : public CEntitySystem
     {
         GENERATED_BODY()
-        ENTITY_SYSTEM(RequiresUpdate(EUpdateStage::PrePhysics, EUpdatePriority::Low),
-                      RequiresUpdate(EUpdateStage::PostPhysics))
+    public:
+
+        void Configure() override;
 
     public:
 
-        static void Update(const FSystemContext& SystemContext) noexcept;
+        void OnUpdate() override;
     };
 }

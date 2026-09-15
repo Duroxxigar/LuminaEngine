@@ -130,7 +130,7 @@ public abstract class TargetRules
     /// <summary>Module that produces this target's executable.</summary>
     public string LaunchModuleName { get; set; }
 
-    /// <summary>Modules built though nothing links them: plugins, and tools the launch module needs.</summary>
+    /// <summary>Modules built though nothing links them, such as plugins and tools the launch module needs.</summary>
     public List<string> ExtraModuleNames { get; } = new();
 
     /// <summary>Builds this target in a different configuration than the one requested.</summary>
@@ -160,8 +160,8 @@ public abstract class TargetRules
     /// <summary>Warning numbers suppressed target wide.</summary>
     public List<string> GlobalDisabledWarnings { get; } = new();
 
-    /// <summary>Warnings promoted to errors target wide. MSVC codes and GCC names may both be listed;
-    /// each toolchain takes the ones it understands.</summary>
+    /// <summary>Warnings promoted to errors target wide.</summary>
+    /// <remarks>MSVC codes and GCC names may both be listed, and each toolchain takes the ones it understands.</remarks>
     public List<string> GlobalFatalWarnings { get; } = new();
 
     /// <summary>Warning levels by name, applied target wide and overridable per module.</summary>
@@ -215,7 +215,7 @@ public abstract class TargetRules
     /// <summary>Approximate source bytes packed into one unity file.</summary>
     public int UnityBuildBytesPerFile { get; set; } = 384 * 1024;
 
-    /// <summary>Below this many mergeable sources, compile file by file: no repeated header parsing to save.</summary>
+    /// <summary>Below this many mergeable sources, compile file by file, with no repeated header parsing to save.</summary>
     public int MinFilesForUnityBuild { get; set; } = 3;
 
     /// <summary>Whether recently edited sources are held out of unity blobs so an edit rebuilds only itself.</summary>

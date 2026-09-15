@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Containers/Queue.h"
+#include "Core/Object/ObjectReferenceProvider.h"
 #include <imgui/imgui.h>
 #include "Events/EventProcessor.h"
 #include "nlohmann/json.hpp"
@@ -27,9 +28,17 @@ namespace Lumina
 namespace Lumina
 {
     // EDITOR_API: exported so editor plugins can create/toggle tools via CreateTool/ToggleTool.
-    class EDITOR_API FEditorUI : public IDevelopmentToolUI, public IEditorToolContext
+    class EDITOR_API FEditorUI : public IDevelopmentToolUI, public IEditorToolContext, public IObjectReferenceProvider
     {
     public:
+
+        //~ IObjectReferenceProvider: a tool is not a CObject, so the assets and worlds the open editors hold
+        //~ are reachable from nowhere else.
+
+        const char* GetReferenceProviderName() const override { return "editor tools"; }
+
+        void VisitObjectReferences(FObjectReferenceVisitor::FSlotFunc Func) override;
+
 
         FEditorUI() = default;
         ~FEditorUI() override = default;
@@ -75,6 +84,28 @@ namespace Lumina
 
         // The tool editing this asset, or null when nothing has it open.
         NODISCARD FEditorTool* FindAssetEditor(CObject* Asset) const;
+
+        // One open tab as an outside caller sees it: its window name, what it edits, and whether it can go.
+        struct FTabInfo
+        {
+            FString Name;
+            FString Id;
+            FString AssetGuid;
+            bool    bUnsaved  = false;
+            bool    bFocused  = false;
+            bool    bClosable = false;
+        };
+
+        void ForEachTab(const TFunction<void(const FTabInfo&)>& Functor) const;
+
+        // Resolves a full window name, the id after its ###, or a unique case-insensitive substring.
+        NODISCARD FEditorTool* FindTab(FStringView Name, FString& OutError) const;
+
+        // Focus lands on the next frame, since a caller outside the tool cannot be inside an ImGui frame.
+        bool FocusTab(FStringView Name, FString& OutError);
+
+        // Closes as the tab's X would; false with a reason for the world editor or an unsaved tab kept.
+        bool CloseTab(FStringView Name, bool bDiscardUnsaved, FString& OutError);
 
         // Find an active tool by its singleton-style unique type id, or nullptr if not present.
         template<typename T>
