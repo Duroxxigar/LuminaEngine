@@ -968,6 +968,9 @@ struct FLmNavPath
     int32 Count;
     int32 bValid;
     int32 bPartial;
+
+    // A route longer than the caller's buffer, so the last corner written is not the goal.
+    int32 bTruncated;
 };
 LE_REGISTER_LAYOUT("NavPathWire", FLmNavPath);
 
@@ -988,14 +991,15 @@ LUMINA_DOTNET_EXPORT(FLmNavPath, Nav_FindPath)(uint64 World, FVector3 Start, FVe
 {
     FLmNavPath Result{};
     FNavPath Path;
-    if (!Nav::FindPath(AsWorld(World), Start, End, Path) || !Path.bValid)
+    if (!Nav::FindPath(AsWorld(World), Start, End, MaxCorners, Path) || !Path.bValid)
     {
         return Result;
     }
 
     int32 Count = (int32)Path.Corners.size();
     const int32 Cap = MaxCorners > 0 ? MaxCorners : 0;
-    if (Count > Cap)
+    const bool bCut = Count > Cap;
+    if (bCut)
     {
         Count = Cap;
     }
@@ -1004,9 +1008,10 @@ LUMINA_DOTNET_EXPORT(FLmNavPath, Nav_FindPath)(uint64 World, FVector3 Start, FVe
         OutCorners[i] = Path.Corners[i];
     }
 
-    Result.Count    = Count;
-    Result.bValid   = 1;
-    Result.bPartial = Path.bPartial ? 1 : 0;
+    Result.Count      = Count;
+    Result.bValid     = 1;
+    Result.bPartial   = (Path.bPartial || Path.bTruncated || bCut) ? 1 : 0;
+    Result.bTruncated = (Path.bTruncated || bCut) ? 1 : 0;
     return Result;
 }
 

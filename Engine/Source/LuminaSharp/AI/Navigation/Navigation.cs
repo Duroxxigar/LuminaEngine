@@ -32,13 +32,20 @@ public readonly unsafe partial struct Navigation
     /// <summary>
     /// Finds a path from <paramref name="Start"/> to <paramref name="End"/>, writing the corners into the
     /// caller-supplied <paramref name="Corners"/> buffer. Returns the number of corners written (0 if no
-    /// path was found); <paramref name="Partial"/> is set when the path stops short of the goal.
-    /// Allocation-free: pass a <c>stackalloc</c> span.
+    /// path was found); <paramref name="Partial"/> is set when the path stops short of the goal, for any
+    /// reason. Allocation-free: pass a <c>stackalloc</c> span.
     /// </summary>
     public int FindPath(FVector3 Start, FVector3 End, Span<FVector3> Corners, out bool Partial)
     {
+        return FindPath(Start, End, Corners, out Partial, out _);
+    }
+
+    // Truncated means the buffer cut the route, so repath from the last corner rather than stopping.
+    public int FindPath(FVector3 Start, FVector3 End, Span<FVector3> Corners, out bool Partial, out bool Truncated)
+    {
         NavPathWire Wire = FindPathRaw(Start, End, Corners);
         Partial = Wire.Partial != 0;
+        Truncated = Wire.Truncated != 0;
         return Wire.Valid != 0 ? Wire.Count : 0;
     }
 
@@ -60,7 +67,7 @@ public readonly unsafe partial struct Navigation
         {
             Corners[i] = Buffer[i];
         }
-        return new NavPath(Corners, Wire.Partial != 0);
+        return new NavPath(Corners, Wire.Partial != 0, Wire.Truncated != 0);
     }
 
     /// <summary>
@@ -188,10 +195,14 @@ public sealed class NavPath
     /// <summary>True when the path stops short of the requested goal (e.g. it was unreachable).</summary>
     public readonly bool IsPartial;
 
-    internal NavPath(FVector3[] Corners, bool IsPartial)
+    // The route outran the corner buffer, so Destination is a point along the way, not the goal.
+    public readonly bool IsTruncated;
+
+    internal NavPath(FVector3[] Corners, bool IsPartial, bool IsTruncated)
     {
         this.Corners = Corners;
         this.IsPartial = IsPartial;
+        this.IsTruncated = IsTruncated;
     }
 
     public int Count => Corners.Length;
@@ -222,6 +233,7 @@ internal struct NavPathWire
     public int Count;
     public int Valid;
     public int Partial;
+    public int Truncated;
 }
 
 /// <summary>Blittable mirror of the native FLmNavPoint; the project/raycast/random thunk return.</summary>
