@@ -130,7 +130,5 @@ namespace Lumina
 
     void SPrefabSpawnerSystem::OnTeardown()
     {
-        const FSystemContext& Context = GetContext();
-
     }
 }

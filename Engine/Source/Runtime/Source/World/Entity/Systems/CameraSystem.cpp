@@ -173,8 +173,6 @@ namespace Lumina
 
     void SCameraSystem::OnTeardown()
     {
-        const FSystemContext& Context = GetContext();
-
     }
 
     void SCameraSystem::OnUpdate()

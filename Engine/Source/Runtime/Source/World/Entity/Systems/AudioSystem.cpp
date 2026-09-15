@@ -36,8 +36,6 @@ namespace Lumina
 
 	void SAudioSystem::OnStartup()
 	{
-	    const FSystemContext& Context = GetContext();
-
 	}
 
 	void SAudioSystem::OnTeardown()
