@@ -1055,6 +1055,15 @@ namespace Lumina
                 }
                 Out.push_back(std::move(Entry));
             }
+
+            // Without this the caller's box only culls per triangle, after emit has already transformed
+            // geometry it is about to throw away.
+            Out.erase(Algo::RemoveIf(Out, [&BakeMin, &BakeMax](const FNavSourceEntry& Entry)
+            {
+                return Entry.AABBMin.x > BakeMax.x || Entry.AABBMax.x < BakeMin.x
+                    || Entry.AABBMin.y > BakeMax.y || Entry.AABBMax.y < BakeMin.y
+                    || Entry.AABBMin.z > BakeMax.z || Entry.AABBMax.z < BakeMin.z;
+            }), Out.end());
         }
 
         FORCEINLINE void TilesForAABB(const FVector3& AABBMin, const FVector3& AABBMax, const FVector3& Origin, float TileWorldSize, int32 TilesX, int32 TilesY,
