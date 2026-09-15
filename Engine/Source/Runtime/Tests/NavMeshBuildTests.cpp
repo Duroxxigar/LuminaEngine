@@ -4,6 +4,7 @@
 
 #include "AI/Navigation/NavMesh.h"
 #include "AI/Navigation/NavMeshBuilder.h"
+#include "AI/Navigation/NavTileStreamer.h"
 #include "AI/Navigation/NavTypes.h"
 #include <atomic>
 #include <vector>
@@ -442,4 +443,162 @@ TEST(NavMeshBuild, TilesPageOutAndBackIn)
     FNavQueryFilter Filter;
     ASSERT_TRUE(Mesh->FindPath(FVector3(-18.0f, 0.0f, -18.0f), FVector3(18.0f, 0.0f, 18.0f), Filter, Path));
     EXPECT_TRUE(Path.bValid);
+}
+
+namespace
+{
+    struct FStreamFixture
+    {
+        FNavBuildOutput        Out;
+        TUniquePtr<FNavMesh>   Mesh;
+        FNavTileStreamer       Streamer;
+        int32                  NonEmpty = 0;
+    };
+
+    // A plane wide enough to span many tiles, with the mesh left empty for the streamer to fill.
+    bool MakeStreamFixture(FStreamFixture& Fx, int32 Budget)
+    {
+        FNavBuildInput In;
+        ApplyTestSettings(In);
+        In.Settings.TileSizeVoxels = 16;
+        AddGroundQuad(In, -40.0f, -40.0f, 40.0f, 40.0f, 0.0f);
+        GrowBounds(In, 1.0f);
+
+        if (!NavMeshBuilder::BakeSync(std::move(In), Fx.Out))
+        {
+            return false;
+        }
+        for (const FNavTileData& Tile : Fx.Out.Tiles)
+        {
+            if (!Tile.Blob.empty())
+            {
+                ++Fx.NonEmpty;
+            }
+        }
+
+        Fx.Mesh = MakeUnique<FNavMesh>();
+        if (!Fx.Mesh->Initialize(Fx.Out.Origin, Fx.Out.TileWorldSize, Budget, Fx.Out.MaxPolysPerTile))
+        {
+            return false;
+        }
+        Fx.Streamer.Reset(Fx.Out.Origin, Fx.Out.TileWorldSize);
+        return true;
+    }
+
+    FNavTileStreamer::FSettings StreamSettings(int32 Budget, float Radius)
+    {
+        FNavTileStreamer::FSettings S;
+        S.MaxResidentTiles = Budget;
+        S.LoadRadius       = Radius;
+        // Converge in one call so a test asserts the steady state, not the ramp.
+        S.MaxOpsPerTick    = 100000;
+        return S;
+    }
+}
+
+TEST(NavMeshStreaming, ZeroRadiusKeepsEveryTileResident)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeStreamFixture(Fx, 8192));
+    ASSERT_GT(Fx.NonEmpty, 16);
+
+    const TVector<FVector3> NoFocus;
+    const FNavTileStreamer::FStats Stats = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, NoFocus, StreamSettings(8192, 0.0f));
+
+    EXPECT_EQ(Stats.Resident, Fx.NonEmpty);
+    EXPECT_EQ(Stats.Starved, 0);
+    EXPECT_EQ(Fx.Mesh->GetResidentTileCount(), Fx.NonEmpty);
+}
+
+TEST(NavMeshStreaming, TilesFollowTheFocusPoint)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeStreamFixture(Fx, 8192));
+
+    const FNavTileStreamer::FSettings Settings = StreamSettings(8192, 10.0f);
+
+    TVector<FVector3> Focus;
+    Focus.push_back(FVector3(-35.0f, 0.0f, -35.0f));
+    const FNavTileStreamer::FStats Near = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, Focus, Settings);
+
+    EXPECT_GT(Near.Resident, 0);
+    EXPECT_LT(Near.Resident, Fx.NonEmpty);
+    EXPECT_TRUE(Fx.Streamer.IsResident(0, 0));
+
+    // A corner tile of the far side has no business being loaded from here.
+    const int32 FarX = Fx.Out.TilesX - 1;
+    const int32 FarY = Fx.Out.TilesY - 1;
+    EXPECT_FALSE(Fx.Streamer.IsResident(FarX, FarY));
+
+    FVector3 Projected;
+    FNavQueryFilter Filter;
+    EXPECT_TRUE(Fx.Mesh->ProjectPoint(FVector3(-35.0f, 0.0f, -35.0f), FVector3(2.0f, 16.0f, 2.0f), Filter, Projected));
+    EXPECT_FALSE(Fx.Mesh->ProjectPoint(FVector3(35.0f, 0.0f, 35.0f), FVector3(2.0f, 16.0f, 2.0f), Filter, Projected));
+
+    // Walking to the far corner has to swap the resident set over, not merely grow it.
+    Focus[0] = FVector3(35.0f, 0.0f, 35.0f);
+    const FNavTileStreamer::FStats Far = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, Focus, Settings);
+
+    EXPECT_GT(Far.Removed, 0);
+    EXPECT_TRUE(Fx.Streamer.IsResident(FarX, FarY));
+    EXPECT_FALSE(Fx.Streamer.IsResident(0, 0));
+    EXPECT_TRUE(Fx.Mesh->ProjectPoint(FVector3(35.0f, 0.0f, 35.0f), FVector3(2.0f, 16.0f, 2.0f), Filter, Projected));
+}
+
+TEST(NavMeshStreaming, BudgetClampsTheResidentSet)
+{
+    constexpr int32 Budget = 12;
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeStreamFixture(Fx, Budget));
+    ASSERT_GT(Fx.NonEmpty, Budget);
+
+    TVector<FVector3> Focus;
+    Focus.push_back(FVector3(0.0f, 0.0f, 0.0f));
+    const FNavTileStreamer::FStats Stats = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, Focus, StreamSettings(Budget, 1000.0f));
+
+    EXPECT_LE(Stats.Resident, Budget);
+    EXPECT_GT(Stats.Starved, 0);
+    EXPECT_LE(Fx.Mesh->GetResidentTileCount(), Budget);
+}
+
+TEST(NavMeshStreaming, PerTickOpCapBoundsTheMutationWindow)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeStreamFixture(Fx, 8192));
+
+    FNavTileStreamer::FSettings Settings = StreamSettings(8192, 0.0f);
+    Settings.MaxOpsPerTick = 4;
+
+    const TVector<FVector3> NoFocus;
+    const FNavTileStreamer::FStats First = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, NoFocus, Settings);
+    EXPECT_EQ(First.Added, 4);
+    EXPECT_EQ(First.Resident, 4);
+
+    // Repeated ticks converge on the full set rather than stalling.
+    for (int32 i = 0; i < 1000 && Fx.Streamer.GetResidentCount() < Fx.NonEmpty; ++i)
+    {
+        Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, NoFocus, Settings);
+    }
+    EXPECT_EQ(Fx.Streamer.GetResidentCount(), Fx.NonEmpty);
+}
+
+TEST(NavMeshStreaming, HysteresisStopsBoundaryThrash)
+{
+    FStreamFixture Fx;
+    ASSERT_TRUE(MakeStreamFixture(Fx, 8192));
+
+    FNavTileStreamer::FSettings Settings = StreamSettings(8192, 12.0f);
+    Settings.KeepRadiusScale = 2.0f;
+
+    TVector<FVector3> Focus;
+    Focus.push_back(FVector3(0.0f, 0.0f, 0.0f));
+    Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, Focus, Settings);
+    const int32 Settled = Fx.Streamer.GetResidentCount();
+    ASSERT_GT(Settled, 0);
+
+    // Drifting just past the load radius must not evict anything, since keep radius is twice it.
+    Focus[0] = FVector3(6.0f, 0.0f, 0.0f);
+    const FNavTileStreamer::FStats Drift = Fx.Streamer.Update(*Fx.Mesh, Fx.Out.Tiles, Focus, Settings);
+    EXPECT_EQ(Drift.Removed, 0);
+    EXPECT_GE(Drift.Resident, Settled);
 }

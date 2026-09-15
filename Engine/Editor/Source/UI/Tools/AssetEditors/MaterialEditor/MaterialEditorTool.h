@@ -89,6 +89,9 @@ namespace Lumina
         CParticleSystem* GetOrCreatePreviewParticleSystem(CMaterialInterface* PreviewMaterial);
         void FocusGraphNode(CEdGraphNode* Node);
 
+        // Double-click handler for a Material Function call node: opens the referenced asset in its own tab.
+        void OpenMaterialFunctionForNode(CEdGraphNode* Node);
+
         // Syntax-highlighted editor for the selected Custom Slang node's body. Bound lazily to the
         // selection; edits write straight back to the node (auto-compile picks them up).
         void DrawCustomCodeEditor();

@@ -51,6 +51,10 @@ namespace Lumina
         /** Parent picker plus the root-to-here chain, so it is clear which level a value comes from. */
         void DrawInheritanceSection(class CMaterialInstance* Instance);
 
+        /** Shown in place of the parameter table when the root has no usable shaders, which otherwise
+            reads as a material that simply exposes nothing. */
+        void DrawBrokenParentNotice(class CMaterialInstance* Instance, class CMaterial* Root);
+
         /** The nearest ancestor supplying Param, or null when the value is the root's own default. */
         class CMaterialInterface* FindOverridingAncestor(class CMaterialInstance* Instance, const struct FMaterialParameter& Param) const;
 

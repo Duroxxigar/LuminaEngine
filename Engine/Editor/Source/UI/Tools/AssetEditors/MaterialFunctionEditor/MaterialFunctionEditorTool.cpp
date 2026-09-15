@@ -9,6 +9,7 @@
 #include "UI/Tools/NodeGraph/Material/MaterialCompiler.h"
 #include "UI/Tools/NodeGraph/Material/MaterialFunctionGraph.h"
 #include "UI/Tools/NodeGraph/Material/Nodes/MaterialNode_Function.h"
+#include "UI/Tools/EditorToolContext.h"
 
 namespace Lumina
 {
@@ -63,6 +64,30 @@ namespace Lumina
                     GetPropertyTable()->SetObject(Node, Node->GetClass());
                 }
             }
+        });
+
+        NodeGraph->SetNodeDoubleClickedCallback([this](CEdGraphNode* Node)
+        {
+            CMaterialExpression_MaterialFunctionCall* Call = Cast<CMaterialExpression_MaterialFunctionCall>(Node);
+            if (Call == nullptr || ToolContext == nullptr)
+            {
+                return;
+            }
+
+            if (!Call->Function.IsValid())
+            {
+                ImGuiX::Notifications::NotifyWarning("This Material Function node has no function assigned.");
+                return;
+            }
+
+            // A function calling itself would reopen this same tab, which reads as the click doing nothing.
+            if (Call->Function.Get() == Asset.Get())
+            {
+                ImGuiX::Notifications::NotifyWarning("'{0}' is this function.", Call->Function->GetName().c_str());
+                return;
+            }
+
+            ToolContext->OpenAssetEditor(Call->Function->GetGUID());
         });
 
         NodeGraph->SetPreNodeDeletedCallback([this](const CEdGraphNode* Node)

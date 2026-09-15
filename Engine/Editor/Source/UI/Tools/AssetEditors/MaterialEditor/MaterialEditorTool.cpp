@@ -13,6 +13,8 @@
 #include "Tools/UI/ImGui/ImGuiFonts.h"
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
 #include "UI/Tools/NodeGraph/Material/Nodes/MaterialNode_CustomSlang.h"
+#include "UI/Tools/NodeGraph/Material/Nodes/MaterialNode_Function.h"
+#include "UI/Tools/EditorToolContext.h"
 #include "Paths/Paths.h"
 #include "Platform/Filesystem/FileHelper.h"
 #include "Renderer/MaterialTypes.h"
@@ -105,6 +107,11 @@ namespace Lumina
                     GetPropertyTable()->SetObject(Node, Node->GetClass());
                 }
             }
+        });
+
+        NodeGraph->SetNodeDoubleClickedCallback([this](CEdGraphNode* Node)
+        {
+            OpenMaterialFunctionForNode(Node);
         });
 
         NodeGraph->SetPreNodeDeletedCallback([this](const CEdGraphNode* Node)
@@ -1164,6 +1171,23 @@ namespace Lumina
         ImGui::EndChild();
         ImGui::PopStyleColor(2);
         ImGui::PopStyleVar(2);
+    }
+
+    void FMaterialEditorTool::OpenMaterialFunctionForNode(CEdGraphNode* Node)
+    {
+        CMaterialExpression_MaterialFunctionCall* Call = Cast<CMaterialExpression_MaterialFunctionCall>(Node);
+        if (Call == nullptr || ToolContext == nullptr)
+        {
+            return;
+        }
+
+        if (!Call->Function.IsValid())
+        {
+            ImGuiX::Notifications::NotifyWarning("This Material Function node has no function assigned.");
+            return;
+        }
+
+        ToolContext->OpenAssetEditor(Call->Function->GetGUID());
     }
 
     void FMaterialEditorTool::FocusGraphNode(CEdGraphNode* Node)

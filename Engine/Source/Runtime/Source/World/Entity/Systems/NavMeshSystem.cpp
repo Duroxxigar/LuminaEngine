@@ -4,6 +4,9 @@
 
 #include "AI/Navigation/NavMesh.h"
 #include "AI/Navigation/NavMeshBuilder.h"
+#include "AI/Navigation/NavTileStreamer.h"
+#include "Config/NavigationSettings.h"
+#include "World/Entity/Systems/SignificanceSystem.h"
 #include "Assets/AssetTypes/Mesh/StaticMesh/StaticMesh.h"
 #include "Assets/AssetTypes/Physics/CollisionShape.h"
 #include "Core/Console/ConsoleVariable.h"
@@ -55,6 +58,7 @@ namespace Lumina
     static TConsoleVar<bool>  CVarNavDebugLog       ("Nav.Debug.LogStats",     false, "Log triangle/edge/tile counts on every cache refresh.");
     static TConsoleVar<float> CVarNavDebugLift      ("Nav.Debug.LiftY",        0.05f, "Vertical offset added to debug geometry to avoid Z-fighting.");
     static TConsoleVar<float> CVarNavDebugVertSize  ("Nav.Debug.VertexRadius", 0.08f, "Radius of vertex spheres (also drives center-sphere size).");
+
 
     // NOLINTEND(bugprone-throwing-static-initialization)
 
@@ -203,6 +207,11 @@ namespace Lumina
 
     namespace
     {
+        const CNavigationSettings& NavSettings()
+        {
+            return *GetDefault<CNavigationSettings>();
+        }
+
         struct FGatherAccumulator
         {
             TVector<FVector3> Vertices;
@@ -1237,12 +1246,25 @@ namespace Lumina
                 Comp.Runtime.bRuntimeDirty = false;
                 Comp.Runtime.State = ENavBakeState::Initializing;
 
+                // With streaming on the mesh starts empty and the streamer pages tiles in; otherwise it is
+                // seeded with everything, which is what the whole-navmesh-resident path always did.
+                const bool bStreaming = NavSettings().StreamLoadRadius > 0.0f;
+                const int32 TileCount = (int32)Comp.Tiles.size();
+                const int32 InitMaxTiles = bStreaming
+                    ? Math::Min(Math::Max(1, NavSettings().ResidentTileBudget), Math::Max(1, TileCount))
+                    : Math::Max(1, TileCount);
+
                 // Copy tiles so worker owns its data; Comp.Tiles stays serialized source of truth.
-                TVector<FNavTileData> TilesCopy = Comp.Tiles;
+                TVector<FNavTileData> TilesCopy;
+                if (!bStreaming)
+                {
+                    TilesCopy = Comp.Tiles;
+                }
                 const FVector3 InitOrigin = Comp.Origin;
                 const float InitTileSize = Comp.TileWorldSize;
-                const int32 InitMaxTiles = (int32)TilesCopy.size();
                 const int32 InitMaxPolys = Comp.MaxPolysPerTile;
+
+                Comp.Runtime.Streamer.Reset(Comp.Origin, Comp.TileWorldSize);
 
                 Task::AsyncTask(1, 1, [Job, Tiles = std::move(TilesCopy), InitOrigin, InitTileSize, InitMaxTiles, InitMaxPolys](uint32, uint32, uint32) mutable
                 {
@@ -1259,6 +1281,40 @@ namespace Lumina
             if (!Comp.Runtime.Mesh || !Comp.Runtime.Mesh->IsReady() || Comp.Runtime.State != ENavBakeState::Ready)
             {
                 return;
+            }
+
+            // Page tiles around the view before anything reads the mesh this tick.
+            {
+                const CNavigationSettings& Settings = NavSettings();
+                FNavTileStreamer::FSettings Stream;
+                Stream.MaxResidentTiles = Math::Max(1, Settings.ResidentTileBudget);
+                Stream.LoadRadius       = Settings.StreamLoadRadius;
+                Stream.KeepRadiusScale  = Settings.KeepRadiusScale;
+                Stream.MaxOpsPerTick    = Math::Max(1, Settings.MaxTileOpsPerTick);
+
+                TVector<FVector3> Focus;
+                if (Stream.LoadRadius > 0.0f)
+                {
+                    if (const FSignificanceState* Significance = Significance::GetState(Context))
+                    {
+                        if (Significance->bHasView)
+                        {
+                            Focus.push_back(Significance->ViewOrigin);
+                        }
+                    }
+                }
+
+                if (Comp.Runtime.Streamer.IsConfigured())
+                {
+                    const FNavTileStreamer::FStats Stats =
+                        Comp.Runtime.Streamer.Update(*Comp.Runtime.Mesh, Comp.Tiles, Focus, Stream);
+
+                    if (CVarNavDebugLog.GetValue() && (Stats.Added > 0 || Stats.Removed > 0))
+                    {
+                        LOG_INFO("NavMesh streaming: +{} -{}, {} resident of {} wanted.",
+                            Stats.Added, Stats.Removed, Stats.Resident, Stats.Wanted);
+                    }
+                }
             }
 
             // Debug draw runs first so it emits even when later steps early-return.
@@ -1361,7 +1417,7 @@ namespace Lumina
             Comp.Runtime.EntityAABBs = std::move(CurrentAABBs);
 
             // Cap concurrent rebake jobs; remaining dirty tiles wait for next tick.
-            constexpr uint32 MaxConcurrent = 8;
+            const uint32 MaxConcurrent = (uint32)Math::Max(1, NavSettings().MaxConcurrentTileRebakes);
             if (Comp.Runtime.DirtyTiles.empty() || Comp.Runtime.PendingRebakes.size() >= MaxConcurrent)
             {
                 return;

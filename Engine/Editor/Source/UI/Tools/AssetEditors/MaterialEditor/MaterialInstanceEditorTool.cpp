@@ -17,6 +17,7 @@
 #include "Tools/UI/ImGui/ImGuiDragDrop.h"
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "UI/Tools/ContentBrowserEditorTool.h"
+#include "UI/Tools/EditorToolContext.h"
 #include "World/Entity/Components/CameraComponent.h"
 #include "World/Entity/Components/EnvironmentComponent.h"
 #include "World/Entity/Components/SkyLightComponent.h"
@@ -249,6 +250,43 @@ namespace Lumina
         ImGui::Separator();
     }
 
+    void FMaterialInstanceEditorTool::DrawBrokenParentNotice(CMaterialInstance* Instance, CMaterial* Root)
+    {
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.20f, 0.13f, 0.13f, 1.0f));
+        ImGui::BeginChild("##broken_parent", ImVec2(0, 0),
+            ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY, ImGuiWindowFlags_NoScrollbar);
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.55f, 0.55f, 1.0f));
+        ImGui::TextUnformatted(LE_ICON_ALERT " Parent material is not compiled");
+        ImGui::PopStyleColor();
+
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.80f, 0.80f, 1.0f));
+        if (Root == nullptr)
+        {
+            ImGui::TextWrapped("'%s' does not resolve to a base material, so there is nothing to inherit "
+                               "parameters from. Reassign the parent above.", Instance->GetName().c_str());
+        }
+        else
+        {
+            ImGui::TextWrapped("'%s' has no usable shaders, so this instance renders nothing and exposes no "
+                               "parameters. Open it and fix the compile errors listed in the console and the "
+                               "Shader Stats tab.", Root->GetName().c_str());
+        }
+        ImGui::PopStyleColor();
+
+        if (Root != nullptr && ToolContext != nullptr)
+        {
+            ImGui::Spacing();
+            if (ImGui::SmallButton("Open Parent Material"))
+            {
+                ToolContext->OpenAssetEditor(Root->GetGUID());
+            }
+        }
+
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+    }
+
     void FMaterialInstanceEditorTool::DrawParameterEditor(bool bFocused)
     {
         CMaterialInstance* Instance = Cast<CMaterialInstance>(Asset.Get());
@@ -268,6 +306,14 @@ namespace Lumina
         if (!Instance->Material.IsValid())
         {
             ImGui::TextUnformatted("Assign a parent material to edit parameters.");
+            return;
+        }
+
+        // A failed compile leaves the root not-ready, and everything below it reads as simply empty.
+        CMaterial* Root = Instance->GetMaterial();
+        if (Root == nullptr || !Root->IsReadyForRender())
+        {
+            DrawBrokenParentNotice(Instance, Root);
             return;
         }
 

@@ -13,6 +13,7 @@ namespace Lumina
     public:
         
         float DrawPin() override;
+        FString GetPinTypeName() const override;
         EComponentMask GetComponentMask() const { return Mask; }
         void SetComponentMask(EComponentMask InMask) { Mask = InMask; }
         

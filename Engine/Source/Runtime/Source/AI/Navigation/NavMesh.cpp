@@ -2,6 +2,7 @@
 #include "RuntimePCH.h"
 #include "NavMesh.h"
 
+#include "Config/NavigationSettings.h"
 #include "TaskSystem/TaskSystem.h"
 
 // Real Recast/Detour path is gated on LUMINA_HAS_RECAST; otherwise compiles as a no-op shell.
@@ -94,7 +95,13 @@ namespace Lumina
         Shutdown();
     }
 
-    bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxTiles, int32 MaxPolysPerTile, TVector<FNavTileData>&& Tiles)
+    bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile)
+    {
+        TVector<FNavTileData> None;
+        return Initialize(InOrigin, InTileWorldSize, MaxResidentTiles, MaxPolysPerTile, std::move(None));
+    }
+
+    bool FNavMesh::Initialize(const FVector3& InOrigin, float InTileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile, TVector<FNavTileData>&& Tiles)
     {
         Shutdown();
 
@@ -109,9 +116,9 @@ namespace Lumina
             return false;
         }
 
-        if (TileWorldSize <= 0.0f || MaxTiles <= 0)
+        if (TileWorldSize <= 0.0f || MaxResidentTiles <= 0)
         {
-            LOG_ERROR("FNavMesh::Initialize: invalid layout (TileWorldSize={:.3f}, MaxTiles={}). Refusing to init.", TileWorldSize, MaxTiles);
+            LOG_ERROR("FNavMesh::Initialize: invalid layout (TileWorldSize={:.3f}, MaxResidentTiles={}). Refusing to init.", TileWorldSize, MaxResidentTiles);
             dtFreeNavMesh(NavMesh);
             NavMesh = nullptr;
             return false;
@@ -121,12 +128,12 @@ namespace Lumina
         Pack(Origin, Params.orig);
         Params.tileWidth  = TileWorldSize;
         Params.tileHeight = TileWorldSize;
-        Params.maxTiles   = MaxTiles;
+        Params.maxTiles   = MaxResidentTiles;
         Params.maxPolys   = MaxPolysPerTile;
 
         if (dtStatusFailed(NavMesh->init(&Params)))
         {
-            LOG_ERROR("FNavMesh::Initialize: dtNavMesh::init failed (TileWorldSize={:.3f}, MaxTiles={}, MaxPolys={}).", TileWorldSize, MaxTiles, MaxPolysPerTile);
+            LOG_ERROR("FNavMesh::Initialize: dtNavMesh::init failed (TileWorldSize={:.3f}, MaxResidentTiles={}, MaxPolys={}).", TileWorldSize, MaxResidentTiles, MaxPolysPerTile);
             dtFreeNavMesh(NavMesh);
             NavMesh = nullptr;
             return false;
@@ -182,7 +189,7 @@ namespace Lumina
             LOG_WARN("FNavMesh::Initialize: dtNavMesh::addTile rejected {} of {} non-empty tiles (likely tile coord collision or maxTiles too small).",
                 Rejected, Added + Rejected);
         }
-        if (Added == 0 && (int32)Tiles.size() > 0)
+        if (Added == 0 && Skipped + Rejected + Stale > 0)
         {
             LOG_ERROR("FNavMesh::Initialize: no tiles were added (skipped={}, rejected={}, stale={}). NavMesh will not be ready.", Skipped, Rejected, Stale);
             dtFreeNavMesh(NavMesh);
@@ -197,7 +204,7 @@ namespace Lumina
         for (uint32 i = 0; i < PoolSize; ++i)
         {
             dtNavMeshQuery* Query = dtAllocNavMeshQuery();
-            if (Query && dtStatusSucceed(Query->init(NavMesh, 2048)))
+            if (Query && dtStatusSucceed(Query->init(NavMesh, Math::Max(64, GetDefault<CNavigationSettings>()->QueryNodePoolSize))))
             {
                 QueryPool[i].Query = Query;
                 ++ReadyQueries;
@@ -220,7 +227,7 @@ namespace Lumina
         bDebugCacheDirty = true;
         return true;
 #else
-        (void)MaxTiles; (void)MaxPolysPerTile; (void)Tiles;
+        (void)MaxResidentTiles; (void)MaxPolysPerTile; (void)Tiles;
         LOG_ERROR("FNavMesh::Initialize: Recast/Detour not vendored (LUMINA_HAS_RECAST undefined). NavMesh cannot be initialized.");
         bReady = false;
         return false;
@@ -310,8 +317,13 @@ namespace Lumina
         if (dtStatusFailed(Q.Get()->findNearestPoly(EP, Extents, &F, &ERef, ENear)) || ERef == 0) return false;
 
         // Both buffers live on a half-megabyte fiber stack, so the corridor can afford to be generous.
-        constexpr int32 MaxPolys = 512;
-        dtPolyRef Path[MaxPolys];
+        // The settings are clamped to these ceilings rather than sized dynamically, keeping the query heap free.
+        constexpr int32 MaxPolysCeiling = 1024;
+        constexpr int32 MaxStraightCeiling = 512;
+        const CNavigationSettings& NavSettings = *GetDefault<CNavigationSettings>();
+        const int32 MaxPolys = Math::Clamp(NavSettings.MaxPathPolys, 16, MaxPolysCeiling);
+
+        dtPolyRef Path[MaxPolysCeiling];
         int32 PathLen = 0;
         const dtStatus PathStatus = Q.Get()->findPath(SRef, ERef, SNear, ENear, &F, Path, &PathLen, MaxPolys);
         if (dtStatusFailed(PathStatus) || PathLen == 0) return false;
@@ -320,10 +332,10 @@ namespace Lumina
         Out.bPartial   = (PathStatus & DT_PARTIAL_RESULT) != 0 || Path[PathLen - 1] != ERef;
         Out.bTruncated = (PathStatus & (DT_BUFFER_TOO_SMALL | DT_OUT_OF_NODES)) != 0;
 
-        constexpr int32 MaxStraight = 256;
-        float StraightPath[MaxStraight * 3];
-        uint8 StraightFlags[MaxStraight];
-        dtPolyRef StraightRefs[MaxStraight];
+        const int32 MaxStraight = Math::Clamp(NavSettings.MaxPathCorners, 8, MaxStraightCeiling);
+        float StraightPath[MaxStraightCeiling * 3];
+        uint8 StraightFlags[MaxStraightCeiling];
+        dtPolyRef StraightRefs[MaxStraightCeiling];
         int32 StraightCount = 0;
         const dtStatus StraightStatus = Q.Get()->findStraightPath(SNear, ENear, Path, PathLen, StraightPath, StraightFlags, StraightRefs, &StraightCount, MaxStraight);
         if (dtStatusFailed(StraightStatus))

@@ -1,6 +1,7 @@
 ﻿#include "RuntimePCH.h"
 #include "NavMeshBuilder.h"
 
+#include "Config/NavigationSettings.h"
 #include "Memory/SmartPtr.h"
 #include "Memory/Memory.h"
 #include "Memory/MemoryTracking.h"
@@ -404,12 +405,13 @@ namespace Lumina::NavMeshBuilder
         const uint32 TileCount = (uint32)(Grid.TilesX * Grid.TilesY);
 
         // A huge tile count is one Recast pipeline each and reads as stuck, so abort with a message.
-        constexpr uint32 kMaxTiles = 8192;
-        if (TileCount > kMaxTiles)
+        const uint32 MaxBakeTiles = (uint32)Math::Max(1, GetDefault<CNavigationSettings>()->MaxBakeTiles);
+        if (TileCount > MaxBakeTiles)
         {
             LOG_ERROR("NavMesh bake aborted: {} tiles ({}x{}) exceeds the {}-tile cap for TileWorldSize={:.1f}. "
-                      "The bake volume is too large, raise Settings.CellSize or TileSizeVoxels, or shrink the bounds / entity scale.",
-                      TileCount, Grid.TilesX, Grid.TilesY, kMaxTiles, Grid.TileWorldSize);
+                      "Raise Navigation settings MaxBakeTiles, raise Settings.CellSize or TileSizeVoxels, "
+                      "or shrink the bounds / entity scale.",
+                      TileCount, Grid.TilesX, Grid.TilesY, MaxBakeTiles, Grid.TileWorldSize);
             Handle.Output.Tiles.clear();
             Handle.TilesScheduled = 0;
             Handle.bDone.store(true, std::memory_order_release);

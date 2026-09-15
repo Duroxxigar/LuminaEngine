@@ -2,6 +2,7 @@
 
 #include "AI/Navigation/NavMesh.h"
 #include "AI/Navigation/NavMeshBuilder.h"
+#include "AI/Navigation/NavTileStreamer.h"
 #include "AI/Navigation/NavTypes.h"
 #include "Memory/SmartPtr.h"
 #include "NavMeshComponent.generated.h"
@@ -58,6 +59,9 @@ namespace Lumina
 
         /** Layout fed to BakeSingleTile so coords align with live mesh. */
         FNavBuildOutput                         LiveLayout;
+
+        /** Decides which baked tiles are resident in Mesh. Inert while Nav.StreamRadius is 0. */
+        FNavTileStreamer                        Streamer;
 
         /** Entity world scale, mirrored each tick; multiplies Extents into the effective bake volume. */
         FVector3                                WorldScale = FVector3(1.0f);

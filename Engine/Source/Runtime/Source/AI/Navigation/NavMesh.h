@@ -40,8 +40,12 @@ namespace Lumina
         FNavMesh(const FNavMesh&) = delete;
         FNavMesh& operator=(const FNavMesh&) = delete;
 
-        /** Tiles is consumed; each blob is copied into Detour memory. */
-        bool Initialize(const FVector3& Origin, float TileWorldSize, int32 MaxTiles, int32 MaxPolysPerTile, TVector<FNavTileData>&& Tiles);
+        /** Empty mesh sized for MaxResidentTiles; tiles arrive through AddTile. */
+        bool Initialize(const FVector3& Origin, float TileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile);
+
+        /** Tiles is consumed; each blob is copied into Detour memory. Every non-empty tile is made resident,
+         *  so MaxResidentTiles must be at least that many. */
+        bool Initialize(const FVector3& Origin, float TileWorldSize, int32 MaxResidentTiles, int32 MaxPolysPerTile, TVector<FNavTileData>&& Tiles);
 
         void Shutdown();
 

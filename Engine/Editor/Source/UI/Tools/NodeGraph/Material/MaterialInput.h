@@ -16,6 +16,7 @@ namespace Lumina
     public:
         
         float DrawPin() override;
+        FString GetPinTypeName() const override;
 
         void SetInputType(EMaterialInputType InType) { InputType = InType; }
         EMaterialInputType GetInputType() const { return InputType; }

@@ -949,6 +949,39 @@ namespace Lumina
         PendingFocusNode = Node;
     }
 
+    CEdNodeGraphPin* CEdNodeGraph::FindPinByGUID(uint32 PinID) const
+    {
+        for (const TObjectPtr<CEdGraphNode>& Node : Nodes)
+        {
+            if (!Node.IsValid())
+            {
+                continue;
+            }
+
+            for (uint32 Direction = 0; Direction < (uint32)ENodePinDirection::Count; ++Direction)
+            {
+                if (CEdNodeGraphPin* Pin = Node->GetPin(PinID, (ENodePinDirection)Direction))
+                {
+                    return Pin;
+                }
+            }
+        }
+
+        return nullptr;
+    }
+
+    void CEdNodeGraph::DrawPinTooltip(CEdNodeGraphPin* Pin)
+    {
+        const FString TypeName = Pin->GetPinTypeName();
+        if (!TypeName.empty())
+        {
+            ImGui::TextColored(ImVec4(0.60f, 0.80f, 1.00f, 1.0f), "%s", TypeName.c_str());
+            ImGui::SameLine();
+        }
+
+        ImGui::TextUnformatted(Pin->GetPinName().c_str());
+    }
+
     uint64 CEdNodeGraph::MakeLinkID(const CEdNodeGraphPin* InputPin, const CEdNodeGraphPin* OutputPin)
     {
         return ((uint64)OutputPin->GetPinGUID() << 32) | (uint64)InputPin->GetPinGUID();
@@ -1241,7 +1274,17 @@ namespace Lumina
     
         NodeEditor::Suspend();
         {
-            
+            const NodeEditor::PinId HoveredPinID = bHostWindowHovered ? NodeEditor::GetHoveredPin() : NodeEditor::PinId();
+            if (HoveredPinID)
+            {
+                if (CEdNodeGraphPin* HoveredPin = FindPinByGUID((uint32)HoveredPinID.Get()))
+                {
+                    ImGui::BeginTooltip();
+                    DrawPinTooltip(HoveredPin);
+                    ImGui::EndTooltip();
+                }
+            }
+
             // ImGui allows one popup per level, so an unguarded OpenPopup replaces the one just opened.
             if (bHostWindowHovered)
             {

@@ -123,6 +123,31 @@ namespace Lumina
         uint32 UserId = 0;
     };
 
+    namespace NavTile
+    {
+        /** Tile coords are signed, so the two halves are packed rather than added. */
+        FORCEINLINE uint64 PackKey(int32 TX, int32 TY)
+        {
+            return ((uint64)(uint32)TY << 32) | (uint64)(uint32)TX;
+        }
+
+        FORCEINLINE void UnpackKey(uint64 Key, int32& OutTX, int32& OutTY)
+        {
+            OutTX = (int32)(uint32)(Key & 0xFFFFFFFFull);
+            OutTY = (int32)(uint32)(Key >> 32);
+        }
+
+        /** Shortest XZ distance from a point to the tile's footprint; zero when inside it. */
+        FORCEINLINE float DistanceToTile(const FVector3& Point, const FVector3& Origin, float TileWorldSize, int32 TX, int32 TY)
+        {
+            const float MinX = Origin.x + (float)TX * TileWorldSize;
+            const float MinZ = Origin.z + (float)TY * TileWorldSize;
+            const float DX = Math::Max(0.0f, Math::Max(MinX - Point.x, Point.x - (MinX + TileWorldSize)));
+            const float DZ = Math::Max(0.0f, Math::Max(MinZ - Point.z, Point.z - (MinZ + TileWorldSize)));
+            return std::sqrt(DX * DX + DZ * DZ);
+        }
+    }
+
     /** Per-tile baked blob in the format dtNavMesh::addTile expects. */
     REFLECT()
     struct RUNTIME_API FNavTileData
