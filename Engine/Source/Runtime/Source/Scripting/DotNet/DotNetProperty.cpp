@@ -303,11 +303,11 @@ LUMINA_DOTNET_EXPORT(int32, FunctionGetName)(const void* Function, char* Buf, in
     const FName& Name = static_cast<const FFunction*>(Function)->GetFunctionName();
     const char* S = Name.c_str();
     const int L = S ? (int)Name.length() : 0;
+    // The caller sizes its buffer from the length returned here, so a reserved terminator costs a character.
     if (S && Buf && Cap > 0)
     {
-        const int Copy = L < Cap ? L : Cap - 1;
-        Memory::Memcpy(Buf, (void*)S, (size_t)Copy);
-        Buf[Copy] = '\0';
+        const int Count = L < Cap ? L : Cap;
+        Memory::Memcpy(Buf, (void*)S, (size_t)Count);
     }
     return L;
 }
