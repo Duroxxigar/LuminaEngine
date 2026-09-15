@@ -206,7 +206,8 @@ namespace Lumina
         {
             Index = ChunkedArray.GetNumElements();
 
-            ASSERT(Index <= ChunkedArray.GetMaxElements(), "Object pool capacity exceeded!");
+            // Strictly less, or a full pool passes the check and GetItem hands back the null it dereferences.
+            ASSERT(Index < ChunkedArray.GetMaxElements(), "Object pool capacity exceeded!");
 
             FCObjectEntry* Item = ChunkedArray.GetItem(Index);
             DEBUG_ASSERT(Item != nullptr);
