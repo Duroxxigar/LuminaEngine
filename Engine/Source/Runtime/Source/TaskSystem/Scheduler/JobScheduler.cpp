@@ -134,6 +134,9 @@ namespace Lumina::Jobs
         TAtomic<uint32> ThreadWaitSeq{0};
         TAtomic<bool>   HasThreadWaiters{false};
 
+        // Lowest band submitted against this counter, so a waiter is never forbidden its own work.
+        TAtomic<uint32> WaitBand{0};
+
         // The futex layer works on a plain word; std::atomic<uint32> is lock-free and layout-compatible.
         const volatile uint32* SeqWord() const
         {
@@ -677,6 +680,20 @@ namespace Lumina::Jobs
         {
             // A native job is a real worker, so its inner wait may take any band, unlike an external assist.
             return TLS.bNativeJob ? (uint32)EJobPriority::Background : kMaxAssistPriority;
+        }
+
+        // Raised to the awaited band, or a thread waiting on Background work is forbidden to run it and the
+        // wait rests entirely on worker wake-ups. The latency guarantee is unaffected, since this only ever
+        // admits the band this thread is already blocked on.
+        FORCEINLINE uint32 AssistMaxPriorityFor(const FCounter* Counter)
+        {
+            const uint32 Base = AssistMaxPriority();
+            if (Counter == nullptr)
+            {
+                return Base;
+            }
+            const uint32 Band = Counter->WaitBand.load(std::memory_order_acquire);
+            return Band > Base ? Band : Base;
         }
 
         // Adopted work runs on the waiting thread, so its cost lands inside the caller's wait zone.
@@ -1808,6 +1825,17 @@ namespace Lumina::Jobs
             {
                 G->AvailAssistJobs.fetch_add(static_cast<int64>(Count), std::memory_order_relaxed);
             }
+
+            if (Counter != nullptr)
+            {
+                // Raised toward Background only, since a counter gating mixed bands must allow the lowest.
+                uint32 Band = Counter->WaitBand.load(std::memory_order_relaxed);
+                while (Band < (uint32)Prio
+                    && !Counter->WaitBand.compare_exchange_weak(Band, (uint32)Prio,
+                            std::memory_order_release, std::memory_order_relaxed))
+                {
+                }
+            }
         }
     }
 
@@ -1944,6 +1972,11 @@ namespace Lumina::Jobs
         }
     }
 
+    bool HasForegroundWorkQueued()
+    {
+        return G != nullptr && G->AvailAssistJobs.load(std::memory_order_relaxed) > 0;
+    }
+
     void WaitForCounter(FCounter* Counter, int32 Value)
     {
         if (Counter == nullptr)
@@ -2008,7 +2041,7 @@ namespace Lumina::Jobs
         while (Counter->Value.load(std::memory_order_acquire) > Value)
         {
             FQueuedJob Job;
-            if (TryStealAny(Job, AssistMaxPriority()))
+            if (TryStealAny(Job, AssistMaxPriorityFor(Counter)))
             {
                 RunAdoptedJob(Job, Slot);
                 OnJobComplete(Job.GetCounter(), Slot);
@@ -2025,7 +2058,11 @@ namespace Lumina::Jobs
             }
 
             // Sampled every spin, or the report would describe the instant it printed and not the stall.
-            PeakAssistable = Math::Max(PeakAssistable, G->AvailAssistJobs.load(std::memory_order_relaxed));
+            // Read against the band this wait may actually take, or waiting on Background reads as empty.
+            const int64 AvailNow = AssistMaxPriorityFor(Counter) > kMaxAssistPriority
+                ? G->AvailJobs.load(std::memory_order_relaxed)
+                : G->AvailAssistJobs.load(std::memory_order_relaxed);
+            PeakAssistable = Math::Max(PeakAssistable, AvailNow);
 
             const double Now = PlatformTime::Seconds();
             if (IdleSince == 0.0)

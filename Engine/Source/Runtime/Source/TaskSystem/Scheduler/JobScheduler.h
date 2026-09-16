@@ -136,6 +136,9 @@ namespace Lumina::Jobs
     // while spinning is what keeps things deadlock-free when the awaited signal depends on other jobs.
     RUNTIME_API bool AssistOneJob();
 
+    /** Whether any non-Background work is queued, so a long Background loop knows to yield its worker. */
+    RUNTIME_API bool HasForegroundWorkQueued();
+
     // ---- Introspection (for the editor Task System profiler) ----
 
     // Cheap on-demand snapshot of pool occupancy. Always compiled (no standing cost).

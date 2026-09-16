@@ -804,6 +804,31 @@ namespace
     constexpr uint32 kAssistProbeCount = 2048;
 }
 
+// The mirror of the exclusion above, and the reason it cannot be a blanket one. A thread waiting on its own
+// Background fan-out is the only thread that may run it, so refusing the band leaves the wait resting
+// entirely on worker wake-ups. EnkiTS clamps a wait's assist floor to the awaited task's own priority; this
+// is that clamp.
+TEST(TaskSystem, ExternalWaitRunsTheBackgroundWorkItIsBlockedOn)
+{
+    FAssistProbe Probe;
+    Probe.WaitingThread = Threading::GetThreadID();
+
+    Jobs::FCounter* Counter = Jobs::AllocCounter(0);
+    for (uint32 i = 0; i < kAssistProbeCount; ++i)
+    {
+        Jobs::RunJob(&AssistProbeJob, &Probe, Jobs::EJobPriority::Background, Counter, "AssistTest.OwnBackground");
+    }
+
+    Jobs::WaitForCounter(Counter, 0);
+
+    EXPECT_EQ(Probe.RanTotal.load(), kAssistProbeCount);
+    EXPECT_GT(Probe.RanOnWaitingThread.load(), 0u)
+        << "a thread waiting on a Background counter adopted none of that counter's work, so the assist "
+           "ceiling is not being clamped to the awaited band and the wait depends entirely on worker wake-ups";
+
+    Jobs::FreeCounter(Counter);
+}
+
 TEST(TaskSystem, AssistWaitNeverRunsBackgroundWork)
 {
     FAssistProbe Probe;

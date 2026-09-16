@@ -64,6 +64,12 @@ float4 FragmentMain(FragmentInput In) : SV_Target0
         return float4(MeshletDebugColor(T.Ref.GlobalMeshletIdx * 131u + T.TriIndex), 1.0);
     }
 
+    // Reads its 2x2 neighbors, so it belongs here with the VisBuffer rather than in ApplyDebugView.
+    if (DebugMode == DEBUG_MODE_QUAD_EFFICIENCY)
+    {
+        return float4(QuadEfficiencyColor(QuadLaneEfficiency(Pass().VisBufferIndex, Texel)), 1.0);
+    }
+
     FDebugSurfaceInfo Info;
     Info.UV                 = float2(0.0, 0.0);
     Info.GeometricNormalWS  = G.WorldNormal;

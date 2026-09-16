@@ -50,6 +50,11 @@ namespace Lumina
             void*     Ctx   = nullptr;
             uint32    Num   = 0;
             uint32    Grain = 1;
+
+            // Carried so a yielding job can put an equivalent one back and keep the loop parallel.
+            Jobs::EJobPriority Priority = Jobs::EJobPriority::Normal;
+            Jobs::FCounter*    Counter  = nullptr;
+
             alignas(64) TAtomic<uint32> Cursor{0};
         };
 
@@ -71,9 +76,32 @@ namespace Lumina
             }
         }
 
+        // A job that drains the whole cursor owns its worker for the entire loop, so priority is honored at
+        // dispatch and never again. Background work would hold every worker while a frame waits.
         void RunCursorJob(void* Arg, uint32 /*Worker*/)
         {
-            (void)RunCursorRanges(*static_cast<FCursorFor*>(Arg));
+            FCursorFor& C = *static_cast<FCursorFor*>(Arg);
+            const bool bYieldable = C.Priority == Jobs::EJobPriority::Background;
+
+            for (;;)
+            {
+                const uint32 Start = C.Cursor.fetch_add(C.Grain, std::memory_order_relaxed);
+                if (Start >= C.Num)
+                {
+                    return;
+                }
+                const uint32 End = C.Num - Start < C.Grain ? C.Num : Start + C.Grain;
+                C.Thunk(C.Ctx, Start, End, Jobs::GetWorkerIndex());
+
+                // Requeued before returning, so the counter never reaches zero with ranges left to run.
+                if (bYieldable && Jobs::HasForegroundWorkQueued()
+                    && C.Cursor.load(std::memory_order_relaxed) < C.Num)
+                {
+                    const Jobs::FJobDecl Decl{ &RunCursorJob, &C, "Task::ParallelFor" };
+                    Jobs::RunJobs(Decl, 1, C.Priority, C.Counter);
+                    return;
+                }
+            }
         }
 
         // A count cannot express the crossover, and the thunk address is one instantiation per call site.
@@ -242,6 +270,7 @@ namespace Lumina
         C.Ctx   = Ctx;
         C.Num   = Num;
         C.Grain = Grain;
+        C.Priority = ToJobPriority(Priority);
 
         // One job per worker at most, minus the grab the participating caller takes itself.
         const uint32 Grabs = (Num + Grain - 1) / Grain;
@@ -251,7 +280,8 @@ namespace Lumina
         const Jobs::FJobDecl Decl{ &RunCursorJob, &C, "Task::ParallelFor" };
 
         Jobs::FCounter* Counter = Jobs::AllocCounter(0);
-        Jobs::RunJobs(Decl, K, ToJobPriority(Priority), Counter);
+        C.Counter = Counter;
+        Jobs::RunJobs(Decl, K, C.Priority, Counter);
         // The work happens either way, so timing the caller's own slices costs two clock reads.
         const double Start = PlatformTime::Seconds();
         const uint32 Ran   = RunCursorRanges(C);

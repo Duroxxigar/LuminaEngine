@@ -34,6 +34,10 @@ namespace Lumina
         PROPERTY(Editable, Category = "Shadows")
         bool bCastShadows = false;
 
+        /** Adds a short screen-space trace so small objects stop floating above what they rest on. */
+        PROPERTY(Editable, Category = "Shadows")
+        bool bContactShadows = false;
+
         /** When true, the light scatters through participating media (fog/atmosphere). */
         PROPERTY(Editable, Category = "Advanced")
         bool bVolumetric = false;
@@ -84,6 +88,10 @@ namespace Lumina
         /** When true, this light contributes to the shadow pass. */
         PROPERTY(Editable, Category = "Shadows")
         bool bCastShadows = false;
+
+        /** Adds a short screen-space trace so small objects stop floating above what they rest on. */
+        PROPERTY(Editable, Category = "Shadows")
+        bool bContactShadows = false;
 
         /** Depth bias to prevent shadow acne on receiving surfaces. */
         PROPERTY(Editable, Category = "Shadows")

@@ -99,6 +99,60 @@ float SampleSunCascadeByContainment(FLight Light, float3 WorldPos)
     return SampleSunCascadeFrom(Light, WorldPos, FirstCascade);
 }
 
+// Screen-space fill for occlusion below one shadow texel, which is what makes contact points float.
+
+// Traces in view space off the opaque depth buffer, so no derivatives and either lane can call it.
+float ContactShadow(float3 ViewPos, float3 ViewN, float3 ViewL, float Jitter, float Reach, uint Steps)
+{
+    const uint DepthIndex = Scene().SceneDepthIndex;
+    if (Reach <= 0.0 || Steps == 0u || DepthIndex == 0xFFFFFFFFu)
+    {
+        return 1.0;
+    }
+
+    const float4x4 InvProj = GetInverseCameraProjection();
+    const float3   Step    = ViewL * (Reach / float(Steps));
+
+    // Half-step jittered start plus a normal offset, or a grazing surface reports its own ray as occluding.
+    float3 RayPos = ViewPos + ViewN * (Reach / float(Steps)) + Step * (0.5 + Jitter);
+
+    // A hit farther behind the ray than this is a separate surface, not an occluder in contact.
+    const float Thickness = Reach;
+
+    [loop]
+    for (uint i = 0u; i < Steps; ++i)
+    {
+        const float4 Clip = mul(GetCameraProjection(), float4(RayPos, 1.0));
+        if (Clip.w <= 0.0)
+        {
+            break;
+        }
+
+        const float2 UV = (Clip.xy / Clip.w) * 0.5 + 0.5;
+        if (any(saturate(UV) != UV))
+        {
+            break;   // left the depth buffer, and off-screen occluders are not knowable here
+        }
+
+        const float Raw = SampleTexture2DLevel(DepthIndex, SAMPLER_POINT_CLAMP, UV, 0.0).r;
+        if (Raw > 0.0)
+        {
+            const float SceneZ = ReconstructViewPos(UV, Raw, InvProj).z;
+            const float Delta  = RayPos.z - SceneZ;   // positive = the ray is behind the depth buffer
+
+            if (Delta > 0.0 && Delta < Thickness)
+            {
+                // Fade out along the ray so the far end of the reach does not cut a hard line.
+                return saturate(float(i) / float(Steps));
+            }
+        }
+
+        RayPos += Step;
+    }
+
+    return 1.0;
+}
+
 // World-space gap between this point and the nearest occluder the cascade recorded toward the sun.
 float SunOccluderDepthWS(FLight Light, float3 WorldPos)
 {

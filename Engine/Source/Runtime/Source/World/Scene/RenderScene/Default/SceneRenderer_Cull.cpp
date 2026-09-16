@@ -558,6 +558,9 @@ namespace Lumina
                 SceneGlobalData.GTAOSettings.AOTextureIndex = (uint32)CurrentView->Images[(int)ENamedImage::GTAOBlur].GetResourceID();
             }
 
+            SceneGlobalData.SceneDepthIndex =
+                (uint32)CurrentView->Images[(int)ENamedImage::DepthAttachment].GetResourceID();
+
             FrameFlags.bShadowMaskValid = (LightData.bHasSun != 0) &&
                                               (Frame.Lighting.Lights[0].ShadowDataIndex != INDEX_NONE);
             if (FrameFlags.bShadowMaskValid)
