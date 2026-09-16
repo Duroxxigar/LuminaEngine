@@ -1235,6 +1235,7 @@ namespace Lumina
                         NonEmptyTiles, (int32)Comp.Tiles.size(), Comp.Origin.x, Comp.Origin.y, Comp.Origin.z, Comp.TileWorldSize);
                     Comp.Runtime.bRuntimeDirty = true;
                     RebuildEntityAABBCache(Context, Comp.Center - Comp.GetWorldExtents(), Comp.Center + Comp.GetWorldExtents(), Comp.Runtime.EntityAABBs);
+                    Comp.Runtime.RestartBaseline();
                 }
             }
 
@@ -1333,6 +1334,7 @@ namespace Lumina
                 }, ETaskPriority::Background);
 
                 RebuildEntityAABBCache(Context, BakeMin, BakeMax, Comp.Runtime.EntityAABBs);
+                Comp.Runtime.RestartBaseline();
                 Comp.Runtime.DirtyTiles.clear();
             }
 
@@ -1457,11 +1459,20 @@ namespace Lumina
                     }
                 };
 
+                int32 NewThisScan = 0;
                 auto VisitSource = [&](uint64 Key, const FVector3& Mn, const FVector3& Mx, uint64 ContentId)
                 {
                     CurrentAABBs[Key] = FNavSourceEntity{ Mn, Mx, ContentId };
                     auto It = Comp.Runtime.EntityAABBs.find(Key);
                     const bool bNew   = It == Comp.Runtime.EntityAABBs.end();
+                    if (bNew)
+                    {
+                        ++NewThisScan;
+                        if (Comp.Runtime.bBaselineSettling)
+                        {
+                            return;
+                        }
+                    }
                     const bool bMoved = !bNew && (!Math::IsNearlyEqual(It->second.AABBMin, Mn) || !Math::IsNearlyEqual(It->second.AABBMax, Mx));
 
                     // A re-imported, swapped or sculpted mesh keeps its bounds, so the AABB test alone misses it.
@@ -1521,6 +1532,29 @@ namespace Lumina
                             Comp.Center.x, Comp.Center.y, Comp.Center.z, WExt.x, WExt.y, WExt.z,
                             Comp.Origin.x, Comp.Origin.y, Comp.Origin.z,
                             (int32)Comp.Runtime.EntityAABBs.size());
+                    }
+                }
+
+                // Two running scans with nothing new means the world finished populating. Ending early only
+                // costs the storm this avoids, so the cheap rule is the safe one.
+                if (Comp.Runtime.bBaselineSettling)
+                {
+                    constexpr int32 QuietScansToSettle = 2;
+                    constexpr float MaxBaselineSeconds = 30.0f;
+
+                    Comp.Runtime.BaselineAge += (float)Context.GetDeltaTime();
+                    Comp.Runtime.BaselineQuietScans = NewThisScan == 0 ? Comp.Runtime.BaselineQuietScans + 1 : 0;
+
+                    // Capped, or a world that never stops spawning would leave dynamic nav switched off.
+                    if (Comp.Runtime.BaselineQuietScans >= QuietScansToSettle
+                        || Comp.Runtime.BaselineAge >= MaxBaselineSeconds)
+                    {
+                        Comp.Runtime.bBaselineSettling = false;
+                        if (CVarNavTimings.GetValue())
+                        {
+                            LOG_INFO("NavTiming baseline settled at {} sources; changes from here dirty tiles.",
+                                (int32)CurrentAABBs.size());
+                        }
                     }
                 }
 
