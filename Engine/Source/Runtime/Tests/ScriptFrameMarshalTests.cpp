@@ -902,6 +902,57 @@ TEST_F(FFrameMarshalTest, AScriptCallbackRunsOnceAndReleasesItsHandle)
     EXPECT_EQ(Runs, 1) << "a one-shot callback ran twice";
 }
 
+// A repeating callback is what a looping timer and a tween value step need, so firing it must leave the
+// handle alive and only the explicit release may free it.
+TEST_F(FFrameMarshalTest, ARepeatingScriptCallbackSurvivesEveryFireUntilReleased)
+{
+    auto* Bind = (FBindCallbackFn)DotNet::ResolveManagedExport("Test_BindRepeatingScriptCallback");
+    auto* Result = (FCallbackResFn)DotNet::ResolveManagedExport("Test_ScriptCallbackResult");
+    ASSERT_NE(Bind, nullptr);
+    ASSERT_NE(Result, nullptr);
+
+    FScriptCallback Callback;
+    Callback.Token = Bind();
+    ASSERT_TRUE(Callback.IsBound());
+
+    int32 Runs = -1;
+    for (int32 i = 1; i <= 3; ++i)
+    {
+        Scripting::InvokeScriptCallbackRepeating(Callback, Scripting::PackFloatPayload(0.25f * (float)i));
+        EXPECT_EQ(Result(&Runs), (uint64)(int64)(250 * i)) << "float payload did not survive the crossing";
+        EXPECT_EQ(Runs, i) << "a repeating callback stopped firing";
+    }
+
+    // Releasing is the only thing that frees it, so a fire afterwards must find nothing to run.
+    Scripting::ReleaseScriptCallback(Callback);
+    Scripting::InvokeScriptCallbackRepeating(Callback, Scripting::PackFloatPayload(9.0f));
+    EXPECT_EQ(Runs, 3) << "a released callback ran again";
+}
+
+// The owner is what a tween or timer captures, so dropping it has to be the release.
+TEST_F(FFrameMarshalTest, AScriptCallbackOwnerReleasesWhenTheThingHoldingItDies)
+{
+    auto* Bind = (FBindCallbackFn)DotNet::ResolveManagedExport("Test_BindRepeatingScriptCallback");
+    auto* Result = (FCallbackResFn)DotNet::ResolveManagedExport("Test_ScriptCallbackResult");
+    ASSERT_NE(Bind, nullptr);
+    ASSERT_NE(Result, nullptr);
+
+    FScriptCallback Callback;
+    Callback.Token = Bind();
+    ASSERT_TRUE(Callback.IsBound());
+
+    int32 Runs = -1;
+    {
+        const FScriptCallbackOwner Owner(Callback);
+        Owner.Invoke(Scripting::PackFloatPayload(1.0f));
+        EXPECT_EQ(Result(&Runs), 1000ULL);
+        EXPECT_EQ(Runs, 1);
+    }
+
+    Scripting::InvokeScriptCallbackRepeating(Callback, Scripting::PackFloatPayload(2.0f));
+    EXPECT_EQ(Runs, 1) << "the owner going out of scope did not release the handle";
+}
+
 TEST_F(FFrameMarshalTest, AnUnboundScriptCallbackIsSafeToInvoke)
 {
     FScriptCallback Unbound;

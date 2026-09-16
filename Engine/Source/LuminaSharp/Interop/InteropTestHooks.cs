@@ -329,6 +329,20 @@ internal static unsafe class InteropTestHooks
         }).Token;
     }
 
+    // Binds a repeating callback over a float payload, the shape a tween value step uses.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static ulong Test_BindRepeatingScriptCallback()
+    {
+        CallbackPayload = 0xFFFFFFFFUL;
+        CallbackRuns = 0;
+        return ScriptCallback.OfRepeating((float Value) =>
+        {
+            CallbackPayload = (ulong)(long)(Value * 1000.0f);
+            ++CallbackRuns;
+        }).Token;
+    }
+
     [ManagedExport]
     [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
     public static ulong Test_ScriptCallbackResult(int* OutRuns)

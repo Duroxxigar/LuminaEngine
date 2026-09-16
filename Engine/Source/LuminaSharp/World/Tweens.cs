@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.InteropServices;
 using Lumina;
 
@@ -54,11 +54,7 @@ public readonly unsafe partial struct Tween
     {
         ArgumentNullException.ThrowIfNull(Setter);
 
-        GCHandle Handle = GCHandle.Alloc(Setter);
-        ValueToRaw(World, Id, From, To, Duration,
-            (delegate* unmanaged[Cdecl]<void*, float, void>)&ValueTrampoline,
-            (delegate* unmanaged[Cdecl]<void*, void>)&FreeTrampoline,
-            (void*)GCHandle.ToIntPtr(Handle));
+        ValueToRaw(World, Id, From, To, Duration, ScriptCallback.OfRepeating(Setter).Token);
         return this;
     }
 
@@ -73,10 +69,7 @@ public readonly unsafe partial struct Tween
     {
         ArgumentNullException.ThrowIfNull(Callback);
 
-        GCHandle Handle = GCHandle.Alloc(Callback);
-        CallRaw(World, Id, (delegate* unmanaged[Cdecl]<void*, void>)&CallTrampoline,
-            (delegate* unmanaged[Cdecl]<void*, void>)&FreeTrampoline,
-            (void*)GCHandle.ToIntPtr(Handle));
+        CallRaw(World, Id, ScriptCallback.OfRepeating(Callback).Token);
         return this;
     }
 
@@ -85,10 +78,7 @@ public readonly unsafe partial struct Tween
     {
         ArgumentNullException.ThrowIfNull(Callback);
 
-        GCHandle Handle = GCHandle.Alloc(Callback);
-        OnFinishedRaw(World, Id, (delegate* unmanaged[Cdecl]<void*, void>)&CallTrampoline,
-            (delegate* unmanaged[Cdecl]<void*, void>)&FreeTrampoline,
-            (void*)GCHandle.ToIntPtr(Handle));
+        OnFinishedRaw(World, Id, ScriptCallback.OfRepeating(Callback).Token);
         return this;
     }
 
@@ -140,35 +130,6 @@ public readonly unsafe partial struct Tween
     // Stops where it is; whatever it was driving keeps its current value.
     public void Kill() => KillRaw(World, Id);
 
-    // Native owns each GCHandle and frees it through FreeTrampoline.
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    private static void CallTrampoline(void* Context)
-    {
-        if (GCHandle.FromIntPtr((IntPtr)Context).Target is Action Body)
-        {
-            Body();
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    private static void ValueTrampoline(void* Context, float Value)
-    {
-        if (GCHandle.FromIntPtr((IntPtr)Context).Target is Action<float> Setter)
-        {
-            Setter(Value);
-        }
-    }
-
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]
-    private static void FreeTrampoline(void* Context)
-    {
-        GCHandle Handle = GCHandle.FromIntPtr((IntPtr)Context);
-        if (Handle.IsAllocated)
-        {
-            Handle.Free();
-        }
-    }
-
     [NativeCall("LuminaSharp_Tween_MoveTo", SuppressGCTransition = true)]
     private static partial void MoveToRaw(ulong World, uint Id, uint Entity, FVector3 Target, float Duration);
 
@@ -180,21 +141,18 @@ public readonly unsafe partial struct Tween
 
     [NativeCall("LuminaSharp_Tween_ValueTo")]
     private static partial void ValueToRaw(ulong World, uint Id, float From, float To, float Duration,
-        delegate* unmanaged[Cdecl]<void*, float, void> Thunk,
-        delegate* unmanaged[Cdecl]<void*, void> FreeThunk, void* Context);
+        ulong Callback);
 
     [NativeCall("LuminaSharp_Tween_Interval", SuppressGCTransition = true)]
     private static partial void IntervalRaw(ulong World, uint Id, float Duration);
 
     [NativeCall("LuminaSharp_Tween_Call")]
     private static partial void CallRaw(ulong World, uint Id,
-        delegate* unmanaged[Cdecl]<void*, void> Thunk,
-        delegate* unmanaged[Cdecl]<void*, void> FreeThunk, void* Context);
+        ulong Callback);
 
     [NativeCall("LuminaSharp_Tween_OnFinished")]
     private static partial void OnFinishedRaw(ulong World, uint Id,
-        delegate* unmanaged[Cdecl]<void*, void> Thunk,
-        delegate* unmanaged[Cdecl]<void*, void> FreeThunk, void* Context);
+        ulong Callback);
 
     [NativeCall("LuminaSharp_Tween_Trans", SuppressGCTransition = true)]
     private static partial void TransRaw(ulong World, uint Id, int Transition);

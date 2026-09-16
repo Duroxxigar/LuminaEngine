@@ -20,4 +20,32 @@ namespace Lumina::Scripting
             Fn(reinterpret_cast<void*>(Callback.Token), Payload);
         }
     }
+
+    void InvokeScriptCallbackRepeating(FScriptCallback Callback, uint64 Payload)
+    {
+        if (!Callback.IsBound())
+        {
+            return;
+        }
+
+        static DotNet::TManagedExport<void (*)(void*, uint64)> Invoke("InvokeScriptCallbackRepeating");
+        if (auto* Fn = Invoke.Get())
+        {
+            Fn(reinterpret_cast<void*>(Callback.Token), Payload);
+        }
+    }
+
+    void ReleaseScriptCallback(FScriptCallback Callback)
+    {
+        if (!Callback.IsBound())
+        {
+            return;
+        }
+
+        static DotNet::TManagedExport<void (*)(void*)> Release("ReleaseScriptCallback");
+        if (auto* Fn = Release.Get())
+        {
+            Fn(reinterpret_cast<void*>(Callback.Token));
+        }
+    }
 }

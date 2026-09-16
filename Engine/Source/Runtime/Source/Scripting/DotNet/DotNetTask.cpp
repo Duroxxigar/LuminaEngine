@@ -2,6 +2,7 @@
 #include "Platform/GenericPlatform.h"
 #include "TaskSystem/TaskSystem.h"
 #include "TaskSystem/TaskTypes.h"
+#include "Scripting/ScriptCallback.h"
 
 // The managed body is type-erased into a thunk and context the native lambda forwards to.
 
@@ -29,17 +30,18 @@ LUMINA_DOTNET_EXPORT(void, Task_ParallelFor)(uint32 Num, uint32 MinRange, void* 
 }
 
 // Returns a heap-copied handle the C# side keeps alive and must release explicitly.
-LUMINA_DOTNET_EXPORT(void*, Task_Run)(void* Thunk, void* Ctx, int32 Priority)
+LUMINA_DOTNET_EXPORT(void*, Task_Run)(uint64 Callback, int32 Priority)
 {
-    FThunkC T = reinterpret_cast<FThunkC>(Thunk);
-    if (T == nullptr)
+    const FScriptCallback Body{ Callback };
+    if (!Body.IsBound())
     {
         return nullptr;
     }
 
-    FTaskHandle H = Task::AsyncTask(1, 0, [T, Ctx](uint32 Start, uint32 End, uint32 Thread)
+    // One-shot, so the invoke frees the handle and nothing has to own it for the task's lifetime.
+    FTaskHandle H = Task::AsyncTask(1, 0, [Body](uint32, uint32, uint32)
     {
-        T(Ctx, Start, End, Thread);
+        Scripting::InvokeScriptCallback(Body, 0);
     }, static_cast<ETaskPriority>(Priority));
 
     return new FTaskHandle(H);

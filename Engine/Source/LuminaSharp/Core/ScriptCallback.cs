@@ -23,6 +23,18 @@ public static class ScriptCallback
         return Bind(Payload => Handler(new Entity((uint)Payload)));
     }
 
+    // Fires every time native invokes it, until native releases it. The closure outlives one call.
+    public static FScriptCallback OfRepeating(Action Handler)
+    {
+        return Bind(_ => Handler());
+    }
+
+    // The payload is the tween's interpolated value, packed by Scripting::PackFloatPayload.
+    public static FScriptCallback OfRepeating(Action<float> Handler)
+    {
+        return Bind(Payload => Handler(BitConverter.Int32BitsToSingle(unchecked((int)(uint)Payload))));
+    }
+
     private static FScriptCallback Bind(Action<ulong> Trampoline)
     {
         GCHandle Handle = GCHandle.Alloc(Trampoline);
@@ -48,6 +60,52 @@ public static class ScriptCallback
             Action<ulong>? Trampoline = Handle.Target as Action<ulong>;
             Handle.Free();
             Trampoline?.Invoke(Payload);
+        }
+        catch (Exception Exception)
+        {
+            Interop.LogException(Exception);
+        }
+    }
+
+    // Runs the closure without freeing it, for a binding native will invoke again.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static void InvokeScriptCallbackRepeating(IntPtr Token, ulong Payload)
+    {
+        try
+        {
+            if (Token == IntPtr.Zero)
+            {
+                return;
+            }
+
+            GCHandle Handle = GCHandle.FromIntPtr(Token);
+            (Handle.Target as Action<ulong>)?.Invoke(Payload);
+        }
+        catch (Exception Exception)
+        {
+            Interop.LogException(Exception);
+        }
+    }
+
+    // Frees a repeating binding once whatever captured it on the native side is gone.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static void ReleaseScriptCallback(IntPtr Token)
+    {
+        try
+        {
+            if (Token == IntPtr.Zero)
+            {
+                return;
+            }
+
+            GCHandle Handle = GCHandle.FromIntPtr(Token);
+            Pending.Remove(Token);
+            if (Handle.IsAllocated)
+            {
+                Handle.Free();
+            }
         }
         catch (Exception Exception)
         {

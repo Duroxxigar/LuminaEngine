@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -12,12 +12,10 @@ namespace LuminaSharp;
 public readonly struct TimerHandle
 {
     internal readonly uint Id;
-    internal readonly GCHandle Callback;
 
-    internal TimerHandle(uint Id, GCHandle Callback)
+    internal TimerHandle(uint Id)
     {
         this.Id = Id;
-        this.Callback = Callback;
     }
 
     /// <summary>False for a timer that failed to schedule.</summary>
@@ -45,26 +43,14 @@ public readonly unsafe partial struct Timers
 
     public bool IsValid => Handle != 0;
 
-    // The GCHandle target: the managed callback plus whether it loops (so the trampoline knows when to free).
-    private sealed class Entry
-    {
-        public required Action Body;
-        public bool Loop;
-    }
-
     /// <summary>Schedule <paramref name="Callback"/> after <paramref name="Seconds"/>. With <paramref name="Loop"/>
     /// it repeats every <paramref name="Seconds"/>. <paramref name="FirstDelay"/> &gt;= 0 overrides the delay
     /// before the first fire (useful for staggering loopers).</summary>
     public TimerHandle SetTimer(float Seconds, Action Callback, bool Loop = false, float FirstDelay = -1.0f)
     {
-        GCHandle Context = GCHandle.Alloc(new Entry { Body = Callback, Loop = Loop });
-        uint Id = SetRaw(Seconds, Loop ? 1 : 0, FirstDelay, ThunkPtr, FreeThunkPtr, GCHandle.ToIntPtr(Context));
-        if (Id == 0xFFFFFFFFu)
-        {
-            Context.Free();
-            return Invalid;
-        }
-        return new TimerHandle(Id, Context);
+        // Native releases the binding when the timer entry dies, including the failed-to-schedule path.
+        uint Id = SetRaw(Seconds, Loop ? 1 : 0, FirstDelay, ScriptCallback.OfRepeating(Callback).Token);
+        return Id == 0xFFFFFFFFu ? Invalid : new TimerHandle(Id);
     }
 
     /// <summary>Run <paramref name="Callback"/> once after <paramref name="Seconds"/>. Self-cleaning.</summary>
@@ -74,14 +60,8 @@ public readonly unsafe partial struct Timers
     /// automatically when that entity is destroyed.</summary>
     public TimerHandle SetTimerForEntity(Entity Owner, float Seconds, Action Callback, bool Loop = false, float FirstDelay = -1.0f)
     {
-        GCHandle Context = GCHandle.Alloc(new Entry { Body = Callback, Loop = Loop });
-        uint Id = SetForEntityRaw(Owner.Id, Seconds, Loop ? 1 : 0, FirstDelay, ThunkPtr, FreeThunkPtr, GCHandle.ToIntPtr(Context));
-        if (Id == 0xFFFFFFFFu)
-        {
-            Context.Free();
-            return Invalid;
-        }
-        return new TimerHandle(Id, Context);
+        uint Id = SetForEntityRaw(Owner.Id, Seconds, Loop ? 1 : 0, FirstDelay, ScriptCallback.OfRepeating(Callback).Token);
+        return Id == 0xFFFFFFFFu ? Invalid : new TimerHandle(Id);
     }
 
     /// <summary>Cancel a timer and release its callback. Safe to call on an already-fired one-shot.</summary>
@@ -112,55 +92,13 @@ public readonly unsafe partial struct Timers
         }
     }
 
-    private static readonly TimerHandle Invalid = new TimerHandle(0xFFFFFFFFu, default);
-
-    // Native owns the handle and frees it through FreeContext when the timer entry dies.
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void Fire(IntPtr Context)
-    {
-        try
-        {
-            GCHandle Handle = GCHandle.FromIntPtr(Context);
-            if (Handle.Target is Entry E)
-            {
-                E.Body();
-            }
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    // Called by native when a timer entry is destroyed, whatever destroyed it.
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void FreeContext(IntPtr Context)
-    {
-        try
-        {
-            GCHandle Handle = GCHandle.FromIntPtr(Context);
-            if (Handle.IsAllocated)
-            {
-                Handle.Free();
-            }
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-    }
-
-    private static readonly IntPtr ThunkPtr =
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)&Fire;
-
-    private static readonly IntPtr FreeThunkPtr =
-        (IntPtr)(delegate* unmanaged[Cdecl]<IntPtr, void>)&FreeContext;
+    private static readonly TimerHandle Invalid = new TimerHandle(0xFFFFFFFFu);
 
     [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Timer_Set")]
-    private partial uint SetRaw(float Rate, int Loop, float FirstDelay, IntPtr Thunk, IntPtr FreeThunk, IntPtr Context);
+    private partial uint SetRaw(float Rate, int Loop, float FirstDelay, ulong Callback);
 
     [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Timer_SetForEntity")]
-    private partial uint SetForEntityRaw(uint Owner, float Rate, int Loop, float FirstDelay, IntPtr Thunk, IntPtr FreeThunk, IntPtr Context);
+    private partial uint SetForEntityRaw(uint Owner, float Rate, int Loop, float FirstDelay, ulong Callback);
 
     [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Timer_Clear")]
     private partial void ClearRaw(uint Timer);

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -76,37 +76,11 @@ public static unsafe partial class Task
     /// Schedules <paramref name="Body"/> to run ONCE on a worker thread and returns a handle to wait on.
     /// The body runs on a worker fiber (see the class caveat). The returned <see cref="TaskHandle"/> owns a
     /// native completion handle: you MUST <c>Wait()</c> then <c>Dispose()</c> (or just <c>Dispose()</c>) it,
-    /// otherwise the native handle leaks. The body's GCHandle is freed by the thunk once the body has run.
+    /// otherwise the native handle leaks. The body is a one-shot ScriptCallback, freed once it has run.
     /// </summary>
     public static TaskHandle Run(Action Body)
     {
-        GCHandle Gc = GCHandle.Alloc(Body);
-        IntPtr Handle = NativeRun(
-            (IntPtr)(delegate* unmanaged[Cdecl]<void*, uint, uint, uint, void>)&RunThunk,
-            GCHandle.ToIntPtr(Gc),
-            PriorityMedium);
-        return new TaskHandle(Handle);
-    }
-
-    // Native -> managed entry for Run. Resolves and invokes the Action once, then frees its GCHandle (the
-    // body has run, so the handle is no longer needed). Never throws across the boundary.
-    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
-    private static void RunThunk(void* Ctx, uint Start, uint End, uint Thread)
-    {
-        GCHandle Gc = GCHandle.FromIntPtr((IntPtr)Ctx);
-        try
-        {
-            Action? Body = Gc.Target as Action;
-            Body?.Invoke();
-        }
-        catch (Exception Exception)
-        {
-            Interop.LogException(Exception);
-        }
-        finally
-        {
-            Gc.Free();
-        }
+        return new TaskHandle(NativeRun(ScriptCallback.Of(Body).Token, PriorityMedium));
     }
 
     /// <summary>Blocks until every task submitted so far has completed.</summary>
@@ -125,7 +99,7 @@ public static unsafe partial class Task
     private static partial void NativeParallelFor(uint Num, uint MinRange, IntPtr Thunk, IntPtr Ctx, int Priority);
 
     [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Task_Run")]
-    private static partial IntPtr NativeRun(IntPtr Thunk, IntPtr Ctx, int Priority);
+    private static partial IntPtr NativeRun(ulong Callback, int Priority);
 
     [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Task_Wait")]
     internal static partial void NativeWait(IntPtr Handle);

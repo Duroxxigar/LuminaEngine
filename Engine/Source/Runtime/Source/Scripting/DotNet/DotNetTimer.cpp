@@ -8,6 +8,7 @@
 #include "World/Subsystems/TimerManager.h"
 #include "Scripting/DotNet/DotNetExport.h"
 #include "Scripting/DotNet/ManagedContextRegistry.h"
+#include "Scripting/ScriptCallback.h"
 
 // The returned id is generational, so a stale one safely reports inactive after recycling.
 
@@ -16,122 +17,81 @@ using namespace Lumina::DotNet;
 
 namespace
 {
-    using FTimerThunk     = void (*)(void*);
-    using FTimerFreeThunk = void (*)(void*);
+    struct FManagedTimer;
 
-    struct FManagedTimerContext;
+    using FTimerRegistry = TManagedContextRegistry<FManagedTimer>;
 
-    using FTimerRegistry = TManagedContextRegistry<FManagedTimerContext>;
-
-    // Native owns the managed context, so every path that destroys a timer entry also frees its GC handle.
-    struct FManagedTimerContext
+    // Tracked so a generation unload stops the timer itself, not just the callback it can no longer run.
+    struct FManagedTimer
     {
-        FTimerThunk            Fn      = nullptr;
-        FTimerFreeThunk        FreeFn  = nullptr;
-        void*                  Context = nullptr;
+        FScriptCallbackOwner   Callback;
         TWeakObjectPtr<CWorld> World;
         FTimerHandle           Handle;
 
-        FManagedTimerContext(void* InThunk, void* InFree, void* InContext, CWorld* InWorld)
-            : Fn(reinterpret_cast<FTimerThunk>(InThunk))
-            , FreeFn(reinterpret_cast<FTimerFreeThunk>(InFree))
-            , Context(InContext)
+        FManagedTimer(FScriptCallback InCallback, CWorld* InWorld)
+            : Callback(InCallback)
             , World(InWorld)
         {
             FTimerRegistry::Add(this);
         }
 
-        ~FManagedTimerContext()
-        {
-            FTimerRegistry::Remove(this);
-            Release();
-        }
+        ~FManagedTimer() { FTimerRegistry::Remove(this); }
 
-        LE_NO_COPYMOVE(FManagedTimerContext);
-
-        void Release()
-        {
-            if (FreeFn != nullptr && Context != nullptr)
-            {
-                FreeFn(Context);
-            }
-            Detach();
-        }
-
-        // Gives ownership back to the caller, for a timer that never got scheduled.
-        void Detach()
-        {
-            Fn      = nullptr;
-            FreeFn  = nullptr;
-            Context = nullptr;
-        }
-
-        void Invoke() const
-        {
-            if (Fn != nullptr)
-            {
-                Fn(Context);
-            }
-        }
+        LE_NO_COPYMOVE(FManagedTimer);
     };
 
     // Shared, since a looping timer moves its callback out and back on every fire.
-    FTimerManager::FTimerCallback MakeCallback(const TSharedPtr<FManagedTimerContext>& Ctx)
+    FTimerManager::FTimerCallback MakeCallback(const TSharedPtr<FManagedTimer>& Timer)
     {
-        return [Ctx]() { Ctx->Invoke(); };
+        return [Timer]() { Timer->Callback.Invoke(0); };
     }
 
     uint32 SetManagedTimer(uint64 World, ECS::FEntity Owner, bool bHasOwner, float Rate, int32 bLoop,
-        float FirstDelay, void* Thunk, void* FreeThunk, void* Context)
+        float FirstDelay, FScriptCallback Callback)
     {
         CWorld* W = AsWorld(World);
-        if (W == nullptr || Thunk == nullptr)
+        if (W == nullptr || !Callback.IsBound())
         {
+            Scripting::ReleaseScriptCallback(Callback);
             return ToId(ECS::NullEntity);
         }
 
-        TSharedPtr<FManagedTimerContext> Ctx = MakeShared<FManagedTimerContext>(Thunk, FreeThunk, Context, W);
+        TSharedPtr<FManagedTimer> Timer = MakeShared<FManagedTimer>(Callback, W);
 
         const FTimerHandle Handle = bHasOwner
-            ? W->GetTimerManager().SetTimerForEntity(Owner, Rate, MakeCallback(Ctx), bLoop != 0, FirstDelay)
-            : W->GetTimerManager().SetTimer(Rate, MakeCallback(Ctx), bLoop != 0, FirstDelay);
+            ? W->GetTimerManager().SetTimerForEntity(Owner, Rate, MakeCallback(Timer), bLoop != 0, FirstDelay)
+            : W->GetTimerManager().SetTimer(Rate, MakeCallback(Timer), bLoop != 0, FirstDelay);
 
-        // Native owns the context only when a real id comes back, which is exactly what the caller frees on.
         if (Handle.Handle == ECS::NullEntity)
         {
-            Ctx->Detach();
             return ToId(ECS::NullEntity);
         }
 
-        Ctx->Handle = Handle;
+        Timer->Handle = Handle;
         return ToId(Handle.Handle);
     }
 }
 
-LUMINA_DOTNET_EXPORT(uint32, Timer_Set)(uint64 World, float Rate, int32 bLoop, float FirstDelay, void* Thunk, void* FreeThunk, void* Context)
+LUMINA_DOTNET_EXPORT(uint32, Timer_Set)(uint64 World, float Rate, int32 bLoop, float FirstDelay, uint64 Callback)
 {
-    return SetManagedTimer(World, ECS::NullEntity, false, Rate, bLoop, FirstDelay, Thunk, FreeThunk, Context);
+    return SetManagedTimer(World, ECS::NullEntity, false, Rate, bLoop, FirstDelay, FScriptCallback{ Callback });
 }
 
 // As the plain setter, but owned by an entity so the timer clears when that entity is destroyed.
-LUMINA_DOTNET_EXPORT(uint32, Timer_SetForEntity)(uint64 World, uint32 Owner, float Rate, int32 bLoop, float FirstDelay, void* Thunk, void* FreeThunk, void* Context)
+LUMINA_DOTNET_EXPORT(uint32, Timer_SetForEntity)(uint64 World, uint32 Owner, float Rate, int32 bLoop, float FirstDelay, uint64 Callback)
 {
-    return SetManagedTimer(World, AsEntity(Owner), true, Rate, bLoop, FirstDelay, Thunk, FreeThunk, Context);
+    return SetManagedTimer(World, AsEntity(Owner), true, Rate, bLoop, FirstDelay, FScriptCallback{ Callback });
 }
 
-// Clears every managed timer before its generation unloads, freeing the delegates that root that context.
+// Clears every managed timer before its generation unloads, so a looper does not tick on into the next one.
 LUMINA_DOTNET_EXPORT(void, Timer_ClearAllManaged)()
 {
-    FTimerRegistry::ForEachSnapshot([](FManagedTimerContext* Ctx)
+    FTimerRegistry::ForEachSnapshot([](FManagedTimer* Timer)
     {
-        if (CWorld* W = Ctx->World.Get())
+        if (CWorld* W = Timer->World.Get())
         {
-            FTimerHandle Handle = Ctx->Handle;
-            W->GetTimerManager().ClearTimer(Handle);
+            W->GetTimerManager().ClearTimer(Timer->Handle);
         }
-
-        // Released even when the world is gone, so a delegate never outlives the code that owns it.
-        Ctx->Release();
     });
 }
 

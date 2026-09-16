@@ -5,7 +5,7 @@
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Memory/SmartPtr.h"
 #include "Scripting/DotNet/DotNetExport.h"
-#include "Scripting/DotNet/ManagedContextRegistry.h"
+#include "Scripting/ScriptCallback.h"
 #include "World/ECS/Registry.h"
 #include "World/Subsystems/TweenManager.h"
 #include "World/World.h"
@@ -15,64 +15,13 @@ using namespace Lumina::DotNet;
 
 namespace
 {
-    using FTweenThunk      = void (*)(void*);
-    using FTweenValueThunk = void (*)(void*, float);
-    using FTweenFreeThunk  = void (*)(void*);
+    // Shared with whatever step captured it, so the managed handle frees when the tween is destroyed.
+    using FTweenCallback = TSharedPtr<FScriptCallbackOwner>;
 
-    struct FManagedTweenContext;
-
-    using FTweenRegistry = TManagedContextRegistry<FManagedTweenContext>;
-
-    struct FManagedTweenContext
+    FTweenCallback MakeCallback(uint64 Token)
     {
-        void*           Fn      = nullptr;
-        FTweenFreeThunk FreeFn  = nullptr;
-        void*           Context = nullptr;
-
-        FManagedTweenContext(void* InThunk, void* InFree, void* InContext)
-            : Fn(InThunk)
-            , FreeFn(reinterpret_cast<FTweenFreeThunk>(InFree))
-            , Context(InContext)
-        {
-            FTweenRegistry::Add(this);
-        }
-
-        ~FManagedTweenContext()
-        {
-            FTweenRegistry::Remove(this);
-            Release();
-        }
-
-        LE_NO_COPYMOVE(FManagedTweenContext);
-
-        // Frees the delegate now, for a generation unloading while its tweens are still queued.
-        void Release()
-        {
-            if (FreeFn != nullptr && Context != nullptr)
-            {
-                FreeFn(Context);
-            }
-            Fn      = nullptr;
-            FreeFn  = nullptr;
-            Context = nullptr;
-        }
-
-        void Invoke() const
-        {
-            if (Fn != nullptr)
-            {
-                reinterpret_cast<FTweenThunk>(Fn)(Context);
-            }
-        }
-
-        void InvokeValue(float Value) const
-        {
-            if (Fn != nullptr)
-            {
-                reinterpret_cast<FTweenValueThunk>(Fn)(Context, Value);
-            }
-        }
-    };
+        return MakeShared<FScriptCallbackOwner>(FScriptCallback{ Token });
+    }
 
     FTweenManager* ManagerOf(uint64 World)
     {
@@ -94,13 +43,6 @@ namespace
         Out = FTween(Manager, Handle);
         return true;
     }
-}
-
-// Frees every tween delegate before its generation unloads, since each one roots that generation.
-LUMINA_DOTNET_EXPORT(void, Tween_ClearAllManaged)()
-{
-    // The tween itself keeps running; only its call back into managed code goes away.
-    FTweenRegistry::ForEachSnapshot([](FManagedTweenContext* Ctx) { Ctx->Release(); });
 }
 
 LUMINA_DOTNET_EXPORT(uint32, Tween_Create)(uint64 World, uint32 OwnerEntity, int32 bHasOwner)
@@ -145,21 +87,20 @@ LUMINA_DOTNET_EXPORT(void, Tween_ScaleTo)(uint64 World, uint32 Id, uint32 Entity
     }
 }
 
-LUMINA_DOTNET_EXPORT(void, Tween_ValueTo)(uint64 World, uint32 Id, float From, float To, float Duration,
-                                          void* Thunk, void* FreeThunk, void* Context)
+LUMINA_DOTNET_EXPORT(void, Tween_ValueTo)(uint64 World, uint32 Id, float From, float To, float Duration, uint64 Callback)
 {
     FTween Tween;
-    if (!ResolveTween(World, Id, Tween) || Thunk == nullptr)
+    if (!ResolveTween(World, Id, Tween))
     {
-        if (FreeThunk != nullptr && Context != nullptr)
-        {
-            reinterpret_cast<FTweenFreeThunk>(FreeThunk)(Context);
-        }
+        Scripting::ReleaseScriptCallback(FScriptCallback{ Callback });
         return;
     }
 
-    TSharedPtr<FManagedTweenContext> Ctx = MakeShared<FManagedTweenContext>(Thunk, FreeThunk, Context);
-    Tween.To(From, To, Duration, [Ctx](const float& Value) { Ctx->InvokeValue(Value); });
+    FTweenCallback Owner = MakeCallback(Callback);
+    Tween.To(From, To, Duration, [Owner](const float& Value)
+    {
+        Owner->Invoke(Scripting::PackFloatPayload(Value));
+    });
 }
 
 LUMINA_DOTNET_EXPORT(void, Tween_Interval)(uint64 World, uint32 Id, float Duration)
@@ -171,36 +112,30 @@ LUMINA_DOTNET_EXPORT(void, Tween_Interval)(uint64 World, uint32 Id, float Durati
     }
 }
 
-LUMINA_DOTNET_EXPORT(void, Tween_Call)(uint64 World, uint32 Id, void* Thunk, void* FreeThunk, void* Context)
+LUMINA_DOTNET_EXPORT(void, Tween_Call)(uint64 World, uint32 Id, uint64 Callback)
 {
     FTween Tween;
-    if (!ResolveTween(World, Id, Tween) || Thunk == nullptr)
+    if (!ResolveTween(World, Id, Tween))
     {
-        if (FreeThunk != nullptr && Context != nullptr)
-        {
-            reinterpret_cast<FTweenFreeThunk>(FreeThunk)(Context);
-        }
+        Scripting::ReleaseScriptCallback(FScriptCallback{ Callback });
         return;
     }
 
-    TSharedPtr<FManagedTweenContext> Ctx = MakeShared<FManagedTweenContext>(Thunk, FreeThunk, Context);
-    Tween.Call([Ctx] { Ctx->Invoke(); });
+    FTweenCallback Owner = MakeCallback(Callback);
+    Tween.Call([Owner] { Owner->Invoke(0); });
 }
 
-LUMINA_DOTNET_EXPORT(void, Tween_OnFinished)(uint64 World, uint32 Id, void* Thunk, void* FreeThunk, void* Context)
+LUMINA_DOTNET_EXPORT(void, Tween_OnFinished)(uint64 World, uint32 Id, uint64 Callback)
 {
     FTween Tween;
-    if (!ResolveTween(World, Id, Tween) || Thunk == nullptr)
+    if (!ResolveTween(World, Id, Tween))
     {
-        if (FreeThunk != nullptr && Context != nullptr)
-        {
-            reinterpret_cast<FTweenFreeThunk>(FreeThunk)(Context);
-        }
+        Scripting::ReleaseScriptCallback(FScriptCallback{ Callback });
         return;
     }
 
-    TSharedPtr<FManagedTweenContext> Ctx = MakeShared<FManagedTweenContext>(Thunk, FreeThunk, Context);
-    Tween.OnFinished([Ctx] { Ctx->Invoke(); });
+    FTweenCallback Owner = MakeCallback(Callback);
+    Tween.OnFinished([Owner] { Owner->Invoke(0); });
 }
 
 LUMINA_DOTNET_EXPORT(void, Tween_Trans)(uint64 World, uint32 Id, int32 Transition)
