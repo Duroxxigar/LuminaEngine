@@ -258,6 +258,9 @@ namespace Lumina::Jobs
             // Its own cache line, since many workers write it and it must not false-share the hot counters.
             alignas(64) TAtomic<int32> PoppersInFlight{0};
 
+            // An adopted job runs on the waiting thread with no fiber, so the fiber dump cannot name it.
+            alignas(64) TAtomic<const char*>* AdoptedNames = nullptr; // [NumThreadSlots]
+
 #if USING(WITH_EDITOR)
             // Sampled at fiber dispatch, giving the editor which core a worker last ran a job on.
             struct FWorkerCoreSample { TAtomic<uint32> Core{0}; TAtomic<uint32> Gen{0}; TAtomic<uint8> Busy{0}; };
@@ -680,13 +683,25 @@ namespace Lumina::Jobs
         FORCEINLINE void RunAdoptedJob(const FQueuedJob& Job, uint32 Slot)
         {
             LUMINA_PROFILE_SECTION_COLORED("Assist: Adopted Job", tracy::Color::Orange);
+            const char* Label = nullptr;
 #if USING(WITH_EDITOR)
-            if (Job.Name != nullptr)
+            Label = Job.Name;
+            if (Label != nullptr)
             {
-                LUMINA_PROFILE_TAG(Job.Name);
+                LUMINA_PROFILE_TAG(Label);
             }
 #endif
+            if (G->AdoptedNames != nullptr && Slot < G->NumThreadSlots)
+            {
+                G->AdoptedNames[Slot].store(Label != nullptr ? Label : "<unnamed>", std::memory_order_relaxed);
+            }
+
             Job.Function(Job.Argument, Slot);
+
+            if (G->AdoptedNames != nullptr && Slot < G->NumThreadSlots)
+            {
+                G->AdoptedNames[Slot].store(nullptr, std::memory_order_relaxed);
+            }
         }
 
         void PushReady(FWorkFiber* Fiber)
@@ -1398,8 +1413,24 @@ namespace Lumina::Jobs
             }
         }
 
+        // Named per slot, since an adopted job holds no fiber and the fiber dump would show nothing.
+        void ReportAdoptedJobs()
+        {
+            if (G->AdoptedNames == nullptr)
+            {
+                return;
+            }
+            for (uint32 Slot = 0; Slot < G->NumThreadSlots; ++Slot)
+            {
+                if (const char* Name = G->AdoptedNames[Slot].load(std::memory_order_relaxed))
+                {
+                    LOG_ERROR("  slot {}: running adopted job '{}' inline, off any fiber", Slot, Name);
+                }
+            }
+        }
+
         // These four numbers say which, unassistable work, an unresumed ready fiber, or a missing decrement.
-        void ReportAssistStall(int32 CounterValue, int32 Target, double IdleSeconds)
+        void ReportAssistStall(int32 CounterValue, int32 Target, double IdleSeconds, int64 PeakAssistable)
         {
             uint32 ParkedWorkers = 0;
             for (uint32 Word = 0; Word < G->IdleMaskWords; ++Word)
@@ -1412,16 +1443,33 @@ namespace Lumina::Jobs
                 }
             }
 
-            LOG_ERROR("Job system: a counter wait went {}ms without finding a single job to run. "
-                      "Counter value {} (waiting for {}), queued {} (assistable {}), ready fibers {}, "
-                      "in-flight {}, {}/{} workers parked.",
-                static_cast<int64>(IdleSeconds * 1000.0), CounterValue, Target,
+            // Nothing assistable the whole time means one long job held the critical path, which is the
+            // pool working as designed rather than a fault, so it must not read like one.
+            if (PeakAssistable <= 0)
+            {
+                LOG_WARN("Job system: waited {}ms on {} in-flight job(s) with nothing assistable queued. "
+                         "Counter value {} (waiting for {}), ready fibers {}, {}/{} workers parked. "
+                         "A single long job is holding the critical path; split it to use the pool.",
+                    static_cast<int64>(IdleSeconds * 1000.0),
+                    G->InFlight.load(std::memory_order_relaxed),
+                    CounterValue, Target,
+                    G->ReadyCount.load(std::memory_order_relaxed),
+                    ParkedWorkers, G->NumWorkers);
+                ReportAdoptedJobs();
+                return;
+            }
+
+            LOG_ERROR("Job system: a counter wait went {}ms while up to {} assistable job(s) were queued and "
+                      "none could be taken. Counter value {} (waiting for {}), queued {} (assistable {} now), "
+                      "ready fibers {}, in-flight {}, {}/{} workers parked.",
+                static_cast<int64>(IdleSeconds * 1000.0), PeakAssistable, CounterValue, Target,
                 G->AvailJobs.load(std::memory_order_relaxed),
                 G->AvailAssistJobs.load(std::memory_order_relaxed),
                 G->ReadyCount.load(std::memory_order_relaxed),
                 G->InFlight.load(std::memory_order_relaxed),
                 ParkedWorkers, G->NumWorkers);
 
+            ReportAdoptedJobs();
             JobsHangReporter();
         }
     }
@@ -1451,6 +1499,13 @@ namespace Lumina::Jobs
         for (uint32 i = 0; i < G->NumWorkers; ++i)
         {
             Memory::ConstructAt(&G->Workers[i]);
+        }
+
+        G->AdoptedNames = static_cast<TAtomic<const char*>*>(
+            Memory::Malloc(sizeof(TAtomic<const char*>) * G->NumThreadSlots, alignof(TAtomic<const char*>)));
+        for (uint32 i = 0; i < G->NumThreadSlots; ++i)
+        {
+            Memory::ConstructAt(&G->AdoptedNames[i], nullptr);
         }
 
         // One idle-mask word per 64 workers, zeroed since nobody has parked yet.
@@ -1570,6 +1625,13 @@ namespace Lumina::Jobs
             void* WorkersMem = G->Workers;
             Memory::Free(WorkersMem);
             G->Workers = nullptr;
+        }
+
+        if (G->AdoptedNames != nullptr)
+        {
+            void* NamesMem = G->AdoptedNames;
+            Memory::Free(NamesMem);
+            G->AdoptedNames = nullptr;
         }
 
         if (G->IdleMask != nullptr)
@@ -1941,6 +2003,7 @@ namespace Lumina::Jobs
         bool   bRegistered = false;
         // A wait that keeps adopting jobs is working however long it takes, and never pays for this.
         double IdleSince = 0.0;
+        int64  PeakAssistable = 0;
 
         while (Counter->Value.load(std::memory_order_acquire) > Value)
         {
@@ -1951,6 +2014,7 @@ namespace Lumina::Jobs
                 OnJobComplete(Job.GetCounter(), Slot);
                 IdleSpins = 0;
                 IdleSince = 0.0;
+                PeakAssistable = 0;
                 continue;
             }
 
@@ -1960,6 +2024,9 @@ namespace Lumina::Jobs
                 continue;
             }
 
+            // Sampled every spin, or the report would describe the instant it printed and not the stall.
+            PeakAssistable = Math::Max(PeakAssistable, G->AvailAssistJobs.load(std::memory_order_relaxed));
+
             const double Now = PlatformTime::Seconds();
             if (IdleSince == 0.0)
             {
@@ -1967,8 +2034,9 @@ namespace Lumina::Jobs
             }
             else if (Now - IdleSince >= kAssistStallSeconds && ShouldReportAssistStall())
             {
-                ReportAssistStall(Counter->Value.load(std::memory_order_relaxed), Value, Now - IdleSince);
+                ReportAssistStall(Counter->Value.load(std::memory_order_relaxed), Value, Now - IdleSince, PeakAssistable);
                 IdleSince = Now;
+                PeakAssistable = 0;
             }
 
             // Never cleared, since another thread may wait on the same counter and AllocCounter resets it.
