@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Threading;
@@ -238,10 +238,10 @@ public readonly unsafe partial struct GameplayMessageBus
     }
 
     private static readonly delegate* unmanaged[Cdecl]<ulong, uint, uint*, int, int> GetAncestorChainFn =
-        (delegate* unmanaged[Cdecl]<ulong, uint, uint*, int, int>)NativeBindings.Resolve("Runtime", "LuminaSharp_World_GetAncestorChain");
+        (delegate* unmanaged[Cdecl]<ulong, uint, uint*, int, int>)NativeBindings.Resolve("Runtime", "LuminaSharp_Call_Lumina_CEntityLibrary_GetAncestorChain");
 
     private static readonly delegate* unmanaged[Cdecl]<ulong, uint, uint*, int, int> GetSubtreeFn =
-        (delegate* unmanaged[Cdecl]<ulong, uint, uint*, int, int>)NativeBindings.Resolve("Runtime", "LuminaSharp_World_GetSubtree");
+        (delegate* unmanaged[Cdecl]<ulong, uint, uint*, int, int>)NativeBindings.Resolve("Runtime", "LuminaSharp_Call_Lumina_CEntityLibrary_GetSubtree");
 }
 
 /// <summary>One registered global listener: its payload type, the boxed-invoke shim, and its match mode.</summary>

@@ -1,4 +1,4 @@
-#include "RuntimePCH.h"
+﻿#include "RuntimePCH.h"
 #include "World.h"
 #include "World/ECS/Registry.h"
 #include "World/ECS/EventDispatcher.h"
@@ -27,6 +27,7 @@
 #include "Core/Serialization/ObjectArchiver.h"
 #include "Animation/Pose.h"
 #include "Animation/SkeletalMeshUtils.h"
+#include "Animation/SkeletalMeshLibrary.h"
 #include "Assets/AssetTypes/Mesh/SkeletalMesh/SkeletalMesh.h"
 #include "Assets/AssetTypes/Mesh/Skeleton/Skeleton.h"
 #include "Entity/EntityUtils.h"
@@ -642,25 +643,6 @@ namespace Lumina
         return NewEntity;
     }
 
-    ECS::FEntity CWorld::SpawnProjectile(FVector3 Position, FVector3 Velocity, float Damage, float Lifetime, ECS::FEntity Instigator)
-    {
-        FTransform SpawnTransform;
-        SpawnTransform.SetLocation(Position);
-        ECS::FEntity Entity = ConstructEntity("Projectile", SpawnTransform);
-
-        SProjectileComponent& Projectile = EntityRegistry.Emplace<SProjectileComponent>(Entity);
-        Projectile.Velocity = Velocity;
-        Projectile.Damage = Damage;
-        Projectile.Instigator = Instigator;
-
-        // Reuse the engine lifetime system for auto-despawn.
-        if (Lifetime > 0.0f)
-        {
-            EntityRegistry.Emplace<SLifetimeComponent>(Entity).Lifetime = Lifetime;
-        }
-        return Entity;
-    }
-
     bool CWorld::FractureEntity(ECS::FEntity Entity, const FVector3& Origin, float Strength)
     {
         LUMINA_PROFILE_SCOPE();
@@ -920,105 +902,12 @@ namespace Lumina
         return Spawned > 0;
     }
 
-    ECS::FEntity CWorld::SpawnPrefab(const FAssetRef& Prefab)
-    {
-        return SpawnPrefabAt(Prefab, FTransform(), ECS::NullEntity);
-    }
-
-    ECS::FEntity CWorld::SpawnPrefabAt(const FAssetRef& Prefab, const FTransform& SpawnTransform, ECS::FEntity Parent)
-    {
-        FStringView Path = Prefab.GetPath();
-        FAssetData* AssetData = FAssetRegistry::Get().GetAssetByPath(Path);
-        if (AssetData == nullptr)
-        {
-            LOG_WARN("SpawnPrefab: no asset found at path '{}'", Path);
-            return ECS::NullEntity;
-        }
-
-        // A cold spawn fans the prefab's closure across the swarm; a resident one takes the lookup.
-        CPrefab* PrefabObject = FindObject<CPrefab>(AssetData->AssetGUID);
-        if (PrefabObject == nullptr)
-        {
-            PrefabObject = LoadObjectGraph<CPrefab>(AssetData->AssetGUID);
-        }
-        if (PrefabObject == nullptr)
-        {
-            LOG_WARN("SpawnPrefab: asset '{}' is not a CPrefab", Path);
-            return ECS::NullEntity;
-        }
-
-        return PrefabObject->Instantiate(this, SpawnTransform, Parent);
-    }
-
-    ECS::FEntity CWorld::SpawnParticleSystem(CParticleSystem* ParticleSystem, const FTransform& SpawnTransform, float Lifetime)
-    {
-        if (ParticleSystem == nullptr)
-        {
-            return ECS::NullEntity;
-        }
-
-        const ECS::FEntity Spawned = ConstructEntity("ParticleEffect", SpawnTransform);
-        SParticleSystemComponent& Effect = EmplaceComponent<SParticleSystemComponent>(Spawned);
-        Effect.ParticleSystem = ParticleSystem;
-        Effect.bBurstOnSpawn = true;
-        Effect.Activate(true);
-
-        SetEntityLifetime(Spawned, Lifetime);
-        return Spawned;
-    }
-
-    ECS::FEntity CWorld::SpawnParticleSystemAttached(CParticleSystem* ParticleSystem, ECS::FEntity Parent,
-        const FName& Socket, FVector3 Offset, float Lifetime)
-    {
-        if (ParticleSystem == nullptr || !IsValidEntity(Parent))
-        {
-            return ECS::NullEntity;
-        }
-
-        // Attaching snaps the child onto the socket, so spawning at a world point first would be undone.
-        const ECS::FEntity Spawned = ConstructEntity("ParticleEffect", FTransform());
-        SParticleSystemComponent& Effect = EmplaceComponent<SParticleSystemComponent>(Spawned);
-        Effect.ParticleSystem = ParticleSystem;
-        Effect.EmitterOffset = Offset;
-        Effect.bBurstOnSpawn = true;
-        Effect.Activate(true);
-
-        // A managed caller spells "no socket" as an empty string, which does not intern to NAME_None.
-        if (Socket.IsNone() || FStringView(Socket.c_str()).empty())
-        {
-            SetParent(Spawned, Parent);
-        }
-        else
-        {
-            AttachEntityToSocket(Spawned, Parent, Socket);
-        }
-
-        SetEntityLifetime(Spawned, Lifetime);
-        return Spawned;
-    }
-
     void CWorld::SetEntityLifetime(ECS::FEntity Entity, float Seconds)
     {
         if (Seconds > 0.0f && IsValidEntity(Entity))
         {
             GetOrEmplaceComponent<SLifetimeComponent>(Entity).Lifetime = Seconds;
         }
-    }
-
-    void CWorld::SpawnPrefabAsync(const FName& Path, const TFunction<void(ECS::FEntity)>& Callback)
-    {
-        AsyncLoadObject(Path, [this, Callback, Path](CObject* Object)
-        {
-            CPrefab* Prefab = Cast<CPrefab>(Object);
-            if (Prefab == nullptr)
-            {
-                LOG_WARN("SpawnPrefab: asset '{}' is not a CPrefab", Path.c_str());
-                Callback(ECS::NullEntity);
-                return;
-            }
-
-            Callback(Prefab->Instantiate(this, FTransform(), ECS::NullEntity));
-        });
     }
 
     void CWorld::DuplicateEntity(ECS::FEntity& To, ECS::FEntity From, const TFunctionRef<bool(const ECS::FComponentTypeInfo&)>& Callback)
@@ -1145,110 +1034,6 @@ namespace Lumina
     ECS::FEntity CWorld::GetRootEntity(ECS::FEntity Entity)
     {
         return ECS::Utils::GetRootEntity(EntityRegistry, Entity);
-    }
-
-    void CWorld::AttachEntityToSocket(ECS::FEntity Child, ECS::FEntity Parent, const FName& SocketOrBone)
-    {
-        if (!EntityRegistry.IsValid(Child) || !EntityRegistry.IsValid(Parent) || Child == Parent)
-        {
-            return;
-        }
-
-        // The socket system overwrites the local transform anyway, and the snap avoids a stale frame.
-        ECS::Utils::ReparentEntity(EntityRegistry, Child, Parent, /*bPreserveWorld*/ false);
-
-        SSocketAttachmentComponent& Attachment = EntityRegistry.EmplaceOrReplace<SSocketAttachmentComponent>(Child);
-        Attachment.SocketName = SocketOrBone;
-
-        FMatrix4 SocketTransform;
-        STransformComponent* Transform = EntityRegistry.TryGet<STransformComponent>(Child);
-        if (Transform && SkeletalUtils::GetEntitySocketTransform(EntityRegistry, Parent, SocketOrBone, SocketTransform))
-        {
-            Transform->SetLocalTransform(FTransform(SocketTransform * Attachment.RelativeTransform.GetMatrix()));
-        }
-    }
-
-    void CWorld::DetachEntityFromSocket(ECS::FEntity Entity)
-    {
-        if (!EntityRegistry.IsValid(Entity))
-        {
-            return;
-        }
-
-        EntityRegistry.Remove<SSocketAttachmentComponent>(Entity);
-        ECS::Utils::ReparentEntity(EntityRegistry, Entity, ECS::NullEntity, /*bPreserveWorld*/ true);
-    }
-
-    bool CWorld::HasSocket(ECS::FEntity Entity, const FName& SocketOrBone)
-    {
-        return SkeletalUtils::EntityHasSocket(EntityRegistry, Entity, SocketOrBone);
-    }
-
-    FVector3 CWorld::GetSocketLocation(ECS::FEntity Entity, const FName& SocketOrBone)
-    {
-        FMatrix4 SocketTransform;
-        if (!SkeletalUtils::GetSocketWorldTransform(EntityRegistry, Entity, SocketOrBone, SocketTransform))
-        {
-            return FVector3(0.0f);
-        }
-        return FVector3(SocketTransform[3]);
-    }
-
-    FQuat CWorld::GetSocketRotation(ECS::FEntity Entity, const FName& SocketOrBone)
-    {
-        FMatrix4 SocketTransform;
-        if (!SkeletalUtils::GetSocketWorldTransform(EntityRegistry, Entity, SocketOrBone, SocketTransform))
-        {
-            return FQuat::Identity();
-        }
-
-        FVector3 Translation; FQuat Rotation; FVector3 Scale;
-        AnimPose::DecomposeTRS(SocketTransform, Translation, Rotation, Scale);
-        return Rotation;
-    }
-
-    FName CWorld::GetBoneName(ECS::FEntity Entity, int32 BoneIndex)
-    {
-        if (!EntityRegistry.IsValid(Entity))
-        {
-            return FName();
-        }
-
-        const SSkeletalMeshComponent* Mesh = EntityRegistry.TryGet<SSkeletalMeshComponent>(Entity);
-        if (Mesh == nullptr)
-        {
-            return FName();
-        }
-
-        const FSkeletonResource* Skeleton = SkeletalUtils::GetSkeleton(*Mesh);
-        if (Skeleton == nullptr || !Skeleton->IsBoneIndexValid(BoneIndex))
-        {
-            return FName();
-        }
-        return Skeleton->GetBone(BoneIndex).Name;
-    }
-
-    int32 CWorld::GetBoneIndex(ECS::FEntity Entity, const FName& BoneName)
-    {
-        if (!EntityRegistry.IsValid(Entity))
-        {
-            return INDEX_NONE;
-        }
-
-        const SSkeletalMeshComponent* Mesh = EntityRegistry.TryGet<SSkeletalMeshComponent>(Entity);
-        if (Mesh == nullptr)
-        {
-            return INDEX_NONE;
-        }
-
-        const FSkeletonResource* Skeleton = SkeletalUtils::GetSkeleton(*Mesh);
-        return Skeleton ? Skeleton->FindBoneIndex(BoneName) : INDEX_NONE;
-    }
-
-    FName CWorld::FindClosestBone(ECS::FEntity Entity, FVector3 WorldLocation)
-    {
-        const int32 BoneIndex = SkeletalUtils::FindClosestBone(EntityRegistry, Entity, WorldLocation);
-        return GetBoneName(Entity, BoneIndex);
     }
 
     void CWorld::DestroyEntity(ECS::FEntity Entity)
@@ -1960,57 +1745,6 @@ namespace Lumina
     {
         const FResolvedSceneView* View = EntityRegistry.Ctx().Find<FResolvedSceneView>();
         return (View != nullptr && View->bHasView) ? View : nullptr;
-    }
-
-    FVector2 CWorld::GetViewportSize() const
-    {
-        if (RenderScene == nullptr)
-        {
-            return FVector2(0.0f);
-        }
-        const FUIntVector2 Extent = RenderScene->GetRenderExtent();
-        return FVector2((float)Extent.x, (float)Extent.y);
-    }
-
-    FScreenProjection CWorld::WorldToScreen(FVector3 WorldLocation) const
-    {
-        FScreenProjection Result;
-        const FResolvedSceneView* View = GetResolvedView();
-        const FVector2 Viewport = GetViewportSize();
-        if (View == nullptr || Viewport.x <= 0.0f || Viewport.y <= 0.0f)
-        {
-            return Result;
-        }
-
-        Result.bOnScreen = View->ViewVolume.WorldToScreen(WorldLocation, Viewport, Result.Position, Result.Depth);
-        return Result;
-    }
-
-    FWorldRay CWorld::ScreenToWorldRay(FVector2 ScreenPosition) const
-    {
-        FWorldRay Result;
-        const FResolvedSceneView* View = GetResolvedView();
-        const FVector2 Viewport = GetViewportSize();
-        if (View == nullptr || Viewport.x <= 0.0f || Viewport.y <= 0.0f)
-        {
-            return Result;
-        }
-
-        View->ViewVolume.ScreenToWorldRay(ScreenPosition, Viewport, Result.Origin, Result.Direction);
-        Result.bValid = true;
-        return Result;
-    }
-
-    FWorldRay CWorld::ViewportCenterRay() const
-    {
-        const FVector2 Viewport = GetViewportSize();
-        return ScreenToWorldRay(FVector2(Viewport.x * 0.5f, Viewport.y * 0.5f));
-    }
-
-    FVector3 CWorld::DeprojectScreenToWorld(FVector2 ScreenPosition, float WorldDistance) const
-    {
-        const FWorldRay Ray = ScreenToWorldRay(ScreenPosition);
-        return Ray.bValid ? (Ray.Origin + Ray.Direction * WorldDistance) : FVector3(0.0f);
     }
 
     void CWorld::GetEntitiesByTag(const FName& Tag, TVector<ECS::FEntity>& Out)

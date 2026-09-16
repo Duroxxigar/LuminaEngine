@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -18,11 +18,13 @@ internal enum ETestFrameChannel : byte
 // Stands in for a script type, so a native test can drive the real dispatcher over a minted frame.
 internal sealed class FrameMarshalTarget
 {
+    [ScriptFunction]
     public void MarshalOut(int In, out int Out)
     {
         Out = In * 2;
     }
 
+    [ScriptFunction]
     public void MarshalRef(ref int Value)
     {
         Value += 5;
@@ -55,6 +57,25 @@ internal sealed class FrameMarshalTarget
     {
         Out = Plain;
         Ref += In;
+    }
+}
+
+// Kept off FrameMarshalTarget so the overload refusal cannot cost the dispatcher tests their own methods.
+internal sealed class OverloadedFunctionTarget
+{
+    [ScriptFunction]
+    public void Ambiguous(int Value)
+    {
+    }
+
+    [ScriptFunction]
+    public void Ambiguous(float Value)
+    {
+    }
+
+    [ScriptFunction]
+    public void Unambiguous()
+    {
     }
 }
 
@@ -259,5 +280,146 @@ internal static unsafe class InteropTestHooks
     {
         return FrameMarshal.TryBind(Property, typeof(FVector3), "Test_FrameBindMismatchedWidth",
             out FrameMarshal.FSlot _) ? 1 : 0;
+    }
+
+    // Reads a reflected TVector out-param back through the generated array binding and reports what arrived.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_VectorBindingInts(int Count, int* OutFirst, int* OutLast, int* OutCalls)
+    {
+        CInteropTestLibrary.ResetMakeRangeCallCount();
+        int[] Values = CInteropTestLibrary.MakeRange(Count);
+
+        *OutCalls = CInteropTestLibrary.GetMakeRangeCallCount();
+        *OutFirst = Values.Length > 0 ? Values[0] : -1;
+        *OutLast = Values.Length > 0 ? Values[Values.Length - 1] : -1;
+        return Values.Length;
+    }
+
+    // The entity element, which every converted buffer export uses, and a wider struct element beside it.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_VectorBindingEntities(int Count, uint* OutLast)
+    {
+        Entity[] Values = CInteropTestLibrary.MakeEntityRange(Count);
+        *OutLast = Values.Length > 0 ? Values[Values.Length - 1].Id : 0;
+        return Values.Length;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_VectorBindingStructs(int Count, float* OutLastY)
+    {
+        FVector3[] Values = CInteropTestLibrary.MakeVectorRange(Count);
+        *OutLastY = Values.Length > 0 ? Values[Values.Length - 1].Y : 0.0f;
+        return Values.Length;
+    }
+
+    // Binds a one-shot callback and hands its token back, so a native test can fire it and see the effect.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static ulong Test_BindScriptCallback()
+    {
+        CallbackPayload = 0xFFFFFFFFUL;
+        CallbackRuns = 0;
+        return ScriptCallback.Of((Entity Spawned) =>
+        {
+            CallbackPayload = Spawned.Id;
+            ++CallbackRuns;
+        }).Token;
+    }
+
+    // Binds a repeating callback over a float payload, the shape a tween value step uses.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static ulong Test_BindRepeatingScriptCallback()
+    {
+        CallbackPayload = 0xFFFFFFFFUL;
+        CallbackRuns = 0;
+        return ScriptCallback.OfRepeating((float Value) =>
+        {
+            CallbackPayload = (ulong)(long)(Value * 1000.0f);
+            ++CallbackRuns;
+        }).Token;
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static ulong Test_ScriptCallbackResult(int* OutRuns)
+    {
+        *OutRuns = CallbackRuns;
+        return CallbackPayload;
+    }
+
+    private static ulong CallbackPayload;
+    private static int CallbackRuns;
+
+    // Binds a wrapper to a CObject and keeps it, so a native test can kill the object and probe the wrapper.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static IntPtr Test_BindObjectWrapper(IntPtr Object)
+    {
+        return GCHandle.ToIntPtr(GCHandle.Alloc(new Lumina.CWorld(Object)));
+    }
+
+    // 1 when the handle read through, 0 when IsValid said no, and -1 when reading it threw as it should.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_ProbeObjectWrapper(IntPtr WrapperHandle, int* OutIsValid)
+    {
+        GCHandle Handle = GCHandle.FromIntPtr(WrapperHandle);
+        var Wrapper = (Lumina.CWorld)Handle.Target!;
+        *OutIsValid = Wrapper.IsValid ? 1 : 0;
+        try
+        {
+            return Wrapper.Handle != IntPtr.Zero ? 1 : 0;
+        }
+        catch (InvalidOperationException)
+        {
+            return -1;
+        }
+    }
+
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static void Test_FreeObjectWrapper(IntPtr WrapperHandle)
+    {
+        GCHandle.FromIntPtr(WrapperHandle).Free();
+    }
+
+    // Whether the generator produced a typed invoker, so a test can tell it apart from the reflection fallback.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_HasGeneratedInvoker(int Which)
+    {
+        string Name = Which switch
+        {
+            0 => nameof(FrameMarshalTarget.MarshalOut),
+            1 => nameof(FrameMarshalTarget.MarshalRef),
+            _ => nameof(FrameMarshalTarget.OnAppendSum),
+        };
+        return ScriptInvokerRegistry.Find(typeof(FrameMarshalTarget), Name) != 0 ? 1 : 0;
+    }
+
+    // How many functions survive describing a type whose [ScriptFunction] names are not all distinct.
+    [ManagedExport]
+    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvStdcall) })]
+    public static int Test_DescribedFunctionCount(byte* OutAmbiguousDescribed)
+    {
+        var Library = new TypeLibrary(new[] { typeof(OverloadedFunctionTarget) });
+        TypeDescription Description = new(typeof(OverloadedFunctionTarget));
+        Description.Build(Library);
+
+        byte Ambiguous = 0;
+        foreach (ScriptFunction Function in Description.Functions)
+        {
+            if (Function.Name == nameof(OverloadedFunctionTarget.Ambiguous))
+            {
+                Ambiguous = 1;
+            }
+        }
+
+        *OutAmbiguousDescribed = Ambiguous;
+        return Description.Functions.Count;
     }
 }

@@ -15,6 +15,9 @@ namespace Lumina
     {
         FVector3   AABBMin = FVector3( FLT_MAX);
         FVector3   AABBMax = FVector3(-FLT_MAX);
+
+        // Fingerprints the geometry itself, so a swapped, re-imported or sculpted mesh still dirties its tiles.
+        uint64     ContentId = 0;
     };
 
     /** Per-tile rebake task in flight. */
@@ -78,6 +81,22 @@ namespace Lumina
         FNavBuildSettings                       AutoBuiltSettings;
         float                                   AutoSettleTimer  = 0.0f;
         bool                                    bAutoBuiltValid  = false;
+
+        // Throttles the geometry change scan to DynamicRebuildInterval.
+        float                                   DynamicScanTimer = 0.0f;
+
+        /** A world populates procedurally after it loads, and the bake already covered what arrives, so a
+         *  source appearing during this window joins the baseline rather than dirtying its tiles. */
+        bool                                    bBaselineSettling = true;
+        int32                                   BaselineQuietScans = 0;
+        float                                   BaselineAge = 0.0f;
+
+        void RestartBaseline()
+        {
+            bBaselineSettling = true;
+            BaselineQuietScans = 0;
+            BaselineAge = 0.0f;
+        }
     };
 
     /** Bake volume (world AABB at Center +/- Extents); multiple components union at bake time. */
@@ -91,6 +110,8 @@ namespace Lumina
         SNavMeshComponent(const SNavMeshComponent& Other)
             : Settings(Other.Settings)
             , bAutoBake(Other.bAutoBake)
+            , bDynamicRebuild(Other.bDynamicRebuild)
+            , DynamicRebuildInterval(Other.DynamicRebuildInterval)
             , Center(Other.Center)
             , Extents(Other.Extents)
             , Tiles(Other.Tiles)
@@ -106,17 +127,19 @@ namespace Lumina
         {
             if (this != &Other)
             {
-                Settings        = Other.Settings;
-                bAutoBake       = Other.bAutoBake;
-                Center          = Other.Center;
-                Extents         = Other.Extents;
-                Tiles           = Other.Tiles;
-                Origin          = Other.Origin;
-                TileWorldSize   = Other.TileWorldSize;
-                TilesX          = Other.TilesX;
-                TilesY          = Other.TilesY;
-                MaxPolysPerTile = Other.MaxPolysPerTile;
-                Runtime         = FNavMeshRuntime{};
+                Settings               = Other.Settings;
+                bAutoBake              = Other.bAutoBake;
+                bDynamicRebuild        = Other.bDynamicRebuild;
+                DynamicRebuildInterval = Other.DynamicRebuildInterval;
+                Center                 = Other.Center;
+                Extents                = Other.Extents;
+                Tiles                  = Other.Tiles;
+                Origin                 = Other.Origin;
+                TileWorldSize          = Other.TileWorldSize;
+                TilesX                 = Other.TilesX;
+                TilesY                 = Other.TilesY;
+                MaxPolysPerTile        = Other.MaxPolysPerTile;
+                Runtime                = FNavMeshRuntime{};
             }
             return *this;
         }
@@ -131,6 +154,14 @@ namespace Lumina
         /** Re-bake automatically when the bounds/settings change (e.g. placed or moved in the editor). */
         PROPERTY(Editable, Category = "NavMesh|Build")
         bool bAutoBake = true;
+
+        // Rebakes only the tiles under source geometry that moved, changed shape, appeared or disappeared.
+        PROPERTY(Editable, Category = "NavMesh|Dynamic")
+        bool bDynamicRebuild = true;
+
+        // Seconds between geometry change scans, where zero scans every tick and walks every collider.
+        PROPERTY(Editable, Category = "NavMesh|Dynamic", Units = "s", ClampMin = 0.0f)
+        float DynamicRebuildInterval = 0.25f;
 
         /** World-space center of the bake volume. */
         PROPERTY(Editable, Category = "NavMesh|Bounds")

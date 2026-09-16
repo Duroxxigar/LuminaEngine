@@ -1,4 +1,4 @@
-#include "DotNetExport.h"
+﻿#include "DotNetExport.h"
 #include "Memory/Construct.h"
 #include "World/ECS/Registry.h"
 #include "Containers/Vector.h"
@@ -95,10 +95,26 @@ LUMINA_DOTNET_EXPORT(int, ViewNextChunk)(void* StatePtr, uint32* OutEntities, vo
     {
         const ECS::FEntity Entity = State->Entities[State->Cursor++];
 
+        // Written before the match is known, since a row the loop rejects is simply overwritten by the next.
+        void** Row = OutPtrs + (size_t)Count * (size_t)NInclude;
+
+        // GetRaw resolves the same slot Contains would and reports absence by returning null, so asking both
+        // walked the sparse set twice per entity per storage. A tag has no payload and still needs Contains.
         bool bMatches = true;
         for (int k = 0; k < N && bMatches; ++k)
         {
-            if (!State->IncludeStorages[k]->Contains(Entity)) { bMatches = false; }
+            ECS::FSparseSet* Storage = State->IncludeStorages[k];
+            if (Storage->IsTagOnly())
+            {
+                bMatches = Storage->Contains(Entity);
+                if (k < K) { Row[k] = nullptr; }
+            }
+            else
+            {
+                void* Payload = Storage->GetRaw(Entity);
+                bMatches = Payload != nullptr;
+                if (k < K) { Row[k] = Payload; }
+            }
         }
         for (size_t e = 0; e < State->ExcludeStorages.size() && bMatches; ++e)
         {
@@ -110,11 +126,6 @@ LUMINA_DOTNET_EXPORT(int, ViewNextChunk)(void* StatePtr, uint32* OutEntities, vo
         }
 
         OutEntities[Count] = static_cast<uint32>((Entity).Value);
-        void** Row = OutPtrs + (size_t)Count * (size_t)NInclude;
-        for (int k = 0; k < K; ++k)
-        {
-            Row[k] = State->IncludeStorages[k]->GetRaw(Entity);
-        }
         ++Count;
     }
 

@@ -1,26 +1,24 @@
 using System;
+using Lumina;
 
 namespace LuminaSharp;
 
-/// A scoped rigid-body creation batch, returned by World.Physics.Batch(). Every body created while it is
-/// open is inserted into the broadphase in one pass when it is disposed, instead of one insert per body.
-/// Bodies do not exist until the scope closes, so their BodyId / velocity / mass are only valid after it.
-/// Game thread only; nests (an inner scope folds into the outer one).
+/// A scoped rigid-body creation batch. Every body created while it is open is inserted into the broadphase in one pass when it is disposed, instead of one insert per body. Bodies do not exist until the scope closes, so their body id, velocity and mass are only valid after it. Game thread only, and it nests.
 public readonly struct FPhysicsBatchScope : IDisposable
 {
-    private readonly Physics Owner;
+    private readonly CWorld World;
 
-    internal FPhysicsBatchScope(Physics Owner)
+    public FPhysicsBatchScope(CWorld World)
     {
-        this.Owner = Owner;
-        Owner.BeginBodyBatch();
+        this.World = World;
+        CPhysicsLibrary.BeginBodyBatch(World);
     }
 
     public void Dispose()
     {
-        if (Owner.IsValid)
+        if (World != null)
         {
-            Owner.EndBodyBatch();
+            CPhysicsLibrary.EndBodyBatch(World);
         }
     }
 }

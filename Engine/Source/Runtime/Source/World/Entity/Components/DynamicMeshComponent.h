@@ -85,14 +85,25 @@ namespace Lumina
         FUNCTION()
         int32 GetTriangleCount() const;
 
-        // Bulk stream setters (called by the C# span exports in DotNetDynamicMesh.cpp; not script-bound
-        // directly because member functions can't take spans). Counts are element counts: positions/normals
-        // are 3 floats/vertex, UVs 2, colors 4 (float) or 1 (packed RGBA8), indices 1.
+        // Bulk stream setters. Counts are element counts, so 3 floats per vertex for positions and
+        // normals, 2 for UVs, 4 or 1 for float and packed colors, and 1 for an index.
+
+        FUNCTION()
         void SetPositionsData(const float* Data, int32 FloatCount);
+
+        FUNCTION()
         void SetNormalsData(const float* Data, int32 FloatCount);
+
+        FUNCTION()
         void SetUVsData(const float* Data, int32 FloatCount);
+
+        FUNCTION()
         void SetColorsFloatData(const float* Data, int32 FloatCount);
+
+        FUNCTION()
         void SetColorsPackedData(const uint32* Data, int32 Count);
+
+        FUNCTION()
         void SetIndicesData(const uint32* Data, int32 Count);
 
         /** How many LOD levels Commit() builds, 1 meaning LOD 0 only. Each extra level is another full

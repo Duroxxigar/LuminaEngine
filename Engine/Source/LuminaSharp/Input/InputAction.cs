@@ -76,7 +76,7 @@ public abstract partial class SInputBinding
     {
         if (ResolvedSerial != Serial)
         {
-            Index = string.IsNullOrEmpty(ActionName) ? -1 : FindActionIndex(ActionName);
+            Index = string.IsNullOrEmpty(ActionName) ? -1 : Lumina.CInputLibrary.FindActionIndex(ActionName);
             ResolvedSerial = Serial;
         }
 
@@ -96,8 +96,6 @@ public abstract partial class SInputBinding
     // Fires this binding's events for the transition from Previous to the state just applied.
     private protected abstract void Raise(in Lumina.FInputActionState Previous, float DeltaTime);
 
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Input_FindActionIndex")]
-    private static partial int FindActionIndex(string Name);
 }
 
 /// <summary>

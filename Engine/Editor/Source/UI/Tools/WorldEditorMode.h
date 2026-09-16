@@ -3,6 +3,7 @@
 #define USE_IMGUI_API
 #include <imgui.h>
 #include "Tools/UI/ImGui/ImGuiDesignIcons.h"
+#include "World/ECS/Entity.h"
 
 namespace Lumina
 {
@@ -21,6 +22,15 @@ namespace Lumina
 
         /** Capture the post-interaction state and push it onto the undo stack. */
         virtual void EndModeTransaction(const char* Name) = 0;
+
+        /** Cheaper opening for an interaction that only adds entities. Closed by EndModeTransaction. */
+        virtual void BeginModeCreationTransaction() = 0;
+
+        /** Entity the details panel is focused on, so a mode can edit what the user picked. */
+        virtual ECS::FEntity GetModeSelectionFocus() const = 0;
+
+        /** Replace the selection with Entity, which is how a mode hands off what it just created. */
+        virtual void SetModeSelection(ECS::FEntity Entity) = 0;
     };
 
     // Mutually-exclusive viewport input mode. Host routes Tick/overlay/toolbar to the

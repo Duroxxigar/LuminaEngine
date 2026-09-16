@@ -1,5 +1,6 @@
 #pragma once
 #include "Common.slang"
+#include "Noise.slang"
 
 // Pure sky evaluator shared by the fullscreen sky and the IBL cubemap capture; no global bindings.
 // Ray is world-space, +Y up; SunDir points from surface to sun, so SunDir.y is elevation in [-1, 1].
@@ -84,60 +85,8 @@ float Sky_OzoneDensity(float Height)
     return saturate(1.0 - abs(Height - kOzoneCenter) / kOzoneWidth);
 }
 
-// 3D hash -> [0,1].
-float Sky_Hash31(float3 P)
-{
-    P = frac(P * 0.3183099 + 0.1);
-    P *= 17.0;
-    return frac(P.x * P.y * P.z * (P.x + P.y + P.z));
-}
-
-// 3D hash -> 3D point in [0,1].
-float3 Sky_Hash33(float3 P)
-{
-    return float3(Sky_Hash31(P + 17.0),
-                  Sky_Hash31(P + 53.0),
-                  Sky_Hash31(P + 91.0));
-}
-
-// Smooth value noise on a sphere direction.
-float Sky_ValueNoise(float3 P)
-{
-    float3 I = floor(P);
-    float3 F = P - I;
-    F = F * F * (3.0 - 2.0 * F);
-
-    float n000 = Sky_Hash31(I + float3(0,0,0));
-    float n100 = Sky_Hash31(I + float3(1,0,0));
-    float n010 = Sky_Hash31(I + float3(0,1,0));
-    float n110 = Sky_Hash31(I + float3(1,1,0));
-    float n001 = Sky_Hash31(I + float3(0,0,1));
-    float n101 = Sky_Hash31(I + float3(1,0,1));
-    float n011 = Sky_Hash31(I + float3(0,1,1));
-    float n111 = Sky_Hash31(I + float3(1,1,1));
-
-    float nx00 = lerp(n000, n100, F.x);
-    float nx10 = lerp(n010, n110, F.x);
-    float nx01 = lerp(n001, n101, F.x);
-    float nx11 = lerp(n011, n111, F.x);
-    float nxy0 = lerp(nx00, nx10, F.y);
-    float nxy1 = lerp(nx01, nx11, F.y);
-    return lerp(nxy0, nxy1, F.z);
-}
-
-float Sky_FBM(float3 P)
-{
-    float V = 0.0;
-    float A = 0.5;
-    [[unroll]]
-    for (int i = 0; i < 5; i++)
-    {
-        V += A * Sky_ValueNoise(P);
-        P *= 2.02;
-        A *= 0.5;
-    }
-    return V;
-}
+// Amplitude starts at 0.5 and is left unnormalized, which is what the sky's tuning was authored against.
+float Sky_FBM(float3 P) { return 0.5 * FBM3D(P, 5, 0.5, 2.02); }
 
 // Quadratic step spacing: Mie's 1.2km scale height is nearly invisible to a march uniform over ~60km.
 float Sky_StepFraction(int Index, int Count)
@@ -301,13 +250,13 @@ float3 Sky_Stars(float3 RayDir, FEnvironmentParams Env, float Time, float NightF
     float3 Cell = floor(P);
     float3 F    = P - Cell;
 
-    float H = Sky_Hash31(Cell);
+    float H = Hash31(Cell);
     float Threshold = 1.0 - Density;
     if (H < Threshold) return float3(0.0);
 
     float Seed = (H - Threshold) / max(1e-4, 1.0 - Threshold);
 
-    float3 Offset    = Sky_Hash33(Cell + 19.0);
+    float3 Offset    = Hash33(Cell + 19.0);
     float3 StarPos   = Cell + Offset;
     float  D         = length(P - StarPos);
 
@@ -355,7 +304,7 @@ float3 Sky_Galaxy(float3 RayDir, FEnvironmentParams Env, float NightFactor)
 
     // A faint cool/warm tint based on a third noise field gives variation
     // between blue-white and dust-warm regions of the band.
-    float Hue = Sky_ValueNoise(RayDir * 4.0 + 11.0);
+    float Hue = ValueNoise3D(RayDir * 4.0 + 11.0);
     float3 BandTint = lerp(float3(0.55, 0.7, 1.0), float3(1.0, 0.85, 0.65), Hue);
 
     return BandTint * BandShape * Noise * Intensity * NightFactor;

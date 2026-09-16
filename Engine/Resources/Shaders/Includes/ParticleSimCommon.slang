@@ -1,5 +1,6 @@
 #pragma once
 #include "SceneGlobals.slang"
+#include "Noise.slang"
 
 // Shared data layout + RNG/noise/emitter helpers for the two particle simulation shaders
 // (ParticleSimulate.slang, the data-driven default, and Particles/ParticleSimulateTemplate.slang,
@@ -193,38 +194,10 @@ float3 RandDirectionInCone(inout uint state, float3 forward, float3 right, float
     return forward * cos(angle) + (right * cos(t) + up * sin(t)) * s;
 }
 
-// Cheap 3D value noise for particle turbulence (no 3D texture). Output in [-1, 1].
-float Hash31(float3 p)
-{
-    p = frac(p * 0.3183099 + 0.1);
-    p *= 17.0;
-    return frac(p.x * p.y * p.z * (p.x + p.y + p.z));
-}
-
+// Signed remap of the shared value noise, which is what the turbulence field expects.
 float ValueNoise(float3 x)
 {
-    float3 p = floor(x);
-    float3 f = frac(x);
-    f = f * f * (3.0 - 2.0 * f);
-
-    float n000 = Hash31(p + float3(0, 0, 0));
-    float n100 = Hash31(p + float3(1, 0, 0));
-    float n010 = Hash31(p + float3(0, 1, 0));
-    float n110 = Hash31(p + float3(1, 1, 0));
-    float n001 = Hash31(p + float3(0, 0, 1));
-    float n101 = Hash31(p + float3(1, 0, 1));
-    float n011 = Hash31(p + float3(0, 1, 1));
-    float n111 = Hash31(p + float3(1, 1, 1));
-
-    float nx00 = lerp(n000, n100, f.x);
-    float nx10 = lerp(n010, n110, f.x);
-    float nx01 = lerp(n001, n101, f.x);
-    float nx11 = lerp(n011, n111, f.x);
-
-    float nxy0 = lerp(nx00, nx10, f.y);
-    float nxy1 = lerp(nx01, nx11, f.y);
-
-    return lerp(nxy0, nxy1, f.z) * 2.0 - 1.0;
+    return ValueNoise3D(x) * 2.0 - 1.0;
 }
 
 // Pseudo-curl: sample noise at three offsets to build a divergence-free-ish field.

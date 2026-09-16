@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using System.Runtime.InteropServices;
 using System.Buffers;
 
 namespace LuminaSharp;
@@ -71,8 +72,8 @@ public readonly unsafe struct View<T1>
     {
         private const int N = 1;
         private readonly T1 W0;
-        private readonly uint[] Entities;
-        private readonly IntPtr[] Ptrs;
+        private readonly uint* Entities;
+        private readonly IntPtr* Ptrs;
         private IntPtr State;
         private int Count;
         private int Index;
@@ -80,8 +81,8 @@ public readonly unsafe struct View<T1>
         internal Enumerator(ulong World, IntPtr Token0, Exclude Filter)
         {
             W0 = ViewWrapper<T1>.New();
-            Entities = ArrayPool<uint>.Shared.Rent(ViewConst.ChunkSize);
-            Ptrs = ArrayPool<IntPtr>.Shared.Rent(ViewConst.ChunkSize * N);
+            Entities = (uint*)NativeMemory.Alloc(ViewConst.ChunkSize * sizeof(uint));
+            Ptrs = (IntPtr*)NativeMemory.Alloc((nuint)(ViewConst.ChunkSize * N) * (nuint)sizeof(IntPtr));
             State = ViewBegin(World, Token0, Filter);
             Count = 0;
             Index = -1;
@@ -109,11 +110,7 @@ public readonly unsafe struct View<T1>
                 return true;
             }
 
-            fixed (uint* E = Entities)
-            fixed (IntPtr* P = Ptrs)
-            {
-                Count = Native.ViewNextChunk(State, E, P, ViewConst.ChunkSize, N);
-            }
+            Count = Native.ViewNextChunk(State, Entities, Ptrs, ViewConst.ChunkSize, N);
             Index = 0;
             return Count > 0;
         }
@@ -125,8 +122,8 @@ public readonly unsafe struct View<T1>
                 Native.ViewEnd(State);
                 State = IntPtr.Zero;
             }
-            ArrayPool<uint>.Shared.Return(Entities);
-            ArrayPool<IntPtr>.Shared.Return(Ptrs);
+            NativeMemory.Free(Entities);
+            NativeMemory.Free(Ptrs);
         }
     }
 
@@ -204,8 +201,8 @@ public readonly unsafe struct View<T1, T2>
         private const int N = 2;
         private readonly T1 W0;
         private readonly T2 W1;
-        private readonly uint[] Entities;
-        private readonly IntPtr[] Ptrs;
+        private readonly uint* Entities;
+        private readonly IntPtr* Ptrs;
         private IntPtr State;
         private int Count;
         private int Index;
@@ -214,8 +211,8 @@ public readonly unsafe struct View<T1, T2>
         {
             W0 = ViewWrapper<T1>.New();
             W1 = ViewWrapper<T2>.New();
-            Entities = ArrayPool<uint>.Shared.Rent(ViewConst.ChunkSize);
-            Ptrs = ArrayPool<IntPtr>.Shared.Rent(ViewConst.ChunkSize * N);
+            Entities = (uint*)NativeMemory.Alloc(ViewConst.ChunkSize * sizeof(uint));
+            Ptrs = (IntPtr*)NativeMemory.Alloc((nuint)(ViewConst.ChunkSize * N) * (nuint)sizeof(IntPtr));
             State = ViewBegin(World, Token0, Token1, Filter);
             Count = 0;
             Index = -1;
@@ -244,11 +241,7 @@ public readonly unsafe struct View<T1, T2>
                 return true;
             }
 
-            fixed (uint* E = Entities)
-            fixed (IntPtr* P = Ptrs)
-            {
-                Count = Native.ViewNextChunk(State, E, P, ViewConst.ChunkSize, N);
-            }
+            Count = Native.ViewNextChunk(State, Entities, Ptrs, ViewConst.ChunkSize, N);
             Index = 0;
             return Count > 0;
         }
@@ -260,8 +253,8 @@ public readonly unsafe struct View<T1, T2>
                 Native.ViewEnd(State);
                 State = IntPtr.Zero;
             }
-            ArrayPool<uint>.Shared.Return(Entities);
-            ArrayPool<IntPtr>.Shared.Return(Ptrs);
+            NativeMemory.Free(Entities);
+            NativeMemory.Free(Ptrs);
         }
     }
 
@@ -345,8 +338,8 @@ public readonly unsafe struct View<T1, T2, T3>
         private readonly T1 W0;
         private readonly T2 W1;
         private readonly T3 W2;
-        private readonly uint[] Entities;
-        private readonly IntPtr[] Ptrs;
+        private readonly uint* Entities;
+        private readonly IntPtr* Ptrs;
         private IntPtr State;
         private int Count;
         private int Index;
@@ -356,8 +349,8 @@ public readonly unsafe struct View<T1, T2, T3>
             W0 = ViewWrapper<T1>.New();
             W1 = ViewWrapper<T2>.New();
             W2 = ViewWrapper<T3>.New();
-            Entities = ArrayPool<uint>.Shared.Rent(ViewConst.ChunkSize);
-            Ptrs = ArrayPool<IntPtr>.Shared.Rent(ViewConst.ChunkSize * N);
+            Entities = (uint*)NativeMemory.Alloc(ViewConst.ChunkSize * sizeof(uint));
+            Ptrs = (IntPtr*)NativeMemory.Alloc((nuint)(ViewConst.ChunkSize * N) * (nuint)sizeof(IntPtr));
             State = ViewBegin(World, Token0, Token1, Token2, Filter);
             Count = 0;
             Index = -1;
@@ -387,11 +380,7 @@ public readonly unsafe struct View<T1, T2, T3>
                 return true;
             }
 
-            fixed (uint* E = Entities)
-            fixed (IntPtr* P = Ptrs)
-            {
-                Count = Native.ViewNextChunk(State, E, P, ViewConst.ChunkSize, N);
-            }
+            Count = Native.ViewNextChunk(State, Entities, Ptrs, ViewConst.ChunkSize, N);
             Index = 0;
             return Count > 0;
         }
@@ -403,8 +392,8 @@ public readonly unsafe struct View<T1, T2, T3>
                 Native.ViewEnd(State);
                 State = IntPtr.Zero;
             }
-            ArrayPool<uint>.Shared.Return(Entities);
-            ArrayPool<IntPtr>.Shared.Return(Ptrs);
+            NativeMemory.Free(Entities);
+            NativeMemory.Free(Ptrs);
         }
     }
 
@@ -494,8 +483,8 @@ public readonly unsafe struct View<T1, T2, T3, T4>
         private readonly T2 W1;
         private readonly T3 W2;
         private readonly T4 W3;
-        private readonly uint[] Entities;
-        private readonly IntPtr[] Ptrs;
+        private readonly uint* Entities;
+        private readonly IntPtr* Ptrs;
         private IntPtr State;
         private int Count;
         private int Index;
@@ -506,8 +495,8 @@ public readonly unsafe struct View<T1, T2, T3, T4>
             W1 = ViewWrapper<T2>.New();
             W2 = ViewWrapper<T3>.New();
             W3 = ViewWrapper<T4>.New();
-            Entities = ArrayPool<uint>.Shared.Rent(ViewConst.ChunkSize);
-            Ptrs = ArrayPool<IntPtr>.Shared.Rent(ViewConst.ChunkSize * N);
+            Entities = (uint*)NativeMemory.Alloc(ViewConst.ChunkSize * sizeof(uint));
+            Ptrs = (IntPtr*)NativeMemory.Alloc((nuint)(ViewConst.ChunkSize * N) * (nuint)sizeof(IntPtr));
             State = ViewBegin(World, Token0, Token1, Token2, Token3, Filter);
             Count = 0;
             Index = -1;
@@ -538,11 +527,7 @@ public readonly unsafe struct View<T1, T2, T3, T4>
                 return true;
             }
 
-            fixed (uint* E = Entities)
-            fixed (IntPtr* P = Ptrs)
-            {
-                Count = Native.ViewNextChunk(State, E, P, ViewConst.ChunkSize, N);
-            }
+            Count = Native.ViewNextChunk(State, Entities, Ptrs, ViewConst.ChunkSize, N);
             Index = 0;
             return Count > 0;
         }
@@ -554,8 +539,8 @@ public readonly unsafe struct View<T1, T2, T3, T4>
                 Native.ViewEnd(State);
                 State = IntPtr.Zero;
             }
-            ArrayPool<uint>.Shared.Return(Entities);
-            ArrayPool<IntPtr>.Shared.Return(Ptrs);
+            NativeMemory.Free(Entities);
+            NativeMemory.Free(Ptrs);
         }
     }
 

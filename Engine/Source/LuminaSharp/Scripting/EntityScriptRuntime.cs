@@ -68,9 +68,6 @@ internal sealed class EntityScriptRuntime
     // Detaches every live script and drops the index, ahead of the collectible ALC unload.
     public void FreeAll()
     {
-        // Detach every managed delegate binding before this collectible generation unloads.
-        DelegateBindings.PurgeAll();
-
         // Snapshot, because an OnDetach that destroys a sibling mutates LiveHandles mid-iteration.
         foreach (GCHandle Handle in new List<GCHandle>(LiveHandles))
         {

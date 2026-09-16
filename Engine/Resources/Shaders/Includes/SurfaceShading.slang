@@ -344,16 +344,39 @@ float3 ShadowPenumbraDebug(float3 FragmentPos, float3 ViewPosition, float2 Scree
 
 #endif // !SHADING_COMPUTE
 
-// Terms that do not change across the light loop. BRDF weights are half (they tolerate fp16 and halve
-// loop register pressure); NdotV and A2 stay float -- A2 underflows fp16 at the roughness floor.
+// The roughness-dependent half of the specular lobe, rebuilt per light so each can raise the floor.
+struct FSpecLobe
+{
+    float A2;            // GGX alpha squared, float so low-roughness highlights don't underflow
+    float VisA;          // Smith height-correlated visibility, NdotL coefficient
+    float VisB;          // Smith height-correlated visibility, constant term
+};
+
+// Heitz 2014 joint approximation, its 1 / (4 NdotV NdotL) denominator already folded in.
+FSpecLobe MakeSpecLobe(float Roughness, float NdotV)
+{
+    const float Alpha = Roughness * Roughness;
+
+    // Expanding the denominator to 2 NdotV NdotL (1 - a) + a (NdotV + NdotL) leaves NdotL as its only variable.
+    FSpecLobe Lobe;
+    Lobe.A2   = Alpha * Alpha;
+    Lobe.VisA = 2.0 * NdotV * (1.0 - Alpha) + Alpha;
+    Lobe.VisB = Alpha * NdotV;
+    return Lobe;
+}
+
+float SpecVisibility(FSpecLobe Lobe, float NdotL)
+{
+    return 0.5 * rcp(NdotL * Lobe.VisA + Lobe.VisB);
+}
+
+// Terms that do not change across the light loop; BRDF weights are half to halve loop register pressure.
 struct FShadingContext
 {
     float3 N;
     float3 V;
     float  NdotV;        // max(dot(N,V), 1e-4)
-    float  A2;           // roughness^4 -- kept full precision so low-roughness highlights don't underflow
-    half   Kg;           // Smith-GGX k = (roughness+1)^2 / 8
-    half   Gv;           // Schlick-GGX view geometry term (loop-invariant half of Smith G)
+    float  Roughness;    // surface value, before any per-light floor
     half3  F0;
     half3  DiffuseBase;  // Albedo * (1 - Metallic) / PI
     half3  EnergyComp;   // multi-scatter compensation (Turquin 2019)
@@ -412,10 +435,19 @@ float EvaluateClearcoatLobe(float3 N, float3 V, float3 L, float ClearcoatRoughne
 // Thin-surface translucency (Barre-Brisebois and Bouchard, GDC 2011). Not a subsurface diffusion model,
 // it is the view-dependent forward-scatter lobe that makes a backlit leaf glow. Peaks when the eye looks
 // straight into the light through the surface, which is the only time real foliage does this.
-// The sun's shadow reaches the deferred lane only as the screen-space mask, which counts a leaf's own
-// front face as an occluder and would extinguish the very lobe it is meant to feed. This floors it.
-static const float kTransmissionShadowFloor = 0.25;
-float TransmissionShadow(float Shadow) { return lerp(kTransmissionShadowFloor, 1.0, saturate(Shadow)); }
+
+// Depth of foliage the sun can still push light through, past which the lobe is fully extinguished.
+static const float kFoliagePenetrationMeters = 0.5;
+
+// A binary shadow test cannot feed this lobe, since a leaf's own front face is its occluder.
+float SunTransmissionShadow(FLight Sun, float3 WorldPosition, bool bReceiveShadow)
+{
+    if (!bReceiveShadow)
+    {
+        return 1.0;
+    }
+    return 1.0 - saturate(SunOccluderDepthWS(Sun, WorldPosition) / kFoliagePenetrationMeters);
+}
 
 float3 EvaluateTransmission(FShadingContext S, float3 L, float3 Radiance, float3 Transmission, float Thickness)
 {
@@ -447,24 +479,23 @@ void EvaluateLightContributionSplit(FLight Light, FShadingContext S, float3 L, f
     float3 Radiance = ComputeLightRadiance(Light, L, Distance);
     float3 H        = normalize(S.V + L);
 
-    // NDF stays full precision: A2 is float and NdotH near 1.0 needs the mantissa.
-    float NdotH = max(dot(S.N, H), 0.0);
-    float Denom = NdotH * NdotH * (S.A2 - 1.0) + 1.0;
-    float NDF   = S.A2 / (PI * Denom * Denom);
+    // Rebuilt per light rather than cached, because branching on the floor cost 75 more instructions.
+    const FSpecLobe Lobe = MakeSpecLobe(max(S.Roughness, GetLightMinRoughness(Light)), S.NdotV);
 
-    // [0,1]-range BRDF weights in fp16: light geometry term, Fresnel, diffuse/spec tint.
-    half  NdotL = (half)NdotLf;
+    // NDF stays full precision, NdotH near 1.0 needs the mantissa.
+    float NdotH = max(dot(S.N, H), 0.0);
+    float Denom = NdotH * NdotH * (Lobe.A2 - 1.0) + 1.0;
+    float NDF   = Lobe.A2 / (PI * Denom * Denom);
+
+    // Fresnel and the diffuse/spec tint are [0,1], so fp16 covers them.
     half  HdotV = (half)max(dot(H, S.V), 0.0);
-    half  Gl    = NdotL / (NdotL * (half(1.0) - S.Kg) + S.Kg);
-    half  G     = S.Gv * Gl;
     half3 F     = FresnelSchlickHalf(HdotV, S.F0);
 
-    half3 SpecTint = G * F * S.EnergyComp;            // directional/color part of the specular lobe
+    half3 SpecTint = F * S.EnergyComp;                // color part of the specular lobe
     half3 Diffuse  = (half3(1.0) - F) * S.DiffuseBase;
 
-    // Recombine in float: NDF and the 1/(4 NdotV NdotL) term carry the HDR dynamic range.
-    float  SpecScale = NDF / (4.0 * S.NdotV * NdotLf);
-    float3 Spec      = float3(SpecTint) * SpecScale;
+    // Recombine in float; NDF and the visibility term carry the HDR dynamic range between them.
+    float3 Spec = float3(SpecTint) * (NDF * SpecVisibility(Lobe, NdotLf));
 
     OutDiffuse  = float3(Diffuse) * Radiance * NdotLf;
     OutSpecular = Spec * Radiance * NdotLf;
@@ -620,12 +651,7 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
     Ctx.N           = N;
     Ctx.V           = V;
     Ctx.NdotV       = max(NdotV_EC, 1e-4);
-    float RoughSq   = Roughness * Roughness;
-    Ctx.A2          = RoughSq * RoughSq;
-    float Kr        = Roughness + 1.0;
-    float KgF       = (Kr * Kr) * 0.125;
-    Ctx.Kg          = (half)KgF;
-    Ctx.Gv          = (half)(Ctx.NdotV / (Ctx.NdotV * (1.0 - KgF) + KgF));
+    Ctx.Roughness   = Roughness;
     Ctx.F0          = (half3)F0;
     Ctx.DiffuseBase = (half3)(Albedo * (1.0 - Metallic) * INV_PI);
     float3 EnergyComp = 1.0 + F0 * (1.0 / max(DFG_EC.x + DFG_EC.y, 1e-4) - 1.0);
@@ -661,14 +687,12 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
         float3 SunL    = normalize(Light.Direction.xyz);
         float  SunNdotL = dot(N, SunL);
 
-        // Backlit foliage, which the lit path below early-outs on. The flipped normal biases toward the face
-        // the light reaches; only the forward lane honours it, since the deferred one resolves from the mask.
+        // Backlit foliage, which the lit path below early-outs on. Both lanes now read the cascade depth.
         if (bFoliage && SunNdotL <= 0.0)
         {
-            const float BackShadow = ComputeShadowFactor(Light, WorldPosition, -N, ViewPosition, ScreenPos,
-                                                         bReceiveShadow) * G.SelfShadow;
+            const float BackShadow = SunTransmissionShadow(Light, WorldPosition, bReceiveShadow) * G.SelfShadow;
             Lo += EvaluateTransmission(Ctx, SunL, ComputeLightRadiance(Light, SunL, 0.0),
-                                       G.Transmission, G.Thickness) * TransmissionShadow(BackShadow);
+                                       G.Transmission, G.Thickness) * BackShadow;
         }
 
         if (SunNdotL > 0.0)
@@ -681,8 +705,9 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
             // A leaf lit from the front still passes some light forward at grazing view angles.
             if (bFoliage)
             {
+                const float FrontShadow = SunTransmissionShadow(Light, WorldPosition, bReceiveShadow) * G.SelfShadow;
                 Lo += EvaluateTransmission(Ctx, SunL, ComputeLightRadiance(Light, SunL, 0.0),
-                                           G.Transmission, G.Thickness) * TransmissionShadow(Shadow);
+                                           G.Transmission, G.Thickness) * FrontShadow;
             }
 #ifdef TRANSLUCENT
             float3 SunDiffuse, SunSpec;
@@ -854,7 +879,8 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
         // No environment: a SkyLight alone still lights the scene via a flat diffuse ambient fill
         // (color * intensity from the SkyLight), occluded by material AO and GTAO. Metals carry no diffuse.
         float3 DiffuseColor = Albedo * (1.0 - Metallic);
-        Ambient = GetAmbientLightColor() * GetAmbientLightIntensity() * DiffuseColor * AmbientAO;
+        Ambient = GetAmbientLightColor() * GetAmbientLightIntensity() * DiffuseColor
+                * AOMultiBounce(AmbientAO, DiffuseColor);
     }
     // The coat reflects the environment too -- most of the read on car paint. Same prefiltered cube at
     // the coat's roughness and fixed 0.04 F0, attenuating the ambient underneath for energy.

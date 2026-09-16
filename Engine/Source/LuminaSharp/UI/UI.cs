@@ -2,28 +2,6 @@ using System;
 
 namespace LuminaSharp;
 
-/// <summary>How a world's viewport routes raw input. Mirrors the engine <c>EInputMode</c>.</summary>
-public enum UIInputMode
-{
-    /// <summary>Input drives gameplay only; the UI does not receive mouse/keyboard.</summary>
-    Game = 0,
-    /// <summary>Input drives the UI only; gameplay input is gated off.</summary>
-    UI = 1,
-    /// <summary>Input drives both: the UI gets first refusal, the rest reaches gameplay.</summary>
-    GameAndUI = 2,
-}
-
-/// <summary>Cursor visibility/capture for a world's viewport. Mirrors the engine <c>EMouseMode</c>.</summary>
-public enum UICursorMode
-{
-    /// <summary>Cursor hidden but free to move.</summary>
-    Hidden = 0,
-    /// <summary>Cursor visible and free (use this for menus / pointer UI).</summary>
-    Normal = 1,
-    /// <summary>Cursor hidden and locked to the window (use this for mouselook gameplay).</summary>
-    Captured = 2,
-}
-
 /// <summary>
 /// A world's UI interface (<c>World.UI</c>): load and present screen-space RmlUi documents and route the
 /// cursor between gameplay and the UI. The C# mirror of the other gameplay facades; backed by the
@@ -41,6 +19,8 @@ public readonly unsafe partial struct UI
     }
 
     public bool IsValid => Handle != 0;
+
+    private Lumina.CWorld World => Wrapper<Lumina.CWorld>.ForObject((IntPtr)Handle)!;
 
     /// <summary>
     /// Loads the RML document at <paramref name="Path"/> (a virtual path, e.g.
@@ -70,25 +50,17 @@ public readonly unsafe partial struct UI
     /// </summary>
     public UIDataModel? GetModel(string Name) => UIDataModel.Find(Handle, Name);
 
-    /// <summary>Sets how this world's viewport routes input.</summary>
-    public void SetInputMode(UIInputMode Mode) => Native.UI_SetInputMode(Handle, (int)Mode);
-
-    /// <summary>Sets this world's cursor visibility/capture.</summary>
-    public void SetCursorMode(UICursorMode Mode) => Native.UI_SetMouseMode(Handle, (int)Mode);
-
-    /// <summary>Show a free cursor and let the UI receive clicks while gameplay still gets the rest
-    /// (<see cref="UIInputMode.GameAndUI"/> + <see cref="UICursorMode.Normal"/>). Call when a menu opens.</summary>
+    /// Shows a free cursor and lets the UI receive clicks while gameplay still gets the rest. Call when a menu opens.
     public void EnableCursor()
     {
-        SetInputMode(UIInputMode.GameAndUI);
-        SetCursorMode(UICursorMode.Normal);
+        Lumina.CInputLibrary.SetInputMode(World, Lumina.EInputMode.GameAndUI);
+        Lumina.CInputLibrary.SetMouseMode(World, Lumina.EMouseMode.Normal);
     }
 
-    /// <summary>Hide + capture the cursor for mouselook and route input back to gameplay
-    /// (<see cref="UIInputMode.Game"/> + <see cref="UICursorMode.Captured"/>). Call when a menu closes.</summary>
+    /// Hides and captures the cursor for mouselook and routes input back to gameplay. Call when a menu closes.
     public void DisableCursor()
     {
-        SetInputMode(UIInputMode.Game);
-        SetCursorMode(UICursorMode.Captured);
+        Lumina.CInputLibrary.SetInputMode(World, Lumina.EInputMode.Game);
+        Lumina.CInputLibrary.SetMouseMode(World, Lumina.EMouseMode.Captured);
     }
 }

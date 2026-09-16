@@ -840,3 +840,66 @@ TEST(NavMeshBuild, CallerCornerCapTruncatesRatherThanLies)
         EXPECT_TRUE(Capped.bPartial);
     }
 }
+
+TEST(NavMeshBuild, PathResultNamesWhichEndWasOffTheNavMesh)
+{
+    TUniquePtr<FNavMesh> Mesh = BakeAndHydrate(MakeGroundPlane());
+    ASSERT_NE(Mesh, nullptr);
+    ASSERT_TRUE(Mesh->IsReady());
+
+    const FVector3 OnMesh(-10.0f, 0.0f, -10.0f);
+    const FVector3 FarOff(1000.0f, 0.0f, 1000.0f);
+    FNavQueryFilter Filter;
+
+    FNavPath Good;
+    ASSERT_TRUE(Mesh->FindPath(OnMesh, FVector3(10.0f, 0.0f, 10.0f), Filter, Good));
+    EXPECT_EQ(Good.Result, ENavPathResult::Success);
+
+    FNavPath BadEnd;
+    EXPECT_FALSE(Mesh->FindPath(OnMesh, FarOff, Filter, BadEnd));
+    EXPECT_EQ(BadEnd.Result, ENavPathResult::EndOffNavMesh);
+
+    FNavPath BadStart;
+    EXPECT_FALSE(Mesh->FindPath(FarOff, OnMesh, Filter, BadStart));
+    EXPECT_EQ(BadStart.Result, ENavPathResult::StartOffNavMesh);
+}
+
+TEST(NavMeshBuild, PathResultReportsPartialForAnUnreachableGoal)
+{
+    TUniquePtr<FNavMesh> Mesh = BakeAndHydrate(MakeSeparatedIslands());
+    ASSERT_NE(Mesh, nullptr);
+    ASSERT_TRUE(Mesh->IsReady());
+
+    FNavQueryFilter Filter;
+    FNavPath Path;
+    Mesh->FindPath(FVector3(-6.0f, 0.0f, 0.0f), FVector3(6.0f, 0.0f, 0.0f), Filter, Path);
+
+    // Detour answers an unreachable goal with the closest poly it got to, not with nothing.
+    EXPECT_EQ(Path.Result, ENavPathResult::Partial);
+    EXPECT_TRUE(Path.bPartial);
+}
+
+TEST(NavMeshBuild, PathResultDefaultsToNotQueriedAndEveryReasonIsDistinct)
+{
+    const FNavPath Untouched;
+    EXPECT_EQ(Untouched.Result, ENavPathResult::NotQueried);
+
+    const ENavPathResult All[] = {
+        ENavPathResult::NotQueried,     ENavPathResult::Success,
+        ENavPathResult::NoNavMesh,      ENavPathResult::NavigationCompiledOut,
+        ENavPathResult::QueryUnavailable, ENavPathResult::StartOffNavMesh,
+        ENavPathResult::EndOffNavMesh,  ENavPathResult::NoRoute,
+        ENavPathResult::CornersUnavailable, ENavPathResult::Partial,
+        ENavPathResult::Truncated,
+    };
+
+    std::vector<std::string> Seen;
+    for (ENavPathResult Result : All)
+    {
+        const char* Reason = ToString(Result);
+        ASSERT_NE(Reason, nullptr);
+        EXPECT_GT(strlen(Reason), 0u);
+        EXPECT_EQ(std::find(Seen.begin(), Seen.end(), Reason), Seen.end()) << "duplicate reason: " << Reason;
+        Seen.emplace_back(Reason);
+    }
+}

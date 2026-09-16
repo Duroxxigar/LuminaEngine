@@ -260,6 +260,15 @@ namespace Lumina
             return ((uint64)SubIndex << 40) | ((uint64)(uint32)E << 8) | (uint64)T;
         }
 
+        // Catches geometry that changed under a bounding box that did not move.
+        FORCEINLINE uint64 MakeContentId(const void* Asset, size_t CountA, size_t CountB)
+        {
+            size_t Seed = (size_t)(uintptr_t)Asset;
+            Hash::HashCombine(Seed, CountA);
+            Hash::HashCombine(Seed, CountB);
+            return (uint64)Seed;
+        }
+
         // Retuning a link leaves its AABB identical, so the settings ride in the key to dirty the tile.
         FORCEINLINE uint32 PackLinkSubIndex(const SNavLinkComponent& Link)
         {
@@ -575,6 +584,9 @@ namespace Lumina
             FNavSourcePrim  Prim;
             FVector3        AABBMin = FVector3( FLT_MAX);
             FVector3        AABBMax = FVector3(-FLT_MAX);
+
+            // Identifies the geometry behind the AABB; a change dirties the tiles exactly like a move.
+            uint64          ContentId = 0;
         };
 
         void EmitNavSourcePrim(const FNavSourcePrim& P, const FVector3& BakeMin, const FVector3& BakeMax, FGatherAccumulator& Acc)
@@ -695,10 +707,13 @@ namespace Lumina
                 const FMatrix4 ColliderWorld = ColliderToWorld(ShapeAssetView.Get<STransformComponent>(E),
                                                                CSC.TranslationOffset, CSC.RotationOffset);
 
+                const uint64 AssetContentId = MakeContentId(Asset, Asset->TriangleIndices.size(), Asset->Primitives.size());
+
                 if (Asset->IsConcave())
                 {
                     FNavSourceEntry Entry;
                     Entry.Key = PackSourceKey(E, ENavColliderType::TriangleSoup);
+                    Entry.ContentId = AssetContentId;
                     Entry.Prim.Type = ENavColliderType::TriangleSoup;
                     Entry.Prim.World = ColliderWorld;
                     Entry.Prim.TriangleSoup = MakeShared<TVector<FVector3>>();
@@ -721,6 +736,7 @@ namespace Lumina
                     const SCollisionPrimitive& Primitive = Asset->Primitives[i];
 
                     FNavSourceEntry Entry;
+                    Entry.ContentId = AssetContentId;
                     Entry.Prim.World = ColliderWorld * Math::Translate(FMatrix4(1.0f), Primitive.Center)
                                                      * Math::ToMatrix4(FQuat(Math::Radians(Primitive.Rotation)));
 
@@ -809,6 +825,8 @@ namespace Lumina
                 Entry.Prim.Type = ENavColliderType::Mesh;
                 Entry.Prim.World = ColliderToWorld(MeshView.Get<STransformComponent>(E), MC.TranslationOffset, MC.RotationOffset);
                 Entry.Prim.Mesh = Mesh;
+                const FMeshletData& MeshletData = Mesh->GetMeshResource().MeshletData;
+                Entry.ContentId = MakeContentId(Mesh, MeshletData.MeshletVertices.size(), MeshletData.MeshletTriangles.size());
                 const FAABB& Local = Mesh->GetAABB();
                 const FVector3 Corners[8] = {
                     {Local.Min.x, Local.Min.y, Local.Min.z}, {Local.Max.x, Local.Min.y, Local.Min.z},
@@ -820,7 +838,7 @@ namespace Lumina
                 Out.push_back(std::move(Entry));
             }
 
-            // Keyed on the render-data version so a re-commit with unchanged bounds still dirties the tile.
+            // Fingerprinted on the render-data version so a re-commit with unchanged bounds still dirties the tile.
             auto DynamicMeshView = Context.CreateView<SDynamicMeshColliderComponent, SDynamicMeshComponent, STransformComponent>();
             for (ECS::FEntity E : DynamicMeshView)
             {
@@ -829,7 +847,8 @@ namespace Lumina
                 TSharedPtr<FDynamicMeshRenderData> MeshData = DM.LoadRenderData();
                 if (!MeshData || MeshData->Resource.MeshletData.IsEmpty()) continue;
                 FNavSourceEntry Entry;
-                Entry.Key = PackSourceKey(E, ENavColliderType::DynamicMesh, DM.LoadRenderDataVersion());
+                Entry.Key = PackSourceKey(E, ENavColliderType::DynamicMesh);
+                Entry.ContentId = DM.LoadRenderDataVersion();
                 Entry.Prim.Type = ENavColliderType::DynamicMesh;
                 Entry.Prim.World = DynamicMeshView.Get<STransformComponent>(E).GetWorldMatrix();
                 Entry.Prim.DynamicMesh = MeshData;
@@ -1040,6 +1059,7 @@ namespace Lumina
                 if (!Terrain || Terrain->Heightmap.empty()) continue;
                 FNavSourceEntry Entry;
                 Entry.Key = PackSourceKey(E, ENavColliderType::Terrain);
+                Entry.ContentId = Terrain->CPUState.HeightmapVersion;
                 Entry.Prim.Type = ENavColliderType::Terrain;
                 Entry.Prim.World = TerrainView.Get<STransformComponent>(E).GetWorldMatrix();
                 const float Half = Terrain->TileWorldSize * 0.5f;
@@ -1085,7 +1105,7 @@ namespace Lumina
             CollectNavSources(Context, BakeMin, BakeMax, false, 0.0f, Sources);
             for (const FNavSourceEntry& Entry : Sources)
             {
-                OutCache[Entry.Key] = FNavSourceEntity{ Entry.AABBMin, Entry.AABBMax };
+                OutCache[Entry.Key] = FNavSourceEntity{ Entry.AABBMin, Entry.AABBMax, Entry.ContentId };
             }
         }
 
@@ -1215,6 +1235,7 @@ namespace Lumina
                         NonEmptyTiles, (int32)Comp.Tiles.size(), Comp.Origin.x, Comp.Origin.y, Comp.Origin.z, Comp.TileWorldSize);
                     Comp.Runtime.bRuntimeDirty = true;
                     RebuildEntityAABBCache(Context, Comp.Center - Comp.GetWorldExtents(), Comp.Center + Comp.GetWorldExtents(), Comp.Runtime.EntityAABBs);
+                    Comp.Runtime.RestartBaseline();
                 }
             }
 
@@ -1313,6 +1334,7 @@ namespace Lumina
                 }, ETaskPriority::Background);
 
                 RebuildEntityAABBCache(Context, BakeMin, BakeMax, Comp.Runtime.EntityAABBs);
+                Comp.Runtime.RestartBaseline();
                 Comp.Runtime.DirtyTiles.clear();
             }
 
@@ -1410,70 +1432,134 @@ namespace Lumina
                     [](const TSharedPtr<FNavTileRebake>& J) { return !J || J->bConsumed.load(std::memory_order_acquire); }),
                 Comp.Runtime.PendingRebakes.end());
 
-            // Detect moved/added/removed source colliders and dirty their tiles.
-            THashMap<uint64, FNavSourceEntity> CurrentAABBs;
-            CurrentAABBs.reserve(Comp.Runtime.EntityAABBs.size());
+            // Held between scans so a long interval still measures real elapsed time.
+            Comp.Runtime.DynamicScanTimer = Comp.bDynamicRebuild
+                ? Comp.Runtime.DynamicScanTimer + (float)Context.GetDeltaTime()
+                : 0.0f;
 
-            auto MarkDirtyForAABB = [&](const FVector3& Mn, const FVector3& Mx)
+            // Tiles dirtied before the setting was turned off still rebake below.
+            if (Comp.bDynamicRebuild && Comp.Runtime.DynamicScanTimer >= Comp.DynamicRebuildInterval)
             {
-                int32 TX0, TY0, TX1, TY1;
-                TilesForAABB(Mn, Mx, Comp.Origin, Comp.TileWorldSize, Comp.TilesX, Comp.TilesY, TX0, TY0, TX1, TY1);
-                for (int32 ty = TY0; ty <= TY1; ++ty)
+                Comp.Runtime.DynamicScanTimer = 0.0f;
+
+                // Detect moved, reshaped, added and removed source geometry and dirty its tiles.
+                THashMap<uint64, FNavSourceEntity> CurrentAABBs;
+                CurrentAABBs.reserve(Comp.Runtime.EntityAABBs.size());
+
+                auto MarkDirtyForAABB = [&](const FVector3& Mn, const FVector3& Mx)
                 {
-                    for (int32 tx = TX0; tx <= TX1; ++tx)
+                    int32 TX0, TY0, TX1, TY1;
+                    TilesForAABB(Mn, Mx, Comp.Origin, Comp.TileWorldSize, Comp.TilesX, Comp.TilesY, TX0, TY0, TX1, TY1);
+                    for (int32 ty = TY0; ty <= TY1; ++ty)
                     {
-                        Comp.Runtime.DirtyTiles.insert(PackTileKey(tx, ty));
+                        for (int32 tx = TX0; tx <= TX1; ++tx)
+                        {
+                            Comp.Runtime.DirtyTiles.insert(PackTileKey(tx, ty));
+                        }
+                    }
+                };
+
+                int32 NewThisScan = 0;
+                auto VisitSource = [&](uint64 Key, const FVector3& Mn, const FVector3& Mx, uint64 ContentId)
+                {
+                    CurrentAABBs[Key] = FNavSourceEntity{ Mn, Mx, ContentId };
+                    auto It = Comp.Runtime.EntityAABBs.find(Key);
+                    const bool bNew   = It == Comp.Runtime.EntityAABBs.end();
+                    if (bNew)
+                    {
+                        ++NewThisScan;
+                        if (Comp.Runtime.bBaselineSettling)
+                        {
+                            return;
+                        }
+                    }
+                    const bool bMoved = !bNew && (!Math::IsNearlyEqual(It->second.AABBMin, Mn) || !Math::IsNearlyEqual(It->second.AABBMax, Mx));
+
+                    // A re-imported, swapped or sculpted mesh keeps its bounds, so the AABB test alone misses it.
+                    const bool bReshaped = !bNew && It->second.ContentId != ContentId;
+
+                    if (bNew || bMoved || bReshaped)
+                    {
+                        if (bMoved || bReshaped)
+                        {
+                            // Old footprint also dirtied so vacated tris get re-evaluated.
+                            MarkDirtyForAABB(It->second.AABBMin, It->second.AABBMax);
+                        }
+                        MarkDirtyForAABB(Mn, Mx);
+                    }
+                };
+
+                TVector<FNavSourceEntry> CurrentSources;
+                PlatformTime::FStopwatch DetectWatch;
+                CollectNavSources(Context, Comp.Center - Comp.GetWorldExtents(), Comp.Center + Comp.GetWorldExtents(), false, 0.0f, CurrentSources);
+                const double DetectGatherMs = DetectWatch.ElapsedMilliseconds();
+                const int32 DirtyBefore = (int32)Comp.Runtime.DirtyTiles.size();
+                for (const FNavSourceEntry& Src : CurrentSources)
+                {
+                    VisitSource(Src.Key, Src.AABBMin, Src.AABBMax, Src.ContentId);
+                }
+
+                // Removed colliders dirty their last-known tiles.
+                for (const auto& [Id, Snap] : Comp.Runtime.EntityAABBs)
+                {
+                    if (CurrentAABBs.find(Id) == CurrentAABBs.end())
+                    {
+                        MarkDirtyForAABB(Snap.AABBMin, Snap.AABBMax);
                     }
                 }
-            };
 
-            auto VisitSource = [&](uint64 Key, const FVector3& Mn, const FVector3& Mx)
-            {
-                CurrentAABBs[Key] = FNavSourceEntity{ Mn, Mx };
-                auto It = Comp.Runtime.EntityAABBs.find(Key);
-                const bool bNew   = It == Comp.Runtime.EntityAABBs.end();
-                const bool bMoved = !bNew && (!Math::IsNearlyEqual(It->second.AABBMin, Mn) || !Math::IsNearlyEqual(It->second.AABBMax, Mx));
-                if (bNew || bMoved)
+                if (CVarNavTimings.GetValue())
                 {
-                    if (bMoved)
+                    const int32 DirtyAfter = (int32)Comp.Runtime.DirtyTiles.size();
+
+                    // Logged on a steady state too, since "nothing dirtied" is the answer when a scan finds
+                    // no sources or the volume sits somewhere the geometry is not.
+                    static double LastIdleLogSeconds = 0.0;
+                    const double NowSeconds = Context.GetTime();
+                    const bool bQuiet = DirtyAfter == DirtyBefore && DetectGatherMs <= 1.0;
+                    if (!bQuiet || NowSeconds - LastIdleLogSeconds >= 2.0)
                     {
-                        // Old footprint also dirtied so vacated tris get re-evaluated.
-                        MarkDirtyForAABB(It->second.AABBMin, It->second.AABBMax);
+                        if (bQuiet)
+                        {
+                            LastIdleLogSeconds = NowSeconds;
+                        }
+                        const FVector3 WExt = Comp.GetWorldExtents();
+                        LOG_INFO("NavTiming detect [{}]: {} sources in {:.2f} ms, dirty {} -> {}, pending {}, "
+                                 "box=({:.1f},{:.1f},{:.1f})+/-({:.1f},{:.1f},{:.1f}), origin=({:.1f},{:.1f},{:.1f}), tracked {}.",
+                            Context.GetWorldType() == EWorldType::Editor ? "editor" : "play",
+                            (int32)CurrentSources.size(), DetectGatherMs, DirtyBefore, DirtyAfter,
+                            (int32)Comp.Runtime.PendingRebakes.size(),
+                            Comp.Center.x, Comp.Center.y, Comp.Center.z, WExt.x, WExt.y, WExt.z,
+                            Comp.Origin.x, Comp.Origin.y, Comp.Origin.z,
+                            (int32)Comp.Runtime.EntityAABBs.size());
                     }
-                    MarkDirtyForAABB(Mn, Mx);
                 }
-            };
 
-            TVector<FNavSourceEntry> CurrentSources;
-            PlatformTime::FStopwatch DetectWatch;
-            CollectNavSources(Context, Comp.Center - Comp.GetWorldExtents(), Comp.Center + Comp.GetWorldExtents(), false, 0.0f, CurrentSources);
-            const double DetectGatherMs = DetectWatch.ElapsedMilliseconds();
-            const int32 DirtyBefore = (int32)Comp.Runtime.DirtyTiles.size();
-            for (const FNavSourceEntry& Src : CurrentSources)
-            {
-                VisitSource(Src.Key, Src.AABBMin, Src.AABBMax);
-            }
-
-            // Removed colliders dirty their last-known tiles.
-            for (const auto& [Id, Snap] : Comp.Runtime.EntityAABBs)
-            {
-                if (CurrentAABBs.find(Id) == CurrentAABBs.end())
+                // Two running scans with nothing new means the world finished populating. Ending early only
+                // costs the storm this avoids, so the cheap rule is the safe one.
+                if (Comp.Runtime.bBaselineSettling)
                 {
-                    MarkDirtyForAABB(Snap.AABBMin, Snap.AABBMax);
-                }
-            }
+                    constexpr int32 QuietScansToSettle = 2;
+                    constexpr float MaxBaselineSeconds = 30.0f;
 
-            if (CVarNavTimings.GetValue())
-            {
-                const int32 DirtyAfter = (int32)Comp.Runtime.DirtyTiles.size();
-                if (DirtyAfter != DirtyBefore || DetectGatherMs > 1.0)
-                {
-                    LOG_INFO("NavTiming detect: {} sources in {:.2f} ms, dirty {} -> {}, pending rebakes {}.",
-                        (int32)CurrentSources.size(), DetectGatherMs, DirtyBefore, DirtyAfter, (int32)Comp.Runtime.PendingRebakes.size());
-                }
-            }
+                    Comp.Runtime.BaselineAge += (float)Context.GetDeltaTime();
+                    Comp.Runtime.BaselineQuietScans = NewThisScan == 0 ? Comp.Runtime.BaselineQuietScans + 1 : 0;
 
-            Comp.Runtime.EntityAABBs = std::move(CurrentAABBs);
+                    // Capped, or a world that never stops spawning would leave dynamic nav switched off.
+                    if (Comp.Runtime.BaselineQuietScans >= QuietScansToSettle
+                        || Comp.Runtime.BaselineAge >= MaxBaselineSeconds)
+                    {
+                        Comp.Runtime.bBaselineSettling = false;
+                        if (CVarNavTimings.GetValue())
+                        {
+                            LOG_INFO("NavTiming baseline settled at {} sources; changes from here dirty tiles.",
+                                (int32)CurrentAABBs.size());
+                        }
+                    }
+                }
+
+                Comp.Runtime.EntityAABBs = std::move(CurrentAABBs);
+            }
 
             // Cap concurrent rebake jobs; remaining dirty tiles wait for next tick.
             const uint32 MaxConcurrent = (uint32)Math::Max(1, NavSettings().MaxConcurrentTileRebakes);
@@ -1754,7 +1840,14 @@ namespace Lumina
         bool FindPath(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavPath& Out)
         {
             FNavMesh* Mesh = FirstReadyNavMesh(Context);
-            return Mesh && Mesh->FindPath(Start, End, Filter, Out);
+            if (!Mesh)
+            {
+                // Reset rather than leave a caller's reused path reading as its previous outcome.
+                Out = {};
+                Out.Result = ENavPathResult::NoNavMesh;
+                return false;
+            }
+            return Mesh->FindPath(Start, End, Filter, Out);
         }
 
         bool ProjectPoint(const FSystemContext& Context, const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out)
@@ -1816,9 +1909,15 @@ namespace Lumina
         bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, int32 MaxCorners, FNavPath& Out)
         {
             FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World);
+            if (!Mesh)
+            {
+                Out = {};
+                Out.Result = ENavPathResult::NoNavMesh;
+                return false;
+            }
             FNavQueryFilter Filter;
             Filter.MaxCorners = MaxCorners;
-            return Mesh && Mesh->FindPath(Start, End, Filter, Out);
+            return Mesh->FindPath(Start, End, Filter, Out);
         }
 
         bool ProjectPoint(CWorld* World, const FVector3& Point, const FVector3& Extents, FVector3& Out)

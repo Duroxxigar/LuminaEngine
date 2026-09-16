@@ -681,6 +681,7 @@ internal sealed class TypeDescription
     private static IReadOnlyList<ScriptFunction> ComputeFunctions(Type Type, TypeLibrary Library)
     {
         List<ScriptFunction>? Found = null;
+        HashSet<string>? Overloaded = OverloadedFunctionNames(Type);
 
         foreach (MethodInfo Method in Type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
         {
@@ -692,6 +693,11 @@ internal sealed class TypeDescription
             if (Method.IsGenericMethod)
             {
                 Debug.LogError($"[ScriptFunction] {Type.Name}.{Method.Name} is generic, which has no single call frame; it is not reflected.");
+                continue;
+            }
+
+            if (Overloaded != null && Overloaded.Contains(Method.Name))
+            {
                 continue;
             }
 
@@ -729,6 +735,35 @@ internal sealed class TypeDescription
         }
 
         return (IReadOnlyList<ScriptFunction>?)Found ?? Array.Empty<ScriptFunction>();
+    }
+
+    // Both sides key a reflected function by name, so an overload has nothing to tell it apart from its twin.
+    private static HashSet<string>? OverloadedFunctionNames(Type Type)
+    {
+        Dictionary<string, int> Declared = new(StringComparer.Ordinal);
+
+        foreach (MethodInfo Method in Type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+        {
+            if (Method.GetCustomAttribute<ScriptFunctionAttribute>() == null)
+            {
+                continue;
+            }
+
+            Declared.TryGetValue(Method.Name, out int Seen);
+            Declared[Method.Name] = Seen + 1;
+        }
+
+        HashSet<string>? Overloaded = null;
+        foreach (KeyValuePair<string, int> Pair in Declared)
+        {
+            if (Pair.Value > 1)
+            {
+                Debug.LogError($"[ScriptFunction] {Type.Name}.{Pair.Key} is declared {Pair.Value} times. A reflected function is looked up by name from native and from the dispatcher, so an overload cannot be told apart and none of them is reflected. Give each one its own name.");
+                (Overloaded ??= new HashSet<string>(StringComparer.Ordinal)).Add(Pair.Key);
+            }
+        }
+
+        return Overloaded;
     }
 
     // The [Property] members that are input bindings, gathered once per type so the per-frame poll is a

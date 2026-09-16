@@ -305,6 +305,7 @@ namespace Lumina
         if (!Q)
         {
             Out.bQueryUnavailable = true;
+            Out.Result = ENavPathResult::QueryUnavailable;
             return false;
         }
 
@@ -318,8 +319,16 @@ namespace Lumina
 
         dtPolyRef SRef = 0, ERef = 0;
         float SNear[3], ENear[3];
-        if (dtStatusFailed(Q.Get()->findNearestPoly(SP, Extents, &F, &SRef, SNear)) || SRef == 0) return false;
-        if (dtStatusFailed(Q.Get()->findNearestPoly(EP, Extents, &F, &ERef, ENear)) || ERef == 0) return false;
+        if (dtStatusFailed(Q.Get()->findNearestPoly(SP, Extents, &F, &SRef, SNear)) || SRef == 0)
+        {
+            Out.Result = ENavPathResult::StartOffNavMesh;
+            return false;
+        }
+        if (dtStatusFailed(Q.Get()->findNearestPoly(EP, Extents, &F, &ERef, ENear)) || ERef == 0)
+        {
+            Out.Result = ENavPathResult::EndOffNavMesh;
+            return false;
+        }
 
         // Both buffers live on a half-megabyte fiber stack, so the corridor can afford to be generous.
         // The settings are clamped to these ceilings rather than sized dynamically, keeping the query heap free.
@@ -331,7 +340,11 @@ namespace Lumina
         dtPolyRef Path[MaxPolysCeiling];
         int32 PathLen = 0;
         const dtStatus PathStatus = Q.Get()->findPath(SRef, ERef, SNear, ENear, &F, Path, &PathLen, MaxPolys);
-        if (dtStatusFailed(PathStatus) || PathLen == 0) return false;
+        if (dtStatusFailed(PathStatus) || PathLen == 0)
+        {
+            Out.Result = ENavPathResult::NoRoute;
+            return false;
+        }
 
         // A corridor not ending on the goal poly stopped short, or the caller reads the last corner as the goal.
         Out.bPartial   = (PathStatus & DT_PARTIAL_RESULT) != 0 || Path[PathLen - 1] != ERef;
@@ -347,6 +360,7 @@ namespace Lumina
         const dtStatus StraightStatus = Q.Get()->findStraightPath(SNear, ENear, Path, PathLen, StraightPath, StraightFlags, StraightRefs, &StraightCount, MaxStraight);
         if (dtStatusFailed(StraightStatus))
         {
+            Out.Result = ENavPathResult::CornersUnavailable;
             return false;
         }
         // Detour reports a filled corner buffer as success, so the straight path silently ends mid-corridor.
@@ -369,9 +383,15 @@ namespace Lumina
             Out.CornerFlags.push_back(Flags);
         }
         Out.bValid = true;
+
+        // Truncated outranks partial, since a limit cut the route rather than the goal being unreachable.
+        Out.Result = Out.bTruncated ? ENavPathResult::Truncated
+                   : Out.bPartial   ? ENavPathResult::Partial
+                                    : ENavPathResult::Success;
         return true;
 #else
         (void)Start; (void)End; (void)Filter;
+        Out.Result = ENavPathResult::NavigationCompiledOut;
         return false;
 #endif
     }

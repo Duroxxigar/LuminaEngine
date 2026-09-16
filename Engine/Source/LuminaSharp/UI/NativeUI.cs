@@ -60,6 +60,4 @@ public static unsafe partial class Native
     [NativeCall] public static partial void   UI_ModelListDirty(IntPtr Model, int ListField);
 
     // Cursor + input routing for this world's viewport.
-    [NativeCall] public static partial void   UI_SetInputMode(ulong World, int Mode);
-    [NativeCall] public static partial void   UI_SetMouseMode(ulong World, int Mode);
 }

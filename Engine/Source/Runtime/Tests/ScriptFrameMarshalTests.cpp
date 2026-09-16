@@ -1,9 +1,11 @@
-#include <gtest/gtest.h>
+﻿#include <gtest/gtest.h>
 
 #include "Containers/Name.h"
 #include "Core/Math/Math.h"
 #include "Core/Object/Cast.h"
 #include "Core/Object/Class.h"
+#include "Core/Object/ObjectArray.h"
+#include "Core/Object/ObjectHandleTyped.h"
 #include "Core/Object/ObjectBase.h"
 #include "Core/Object/ObjectCore.h"
 #include "Core/Object/ScriptClass.h"
@@ -16,6 +18,7 @@
 #include "Core/Reflection/Type/Properties/OptionalProperty.h"
 #include "Paths/Paths.h"
 #include "Scripting/DotNet/DotNetHost.h"
+#include "Scripting/ScriptCallback.h"
 #include "Scripting/ScriptFunctionMint.h"
 #include "Scripting/ScriptStruct.h"
 #include "Scripting/ScriptableObject.h"
@@ -42,6 +45,16 @@ namespace
     using FAppendVectorFn  = int32(*)(void*, const void*, float);
     using FBindMapFn       = int32(*)(const void*);
     using FResolveKindFn   = int32(*)(int32*);
+    using FDescribedFn     = int32(*)(uint8*);
+    using FVecIntsFn       = int32(*)(int32, int32*, int32*, int32*);
+    using FVecEntitiesFn   = int32(*)(int32, uint32*);
+    using FVecStructsFn    = int32(*)(int32, float*);
+    using FBindCallbackFn  = uint64(*)();
+    using FCallbackResFn   = uint64(*)(int32*);
+    using FBindWrapperFn   = void*(*)(void*);
+    using FProbeWrapperFn  = int32(*)(void*, int32*);
+    using FFreeWrapperFn   = void(*)(void*);
+    using FHasInvokerFn    = int32(*)(int32);
 
     Scripting::FScriptExportField ParamField(const char* Name, EPropertyTypeFlags Kind, EPropertyFlags Direction)
     {
@@ -307,6 +320,19 @@ TEST_F(FFrameMarshalTest, ASlotTooNarrowForItsMirrorIsRefused)
     ASSERT_NE(Function, nullptr);
 
     EXPECT_EQ(Bind(Function->GetParams()[0]), 0) << "a 4-byte slot accepted a 12-byte mirror";
+}
+
+// Both sides look a reflected function up by name, so an overload is refused where it is declared.
+TEST_F(FFrameMarshalTest, AnOverloadedScriptFunctionIsRefusedWhereItIsDeclared)
+{
+    auto* Described = (FDescribedFn)DotNet::ResolveManagedExport("Test_DescribedFunctionCount");
+    ASSERT_NE(Described, nullptr);
+
+    uint8 bAmbiguousDescribed = 1;
+    const int32 Count = Described(&bAmbiguousDescribed);
+
+    EXPECT_EQ(bAmbiguousDescribed, 0) << "an overloaded name was described and would mint twice";
+    EXPECT_EQ(Count, 1) << "the distinctly named function should still be described";
 }
 
 TEST_F(FFrameMarshalTest, AParameterCarriesItsDirectionOntoTheMintedProperty)
@@ -788,6 +814,277 @@ TEST_F(FFrameMarshalTest, AScriptMintedOptionalRoundTripsThroughTheDispatcher)
         EXPECT_FALSE(Return->HasValue(Return->GetValuePtr<void>(Frame.GetMemory())))
             << "a null return has to reset the script optional";
     }
+
+    FreeTarget(Target);
+}
+
+// The out container binding replaces a hand-written two-pass buffer export, so what it hands back has to be
+// the whole vector, whatever its element.
+TEST_F(FFrameMarshalTest, AReflectedOutContainerCrossesAsAnArray)
+{
+    auto* Ints = (FVecIntsFn)DotNet::ResolveManagedExport("Test_VectorBindingInts");
+    ASSERT_NE(Ints, nullptr);
+
+    int32 First = -1;
+    int32 Last = -1;
+    int32 Calls = 0;
+    EXPECT_EQ(Ints(8, &First, &Last, &Calls), 8);
+    EXPECT_EQ(First, 0);
+    EXPECT_EQ(Last, 7);
+    EXPECT_EQ(Calls, 1) << "a result that fits the scratch buffer should cost one crossing";
+
+    EXPECT_EQ(Ints(0, &First, &Last, &Calls), 0) << "an empty container is an empty array, not a null one";
+}
+
+// Past the stack scratch the binding sizes an exact buffer and refills it, which is the only path that
+// calls the bound function twice.
+TEST_F(FFrameMarshalTest, AnOutContainerLargerThanTheScratchBufferStillArrivesWhole)
+{
+    auto* Ints = (FVecIntsFn)DotNet::ResolveManagedExport("Test_VectorBindingInts");
+    ASSERT_NE(Ints, nullptr);
+
+    // The scratch holds 1024 bytes, so this overflows it for a 4-byte element.
+    const int32 Count = 900;
+    int32 First = -1;
+    int32 Last = -1;
+    int32 Calls = 0;
+    EXPECT_EQ(Ints(Count, &First, &Last, &Calls), Count);
+    EXPECT_EQ(First, 0);
+    EXPECT_EQ(Last, Count - 1);
+    EXPECT_EQ(Calls, 2) << "an overflow refills an exact buffer, so the query runs a second time";
+}
+
+TEST_F(FFrameMarshalTest, AnOutContainerOfEntitiesKeepsItsPackedIds)
+{
+    auto* Entities = (FVecEntitiesFn)DotNet::ResolveManagedExport("Test_VectorBindingEntities");
+    ASSERT_NE(Entities, nullptr);
+
+    uint32 Last = 0;
+    EXPECT_EQ(Entities(5, &Last), 5);
+    EXPECT_EQ(Last, (uint32)ECS::FEntity::FromPacked(4));
+}
+
+// The element stride is the native struct's, not the managed handle's, so a wide element has to survive.
+TEST_F(FFrameMarshalTest, AnOutContainerOfBlittableStructsKeepsItsStride)
+{
+    auto* Structs = (FVecStructsFn)DotNet::ResolveManagedExport("Test_VectorBindingStructs");
+    ASSERT_NE(Structs, nullptr);
+
+    float LastY = 0.0f;
+    EXPECT_EQ(Structs(6, &LastY), 6);
+    EXPECT_FLOAT_EQ(LastY, 10.0f);
+}
+
+// A script callback crosses as the handle owning its closure, so firing it has to run that closure once and
+// leave the handle freed rather than dangling.
+TEST_F(FFrameMarshalTest, AScriptCallbackRunsOnceAndReleasesItsHandle)
+{
+    auto* Bind = (FBindCallbackFn)DotNet::ResolveManagedExport("Test_BindScriptCallback");
+    auto* Result = (FCallbackResFn)DotNet::ResolveManagedExport("Test_ScriptCallbackResult");
+    ASSERT_NE(Bind, nullptr);
+    ASSERT_NE(Result, nullptr);
+
+    FScriptCallback Callback;
+    Callback.Token = Bind();
+    ASSERT_TRUE(Callback.IsBound());
+
+    int32 Runs = -1;
+    EXPECT_EQ(Result(&Runs), 0xFFFFFFFFULL);
+    EXPECT_EQ(Runs, 0) << "binding a callback must not run it";
+
+    Scripting::InvokeScriptCallback(Callback, 4242);
+    EXPECT_EQ(Result(&Runs), 4242ULL);
+    EXPECT_EQ(Runs, 1);
+
+    // The handle is freed by the first run, so a second call finds nothing and must not run the closure again.
+    Scripting::InvokeScriptCallback(Callback, 99);
+    EXPECT_EQ(Result(&Runs), 4242ULL);
+    EXPECT_EQ(Runs, 1) << "a one-shot callback ran twice";
+}
+
+// A repeating callback is what a looping timer and a tween value step need, so firing it must leave the
+// handle alive and only the explicit release may free it.
+TEST_F(FFrameMarshalTest, ARepeatingScriptCallbackSurvivesEveryFireUntilReleased)
+{
+    auto* Bind = (FBindCallbackFn)DotNet::ResolveManagedExport("Test_BindRepeatingScriptCallback");
+    auto* Result = (FCallbackResFn)DotNet::ResolveManagedExport("Test_ScriptCallbackResult");
+    ASSERT_NE(Bind, nullptr);
+    ASSERT_NE(Result, nullptr);
+
+    FScriptCallback Callback;
+    Callback.Token = Bind();
+    ASSERT_TRUE(Callback.IsBound());
+
+    int32 Runs = -1;
+    for (int32 i = 1; i <= 3; ++i)
+    {
+        Scripting::InvokeScriptCallbackRepeating(Callback, Scripting::PackFloatPayload(0.25f * (float)i));
+        EXPECT_EQ(Result(&Runs), (uint64)(int64)(250 * i)) << "float payload did not survive the crossing";
+        EXPECT_EQ(Runs, i) << "a repeating callback stopped firing";
+    }
+
+    // Releasing is the only thing that frees it, so a fire afterwards must find nothing to run.
+    Scripting::ReleaseScriptCallback(Callback);
+    Scripting::InvokeScriptCallbackRepeating(Callback, Scripting::PackFloatPayload(9.0f));
+    EXPECT_EQ(Runs, 3) << "a released callback ran again";
+}
+
+// The owner is what a tween or timer captures, so dropping it has to be the release.
+TEST_F(FFrameMarshalTest, AScriptCallbackOwnerReleasesWhenTheThingHoldingItDies)
+{
+    auto* Bind = (FBindCallbackFn)DotNet::ResolveManagedExport("Test_BindRepeatingScriptCallback");
+    auto* Result = (FCallbackResFn)DotNet::ResolveManagedExport("Test_ScriptCallbackResult");
+    ASSERT_NE(Bind, nullptr);
+    ASSERT_NE(Result, nullptr);
+
+    FScriptCallback Callback;
+    Callback.Token = Bind();
+    ASSERT_TRUE(Callback.IsBound());
+
+    int32 Runs = -1;
+    {
+        const FScriptCallbackOwner Owner(Callback);
+        Owner.Invoke(Scripting::PackFloatPayload(1.0f));
+        EXPECT_EQ(Result(&Runs), 1000ULL);
+        EXPECT_EQ(Runs, 1);
+    }
+
+    Scripting::InvokeScriptCallbackRepeating(Callback, Scripting::PackFloatPayload(2.0f));
+    EXPECT_EQ(Runs, 1) << "the owner going out of scope did not release the handle";
+}
+
+TEST_F(FFrameMarshalTest, AnUnboundScriptCallbackIsSafeToInvoke)
+{
+    FScriptCallback Unbound;
+    EXPECT_FALSE(Unbound.IsBound());
+    Scripting::InvokeScriptCallback(Unbound, 7);
+}
+
+// The managed wrapper revalidates a CObject by reading its array entry rather than crossing back, so the
+// case that matters is that a dead object still fails loudly instead of handing back reclaimed memory.
+TEST_F(FFrameMarshalTest, AWrapperToADestroyedObjectStillThrows)
+{
+    auto* Bind = (FBindWrapperFn)DotNet::ResolveManagedExport("Test_BindObjectWrapper");
+    auto* Probe = (FProbeWrapperFn)DotNet::ResolveManagedExport("Test_ProbeObjectWrapper");
+    auto* Free = (FFreeWrapperFn)DotNet::ResolveManagedExport("Test_FreeObjectWrapper");
+    ASSERT_NE(Bind, nullptr);
+    ASSERT_NE(Probe, nullptr);
+    ASSERT_NE(Free, nullptr);
+
+    CObject* Doomed = NewObject(CEntityScriptTest::StaticClass(), nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ASSERT_NE(Doomed, nullptr);
+
+    // A strong reference, so the release below is the one that actually frees it.
+    TObjectPtr<CObject> Owner(Doomed);
+    void* Wrapper = Bind(Doomed);
+    ASSERT_NE(Wrapper, nullptr);
+
+    int32 bValid = 0;
+    EXPECT_EQ(Probe(Wrapper, &bValid), 1) << "a live object must read through the fast path";
+    EXPECT_EQ(bValid, 1);
+
+    GObjectArray.ReleaseStrongRef(Doomed);
+    ASSERT_EQ(Owner.Get(), nullptr) << "the object under test was not actually freed";
+
+    EXPECT_EQ(Probe(Wrapper, &bValid), -1) << "a destroyed object must throw, not hand back freed memory";
+    EXPECT_EQ(bValid, 0) << "IsValid must agree with the handle read";
+
+    Free(Wrapper);
+}
+
+// The generated invoker is an optimization over a path that still works without it, so the only way to know
+// it is carrying the call is to ask whether one exists for a signature it should cover and one it should not.
+TEST_F(FFrameMarshalTest, AGeneratedInvokerCoversABlittableSignatureAndDeclinesTheRest)
+{
+    auto* Has = (FHasInvokerFn)DotNet::ResolveManagedExport("Test_HasGeneratedInvoker");
+    ASSERT_NE(Has, nullptr);
+
+    EXPECT_EQ(Has(0), 1) << "an (int, out int) signature is exactly what the generator is for";
+    EXPECT_EQ(Has(1), 1) << "a ref parameter writes back through the same generated path";
+    EXPECT_EQ(Has(2), 0) << "a container view is not a blittable slot, so reflection has to keep it";
+}
+
+// Dispatch answers a repeat call off a direct-mapped line rather than hashing, and a line holds one entry.
+// Alternating two functions makes every call miss the line the previous one just filled, which is the case
+// that would silently run the wrong method if the line's identity check were ever wrong.
+TEST_F(FFrameMarshalTest, AlternatingTwoFunctionsKeepsEachBoundToItsOwnMethod)
+{
+    auto* MakeTarget = (FMakeTargetFn)DotNet::ResolveManagedExport("Test_MakeMarshalTarget");
+    auto* FreeTarget = (FFreeTargetFn)DotNet::ResolveManagedExport("Test_FreeMarshalTarget");
+    auto* Invoke     = (FInvokeFn)DotNet::ResolveManagedExport("InvokeScriptFunction");
+    ASSERT_NE(MakeTarget, nullptr);
+    ASSERT_NE(Invoke, nullptr);
+
+    Scripting::FScriptExportSchema OutParams;
+    OutParams.Fields.push_back(ParamField("In", EPropertyTypeFlags::Int32, EPropertyFlags::None));
+    OutParams.Fields.push_back(ParamField("Out", EPropertyTypeFlags::Int32, EPropertyFlags::OutParam));
+    FFunction* OutFunction = MintFrame("FrameMarshal_AltOut", OutParams, "MarshalOut");
+    ASSERT_NE(OutFunction, nullptr);
+
+    Scripting::FScriptExportSchema RefParams;
+    RefParams.Fields.push_back(ParamField("Value", EPropertyTypeFlags::Int32,
+        EPropertyFlags::OutParam | EPropertyFlags::RefParam));
+    FFunction* RefFunction = MintFrame("FrameMarshal_AltRef", RefParams, "MarshalRef");
+    ASSERT_NE(RefFunction, nullptr);
+
+    void* Target = MakeTarget();
+    ASSERT_NE(Target, nullptr);
+
+    for (int32 Round = 0; Round < 4; ++Round)
+    {
+        FFunctionFrame OutFrame(*OutFunction);
+        OutFrame.At<int32>(0) = Round;
+        OutFrame.At<int32>(1) = 0;
+        Invoke(Target, OutFunction, OutFrame.GetMemory());
+        EXPECT_EQ(OutFrame.At<int32>(1), Round * 2) << "MarshalOut was not the method that ran on round " << Round;
+
+        FFunctionFrame RefFrame(*RefFunction);
+        RefFrame.At<int32>(0) = Round;
+        Invoke(Target, RefFunction, RefFrame.GetMemory());
+        EXPECT_EQ(RefFrame.At<int32>(0), Round + 5) << "MarshalRef was not the method that ran on round " << Round;
+    }
+
+    FreeTarget(Target);
+}
+
+// Once the binder has published, native dispatch stops routing through the managed dispatcher and calls the
+// generated entry point itself, so what matters is that publishing happens and the direct call agrees.
+TEST_F(FFrameMarshalTest, ADispatchedFunctionPublishesAnInvokerNativeCanCallDirectly)
+{
+    auto* MakeTarget = (FMakeTargetFn)DotNet::ResolveManagedExport("Test_MakeMarshalTarget");
+    auto* FreeTarget = (FFreeTargetFn)DotNet::ResolveManagedExport("Test_FreeMarshalTarget");
+    auto* Invoke     = (FInvokeFn)DotNet::ResolveManagedExport("InvokeScriptFunction");
+    ASSERT_NE(MakeTarget, nullptr);
+    ASSERT_NE(Invoke, nullptr);
+
+    Scripting::FScriptExportSchema Params;
+    Params.Fields.push_back(ParamField("In", EPropertyTypeFlags::Int32, EPropertyFlags::None));
+    Params.Fields.push_back(ParamField("Out", EPropertyTypeFlags::Int32, EPropertyFlags::OutParam));
+
+    FFunction* Function = MintFrame("FrameMarshal_Published", Params, "MarshalOut");
+    ASSERT_NE(Function, nullptr);
+    EXPECT_EQ(Function->GetManagedInvoker(), nullptr) << "nothing should be published before the first call";
+
+    void* Target = MakeTarget();
+    ASSERT_NE(Target, nullptr);
+
+    {
+        FFunctionFrame Frame(*Function);
+        Frame.At<int32>(0) = 21;
+        Invoke(Target, Function, Frame.GetMemory());
+        EXPECT_EQ(Frame.At<int32>(1), 42);
+    }
+
+    void* Published = Function->GetManagedInvoker();
+    ASSERT_NE(Published, nullptr) << "the first dispatch should have published the generated entry point";
+    ASSERT_NE(Function->GetManagedOffsets(), nullptr);
+
+    // The same call the native thunk now makes, which has to produce the same answer as going through managed.
+    using FDirect = void (*)(void*, void*, const int32*);
+    FFunctionFrame Direct(*Function);
+    Direct.At<int32>(0) = 50;
+    reinterpret_cast<FDirect>(Published)(Target, Direct.GetMemory(), Function->GetManagedOffsets());
+    EXPECT_EQ(Direct.At<int32>(1), 100) << "the direct call disagreed with the dispatcher";
 
     FreeTarget(Target);
 }

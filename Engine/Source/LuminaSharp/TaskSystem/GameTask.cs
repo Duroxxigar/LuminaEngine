@@ -1,6 +1,8 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+
+using Lumina;
 
 namespace LuminaSharp;
 
@@ -23,13 +25,13 @@ public static class GameTask
         }
         Lumina.CWorld World = Game.World;
         Entity Self = Game.CurrentEntity;
-        World.Timers.Delay(Seconds, () =>
+        CTimerLibrary.SetTimer(World, Seconds, ScriptCallback.OfRepeating(() =>
         {
             using (Game.Push(World, Self))
             {
                 Source.TrySetResult();
             }
-        });
+        }));
         if (Token.CanBeCanceled)
         {
             Token.Register(() => Source.TrySetCanceled());

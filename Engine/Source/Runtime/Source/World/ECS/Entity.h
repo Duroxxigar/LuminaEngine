@@ -66,7 +66,7 @@ namespace Lumina::ECS
 
     // Serializes as the packed handle. Templated so this header needs no archive dependency.
     template<typename TArchive>
-        requires requires (TArchive& Ar, uint32& Value) { Ar << Value; }
+    requires requires (TArchive& Ar, uint32& Value) { Ar << Value; }
     TArchive& operator << (TArchive& Ar, FEntity& Entity)
     {
         return Ar << Entity.Value;

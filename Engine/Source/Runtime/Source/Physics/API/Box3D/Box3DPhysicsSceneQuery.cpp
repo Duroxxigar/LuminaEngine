@@ -69,6 +69,7 @@ namespace Lumina::Physics
             Result.Fraction = Fraction;
             Result.Distance = Fraction * Length;
             Result.BoneIndex = Scene.ResolveHitBoneIndex(Entity, BodyId);
+            Result.bHit = true;
         }
 
         float ClosestCastCallback(b3ShapeId ShapeId, b3Pos Point, b3Vec3 Normal, float Fraction,

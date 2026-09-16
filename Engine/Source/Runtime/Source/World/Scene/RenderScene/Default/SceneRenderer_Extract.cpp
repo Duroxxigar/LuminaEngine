@@ -1793,7 +1793,8 @@ namespace Lumina
             FrozenCull.CascadeShadowViewProjection[c] = Sun.ViewProjection[c];
         }
 
-        FrozenCull.CascadeRadii = Frame.Lighting.LightData.CascadeRadii;
+        FrozenCull.CascadeRadii        = Frame.Lighting.LightData.CascadeRadii;
+        FrozenCull.CascadeDepthRanges  = Frame.Lighting.LightData.CascadeDepthRanges;
         return true;
     }
 
@@ -1812,7 +1813,8 @@ namespace Lumina
             Sun.ViewProjection[c] = FrozenCull.CascadeShadowViewProjection[c];
         }
 
-        Frame.Lighting.LightData.CascadeRadii = FrozenCull.CascadeRadii;
+        Frame.Lighting.LightData.CascadeRadii       = FrozenCull.CascadeRadii;
+        Frame.Lighting.LightData.CascadeDepthRanges = FrozenCull.CascadeDepthRanges;
     }
 
     // Retracted here, because a resize discarding the pyramid is only known after the render thread rebuilds.
@@ -2604,6 +2606,7 @@ namespace Lumina
             Light.VolumetricIntensity = PointLight.VolumetricIntensity;
             Light.VolumetricScatteringRadius = PointLight.VolumetricScatteringRadius;
         }
+        Light.Flags = PackLightMinRoughness(Light.Flags, PointLight.MinRoughness);
 
         if (PointLight.bCastShadows && ShouldRequestShadow(Light.Position, Light.Radius))
         {
@@ -2678,6 +2681,7 @@ namespace Lumina
             Light.VolumetricIntensity = SpotLight.VolumetricIntensity;
             Light.VolumetricScatteringRadius = SpotLight.VolumetricScatteringRadius;
         }
+        Light.Flags = PackLightMinRoughness(Light.Flags, SpotLight.MinRoughness);
 
         if (SpotLight.bCastShadows && ShouldRequestShadow(Light.Position, Light.Radius))
         {
@@ -3340,7 +3344,8 @@ namespace Lumina
                 CascadeTile._Padding        = 0;
             }
 
-            LightData.CascadeRadii[i] = Radius;
+            LightData.CascadeRadii[i]       = Radius;
+            LightData.CascadeDepthRanges[i] = OrthoRange;
 
             {
                 const float PrevBandNear = (i >= 2) ? CascadeFarDistances[i - 2] : 0.0f;

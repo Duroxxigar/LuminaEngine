@@ -1,4 +1,5 @@
 ﻿#include "RuntimePCH.h"
+#include "Scripting/ScriptFunctionMint.h"
 
 #include "DotNetExport.h"
 #include "Containers/Name.h"
@@ -298,6 +299,21 @@ LUMINA_DOTNET_EXPORT(const void*, FunctionParamAt)(const void* Function, int32 I
 LUMINA_DOTNET_EXPORT(const void*, FunctionReturnParam)(const void* Function)
 {
     return Function ? static_cast<const FFunction*>(Function)->GetReturnParam() : nullptr;
+}
+
+// Publishing is a cache fill on the function, so dispatch stops routing through the shared dispatcher.
+LUMINA_DOTNET_EXPORT(void, FunctionPublishInvoker)(const void* Function, void* Invoker, const void* Offsets)
+{
+    if (Function != nullptr)
+    {
+        Lumina::Scripting::PublishManagedInvoker(*static_cast<const Lumina::FFunction*>(Function), Invoker,
+            static_cast<const Lumina::int32*>(Offsets));
+    }
+}
+
+LUMINA_DOTNET_EXPORT(void, FunctionClearInvokers)()
+{
+    Lumina::Scripting::ClearManagedInvokers();
 }
 
 LUMINA_DOTNET_EXPORT(int32, FunctionGetName)(const void* Function, char* Buf, int Cap)

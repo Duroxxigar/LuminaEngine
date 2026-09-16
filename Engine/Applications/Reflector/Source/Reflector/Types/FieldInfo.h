@@ -17,5 +17,7 @@ namespace Lumina
         std::string                       Name;
         std::string                       TypeName;
         std::string                       RawFieldType;
+        // A function argument's C++ default expression, verbatim, empty when it has none.
+        std::string                       DefaultValue;
     };
 }

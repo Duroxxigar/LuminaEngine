@@ -1,8 +1,7 @@
-#pragma once
+﻿#pragma once
 
 #include "World/ECS/Registry.h"
 #include "World/ECS/EventDispatcher.h"
-
 
 #include "Containers/BoundedQueue.h"
 #include "Core/Object/Object.h"
@@ -21,10 +20,10 @@
 #include "Physics/Ray/RayCast.h"
 #include "Renderer/PrimitiveDrawInterface.h"
 #include "WorldTypes.h"
+#include "World/WorldContext.h"
 #include "Containers/FunctionRef.h"
 #include "Entity/Systems/EntitySystem.h"
 #include "World.generated.h"
-
 
 namespace Lumina
 {
@@ -42,7 +41,6 @@ namespace Lumina
     class CParticleSystem;
     class CWorld;
     class FImmediateLineRenderer;
-    enum class ENetMode : uint8;
 
     namespace ECS
     {
@@ -102,7 +100,9 @@ namespace Lumina
         friend ECS::FRegistry& ECS::GetWorldRegistry(CWorld&);
 
     public:
-        
+
+        //~ Nested types the public surface hands back.
+
         // One system as scheduled in one stage. Systems owns the instance; this only orders it.
         struct FStageSlot
         {
@@ -110,19 +110,30 @@ namespace Lumina
             uint8          StagePriority = 255;
         };
 
+        // One reflected engine system, as surfaced to the World Editor's Systems panel.
+        struct FSystemInfo
+        {
+            FName                   Name;
+            bool                    bEnabled = true;
+            TVector<EUpdateStage>   Stages;     // stages this system participates in
+        };
+
+        //~ Construction and the CObject contract.
+
         CWorld();
 
-        //~ Begin CObject Interface
         void Serialize(FArchive& Ar) override;
+
         void PreLoad() override;
+
         void PostLoad() override;
+
         bool IsAsset() const override { return true; }
-        //~ End CObject Interface
-        
+
+        //~ Lifecycle, from world creation through per-frame stages to teardown.
+
         /** Initializes systems and renderer. Must be called before anything is done with the world. */
         void InitializeWorld(EWorldType InWorldType);
-
-        void EnqueueRenderTargetPaint(FTexturePaintOp&& Op);
 
         /** Shuts down the world; destroys systems, components, and entities. */
         void TeardownWorld();
@@ -141,242 +152,64 @@ namespace Lumina
         // Must run before RenderView consumes it, same frame.
         void Extract();
 
+        void SetActive(bool bNewActive);
+
+        bool IsSuspended() const { return !bActive; }
+
         /**
-         * Constructs an entity into the registry.
-         * @param Name New name of the entity, not unique.
-         * @param Transform Optional Transform.
-         * @return a newly created entity.
+         * Seconds between this world's frames while throttled; 0 runs it every frame.
          */
-        FUNCTION()
-        ECS::FEntity ConstructEntity(FName Name, const FTransform& Transform = FTransform());
+        void SetUpdateInterval(double Seconds);
 
+        double GetUpdateInterval() const { return UpdateIntervalSeconds; }
 
-        FUNCTION()
-        ECS::FEntity SpawnPrefab(const FAssetRef& Prefab);
+        /**
+         * Whether this world runs its phases this frame. Decided once per frame in FWorldManager::BeginFrame
+         * and read by every phase after it. Update runs seven times a frame (once per update stage), so a
+         * gate re-evaluated per call could let a world through some stages and not others and half-tick it.
+         */
+        bool IsTickingThisFrame() const { return bActive && !bThrottledThisFrame; }
 
-        /** Like SpawnPrefab(Path), but positions the spawned root at SpawnTransform and
-         *  optionally reparents under Parent (ECS::NullEntity = world root). */
-        FUNCTION()
-        ECS::FEntity SpawnPrefabAt(const FAssetRef& Prefab, const FTransform& SpawnTransform, ECS::FEntity Parent);
+        // Frees the render scene once suspended longer than GraceSeconds. Returns true when it
+        // actually reclaimed, so callers can budget one stall/frame.
+        bool ReclaimIdleRenderer(double NowSeconds, double GraceSeconds);
 
-        ECS::FEntity SpawnPrefabAt(const FAssetRef& Prefab, const FTransform& SpawnTransform)
-        {
-            return SpawnPrefabAt(Prefab, SpawnTransform, ECS::NullEntity);
-        }
+        static CWorld* DuplicateWorld(CWorld* OwningWorld);
 
-        /** A one-shot effect bursting at SpawnTransform, destroyed after Lifetime seconds (0 = caller owns it). */
-        FUNCTION()
-        ECS::FEntity SpawnParticleSystem(CParticleSystem* ParticleSystem, const FTransform& SpawnTransform, float Lifetime);
-
-        /** SpawnParticleSystem parented to Parent, on a named socket or bone (none = the entity origin). */
-        FUNCTION()
-        ECS::FEntity SpawnParticleSystemAttached(CParticleSystem* ParticleSystem, ECS::FEntity Parent,
-            const FName& Socket, FVector3 Offset, float Lifetime);
-
-        /** Destroys Entity after Seconds (0 = never). Idempotent; a second call retimes the countdown. */
-        FUNCTION()
-        void SetEntityLifetime(ECS::FEntity Entity, float Seconds);
-
-        // Shatter a destructible entity into physics-driven fragments. Origin = blast point;
-        // Strength = outward launch m/s (0 uses ExplosionStrength). No-op without an unbroken SDestructibleComponent.
-        bool FractureEntity(ECS::FEntity Entity, const FVector3& Origin, float Strength = 0.0f);
-        
-        void SpawnPrefabAsync(const FName& Path, const TFunction<void(ECS::FEntity)>& Callback);
-
-        /** Spawns a projectile entity at Position moving at Velocity (world m/s). Damage rides along in
-         *  the hit event; the entity auto-despawns after Lifetime seconds (0 = never); Instigator is
-         *  ignored by the sweep so the shooter is never hit. Returns the new entity. Bind its hit with
-         *  GetEntityRegistry().Get<SProjectileComponent>(e).OnHit, or set more fields on that component. */
-        FUNCTION()
-        ECS::FEntity SpawnProjectile(FVector3 Position, FVector3 Velocity, float Damage, float Lifetime, ECS::FEntity Instigator);
-
-        // C++ convenience with defaults.
-        ECS::FEntity SpawnProjectile(FVector3 Position, FVector3 Velocity, float Damage = 0.0f, float Lifetime = 5.0f)
-        {
-            return SpawnProjectile(Position, Velocity, Damage, Lifetime, ECS::NullEntity);
-        }
-
-        Physics::IPhysicsScene* GetPhysicsScene() const { return PhysicsScene.get(); }
-
-        // Creates the physics scene if this world has none. Editor worlds skip it at init because the scene
-        // reserves hundreds of MB up front, so a tool that wants to actually simulate asks for one here.
-        Physics::IPhysicsScene* EnsurePhysicsScene();
-        
-        STransformComponent& GetEntityTransform(ECS::FEntity Entity);
-
-        FUNCTION()
-        FVector3 GetEntityLocation(ECS::FEntity Entity);
-
-        FUNCTION()
-        void SetEntityLocation(ECS::FEntity Entity, FVector3 Location);
-
-        FUNCTION()
-        void SetEntityRotation(ECS::FEntity Entity, FQuat Rotation);
-
-        FUNCTION()
-        FVector3 TranslateEntity(ECS::FEntity Entity, FVector3 Translation);
-
-        FUNCTION()
-        uint32 GetNumEntities() const;
-        
-        SDefaultWorldSettings& GetDefaultWorldSettings();
-
-        /** Outliner folder table for this world, created on first use. Editor-only organization. */
-        SSceneFolderComponent& GetSceneFolders();
-
-        /** The folder table without creating one, null when this world has never had one. */
-        SSceneFolderComponent* FindSceneFolders();
-        const SSceneFolderComponent* FindSceneFolders() const;
-        
-        FUNCTION()
-        bool EntityHasTag(ECS::FEntity Entity, const FName& Tag);
-
-        //~ Screen and world projection, through the rendered view and this world's render extent.
-
-        /** The rendered view, or null when nothing has resolved one this frame. */
-        const FResolvedSceneView* GetResolvedView() const;
-
-        /** Viewport size in pixels, or zero when the world has no renderer (a dedicated server). */
-        FUNCTION()
-        FVector2 GetViewportSize() const;
-
-        /** Projects a world point to pixel coordinates, origin top-left. Check bOnScreen before using it. */
-        FUNCTION()
-        FScreenProjection WorldToScreen(FVector3 WorldLocation) const;
-
-        /** Pixel coordinates to a world ray; the aiming and picking primitive. */
-        FUNCTION()
-        FWorldRay ScreenToWorldRay(FVector2 ScreenPosition) const;
-
-        /** ScreenToWorldRay through the center of the viewport, which is where a crosshair sits. */
-        FUNCTION()
-        FWorldRay ViewportCenterRay() const;
-
-        /** A point WorldDistance along the ray through ScreenPosition, measured from the near plane. */
-        FUNCTION()
-        FVector3 DeprojectScreenToWorld(FVector2 ScreenPosition, float WorldDistance) const;
-
-        FUNCTION()
-        ECS::FEntity GetEntityByTag(const FName& Tag);
-
-        /** Appends every entity carrying Tag to Out. Tags are named storages, so this is a pool walk. */
-        void GetEntitiesByTag(const FName& Tag, TVector<ECS::FEntity>& Out);
-
-        FUNCTION()
-        ECS::FEntity GetEntityByName(const FName& Name);
-
-        FUNCTION()
-        FName GetEntityName(ECS::FEntity Entity);
-
-        TOptional<SRayResult> CastRay(const SRayCastSettings& Settings);
-
-        // OutHits is cleared and refilled near-to-far; reuse one buffer to keep repeated sweeps alloc-free.
-        void CastSphere(const SSphereCastSettings& Settings, TVector<SRayResult>& OutHits) const;
-
-        TOptional<SRayResult> CastSphereClosest(const SSphereCastSettings& Settings) const;
-        
-        EUpdateStage GetUpdateStage() const;
-
-        FTweenManager& GetTweenManager() { return EntityRegistry.Ctx().Get<FTweenManager>(); }
-        const FTweenManager& GetTweenManager() const { return EntityRegistry.Ctx().Get<FTweenManager>(); }
-
-        FTimerManager& GetTimerManager() { return EntityRegistry.Ctx().Get<FTimerManager>(); }
-        const FTimerManager& GetTimerManager() const { return EntityRegistry.Ctx().Get<FTimerManager>(); }
+        //~ Identity and context.
 
         NODISCARD EWorldType GetWorldType() const { return WorldType; }
 
         /** The context this world belongs to. Non-null once the world has been registered via FWorldManager::CreateWorldContext. */
         NODISCARD FWorldContext* GetWorldContext() const { return OwningContext; }
 
+        FORCEINLINE bool IsGameWorld() const { return WorldType == EWorldType::Game; }
+
+        bool IsSimulating() const { return WorldType == EWorldType::Simulation; }
+
+        EUpdateStage GetUpdateStage() const;
+
+        const FSystemContext& GetSystemContext() const { return SystemContext; }
+
         /** Shorthand for GetWorldContext()->NetMode; returns Standalone when no context is set. */
+        FUNCTION()
         NODISCARD ENetMode GetNetMode() const;
 
         /** True when this world is the network authority (listen or dedicated server). */
+        FUNCTION()
         NODISCARD bool IsNetServer() const;
 
         /** Server-side count of currently connected clients; 0 on clients and standalone worlds. */
+        FUNCTION()
         NODISCARD int32 GetConnectedClientCount() const;
 
-        /** C#-facing debug-draw facade (World.Debug). */
-        NODISCARD FWorldDebugInterface* GetDebugInterface() { return &DebugInterface; }
-        
-        ECS::FEntity GetFirstEntityWith(uint32 Type);
-        
-        void DuplicateEntity(ECS::FEntity& To, ECS::FEntity From, const TFunctionRef<bool(const ECS::FComponentTypeInfo&)>& Callback);
+        //~ World time, pausing and dilation.
 
-        // Deep-copy Source and its children (components copy-constructed, transient handles rebuilt); returns the new root.
-        FUNCTION()
-        ECS::FEntity DuplicateEntity(ECS::FEntity Source);
-
-        // Reparent Child under Parent (Parent = null detaches to the world root), preserving world transform.
-        FUNCTION()
-        void SetParent(ECS::FEntity Child, ECS::FEntity Parent);
-
-        // Detach from the current parent, preserving world transform.
-        FUNCTION()
-        void DetachFromParent(ECS::FEntity Entity);
-
-        FUNCTION()
-        ECS::FEntity GetParent(ECS::FEntity Entity);
-
-        FUNCTION()
-        ECS::FEntity GetRootEntity(ECS::FEntity Entity);
-
-        // --- Mesh sockets / bones. SocketOrBone accepts a socket name authored on the skeleton or
-        // --- static mesh asset, or (skeletal only) a raw bone name.
-
-        // Parent Child under Parent and keep it glued to the named socket/bone each frame
-        // (adds an SSocketAttachmentComponent; the socket attachment system drives the transform).
-        FUNCTION()
-        void AttachEntityToSocket(ECS::FEntity Child, ECS::FEntity Parent, const FName& SocketOrBone);
-
-        // Stop following the socket and detach to the world root, preserving world transform.
-        FUNCTION()
-        void DetachEntityFromSocket(ECS::FEntity Entity);
-
-        FUNCTION()
-        bool HasSocket(ECS::FEntity Entity, const FName& SocketOrBone);
-
-        /** World-space socket/bone location on the entity's skeletal mesh; zero when it doesn't resolve. */
-        FUNCTION()
-        FVector3 GetSocketLocation(ECS::FEntity Entity, const FName& SocketOrBone);
-
-        /** World-space socket/bone rotation on the entity's skeletal mesh; identity when it doesn't resolve. */
-        FUNCTION()
-        FQuat GetSocketRotation(ECS::FEntity Entity, const FName& SocketOrBone);
-
-        /** Bone name for a skeleton bone index (e.g. a hit result's BoneIndex); NAME_None when out of range. */
-        FUNCTION()
-        FName GetBoneName(ECS::FEntity Entity, int32 BoneIndex);
-
-        FUNCTION()
-        int32 GetBoneIndex(ECS::FEntity Entity, const FName& BoneName);
-
-        /** Bone origin nearest WorldLocation; approximates the hit bone on single-body skeletal meshes. */
-        FUNCTION()
-        FName FindClosestBone(ECS::FEntity Entity, FVector3 WorldLocation);
-
-        FUNCTION()
-        void DestroyEntity(ECS::FEntity Entity);
-        
-        void SetActiveCamera(ECS::FEntity InEntity) const;
-
-        /** Switch the active camera, easing from the current view over BlendTime seconds (0 = snap). */
-        void SetActiveCamera(ECS::FEntity InEntity, float BlendTime, ECameraBlendFunction Function = ECameraBlendFunction::EaseInOut) const;
-
-        FUNCTION()
-        SCameraComponent* GetActiveCamera() const;
-
-        ECS::FEntity GetActiveCameraEntity() const;
-        
-        void OnChangeCameraEvent(const FSwitchActiveCameraEvent& Event);
-        
         FUNCTION()
         double GetWorldDeltaTime() const { return DeltaTime; }
 
         FUNCTION()
         double GetTimeSinceWorldCreation() const { return TimeSinceCreation; }
-        
 
         /** Pauses gameplay (systems + physics). UI keeps updating (ticked from Extract), so a script-driven
          *  pause menu can still unpause; systems registered for EUpdateStage::Paused keep running too. */
@@ -393,71 +226,104 @@ namespace Lumina
         FUNCTION()
         float GetTimeDilation();
 
-        void SetActive(bool bNewActive);
-        bool IsSuspended() const { return !bActive; }
+        //~ Entity lifetime.
 
         /**
-         * Seconds between this world's frames while throttled; 0 runs it every frame.
+         * Constructs an entity into the registry.
+         * @param Name New name of the entity, not unique.
+         * @param Transform Optional Transform.
+         * @return a newly created entity.
          */
-        void SetUpdateInterval(double Seconds);
-        double GetUpdateInterval() const { return UpdateIntervalSeconds; }
+        FUNCTION()
+        ECS::FEntity ConstructEntity(FName Name, const FTransform& Transform = FTransform());
 
-        /**
-         * Whether this world runs its phases this frame. Decided once per frame in FWorldManager::BeginFrame
-         * and read by every phase after it. Update runs seven times a frame (once per update stage), so a
-         * gate re-evaluated per call could let a world through some stages and not others and half-tick it.
-         */
-        bool IsTickingThisFrame() const { return bActive && !bThrottledThisFrame; }
+        // Bare entity (no components); prefer ConstructEntity for a named/transformed entity.
+        NODISCARD ECS::FEntity CreateEntity() { return EntityRegistry.Create(); }
 
-        // Frees the render scene once suspended longer than GraceSeconds. Returns true when it
-        // actually reclaimed, so callers can budget one stall/frame.
-        bool ReclaimIdleRenderer(double NowSeconds, double GraceSeconds);
+        FUNCTION()
+        void DestroyEntity(ECS::FEntity Entity);
 
-        bool IsSimulating() const { return WorldType == EWorldType::Simulation; }
+        void DuplicateEntity(ECS::FEntity& To, ECS::FEntity From, const TFunctionRef<bool(const ECS::FComponentTypeInfo&)>& Callback);
 
-        static CWorld* DuplicateWorld(CWorld* OwningWorld);
+        // Deep-copy Source and its children (components copy-constructed, transient handles rebuilt); returns the new root.
+        FUNCTION()
+        ECS::FEntity DuplicateEntity(ECS::FEntity Source);
 
-        IRenderScene* GetRenderer() const { return RenderScene.get(); }
+        /** Destroys Entity after Seconds (0 = never). Idempotent; a second call retimes the countdown. */
+        FUNCTION()
+        void SetEntityLifetime(ECS::FEntity Entity, float Seconds);
 
-        // Creates/destroys this world's renderer (through RenderSceneFactory). Both are idempotent; the
-        // world lifecycle calls them itself, but renderer swaps (e.g. a C# RenderScene hot reload) may
-        // destroy and recreate on a live world.
-        void CreateRenderer();
-        void DestroyRenderer();
-
-        // A world renders only when the process has a real RHI (not headless) and the world isn't a
-        // dedicated server (which is invisible even in the editor). Gates RenderScene creation.
-        NODISCARD bool ShouldRender() const;
-
-        // Per-world UI (Rml context + documents); created in InitializeWorld, freed in TeardownWorld.
-        FWorldUIContext* GetUIContext() const { return UIContext.get(); }
-
-        // One reflected engine system, as surfaced to the World Editor's Systems panel.
-        struct FSystemInfo
+        FUNCTION(SuppressGCTransition)
+        NODISCARD bool IsValidEntity(ECS::FEntity Entity) const
         {
-            FName                   Name;
-            bool                    bEnabled = true;
-            TVector<EUpdateStage>   Stages;     // stages this system participates in
-        };
+            return EntityRegistry.IsValid(Entity);
+        }
 
-        // Enumerate every reflected engine system (alphabetical by reflected name) plus whether it is
-        // currently enabled for this world. Reflects the pending (intended) state, so a UI checkbox
-        // updates instantly even though the actual system list rebuild is deferred to the next frame.
-        void GetAllSystems(TVector<FSystemInfo>& Out) const;
+        FUNCTION()
+        uint32 GetNumEntities() const;
 
-        // Whether System (by reflected name) is enabled for this world (reads the pending state).
-        bool IsSystemEnabled(FName System) const;
+        // Destroys every entity in the world (component storages retain their types).
+        void ClearAllEntities() { EntityRegistry.Clear(); }
 
-        // Enable/disable a system for this world. Persists to SDefaultWorldSettings immediately and
-        // defers the live system-list rebuild to the start of the next frame (ApplyPendingSystemChanges),
-        // so it is safe to call mid-frame.
-        void SetSystemEnabled(FName System, bool bEnabled);
+        ECS::FEntity GetFirstEntityWith(uint32 Type);
 
-        void OnRelationshipComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
-        void OnRelationshipComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
-        void OnTransformComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
-        void OnCSharpScriptComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
-        void OnWidgetComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
+        // Shatter a destructible entity into physics-driven fragments. Origin = blast point;
+        // Strength = outward launch m/s (0 uses ExplosionStrength). No-op without an unbroken SDestructibleComponent.
+        bool FractureEntity(ECS::FEntity Entity, const FVector3& Origin, float Strength = 0.0f);
+
+        //~ Entity naming and tags.
+
+        FUNCTION()
+        ECS::FEntity GetEntityByName(const FName& Name);
+
+        FUNCTION()
+        FName GetEntityName(ECS::FEntity Entity);
+
+        FUNCTION()
+        ECS::FEntity GetEntityByTag(const FName& Tag);
+
+        /** Appends every entity carrying Tag to Out. Tags are named storages, so this is a pool walk. */
+        FUNCTION()
+        void GetEntitiesByTag(const FName& Tag, TVector<ECS::FEntity>& Out);
+
+        FUNCTION()
+        bool EntityHasTag(ECS::FEntity Entity, const FName& Tag);
+
+        //~ Entity transforms.
+
+        STransformComponent& GetEntityTransform(ECS::FEntity Entity);
+
+        void SetEntityTransform(ECS::FEntity Entity, const FTransform& NewTransform);
+
+        FUNCTION()
+        FVector3 GetEntityLocation(ECS::FEntity Entity);
+
+        FUNCTION()
+        void SetEntityLocation(ECS::FEntity Entity, FVector3 Location);
+
+        FUNCTION()
+        void SetEntityRotation(ECS::FEntity Entity, FQuat Rotation);
+
+        FUNCTION()
+        FVector3 TranslateEntity(ECS::FEntity Entity, FVector3 Translation);
+
+        //~ Entity hierarchy.
+
+        // Reparent Child under Parent (Parent = null detaches to the world root), preserving world transform.
+        FUNCTION()
+        void SetParent(ECS::FEntity Child, ECS::FEntity Parent);
+
+        // Detach from the current parent, preserving world transform.
+        FUNCTION()
+        void DetachFromParent(ECS::FEntity Entity);
+
+        FUNCTION()
+        ECS::FEntity GetParent(ECS::FEntity Entity);
+
+        FUNCTION()
+        ECS::FEntity GetRootEntity(ECS::FEntity Entity);
+
+        //~ Entity scripts.
 
         // Attaches a script of the given class to an entity (emplacing SEntityScriptComponent if needed) and
         // binds it immediately. Returns the managed instance handle, or null on failure.
@@ -466,61 +332,10 @@ namespace Lumina
         // Convenience that forwards to AddEntityScript.
         void SetEntityScript(ECS::FEntity Entity, FStringView ScriptClass);
 
-        void RegisterSystems();
+        //~ Components.
 
-        // Read-only snapshot of the per-stage parallel system batches + each system's declared access, for the
-        // Gameplay Insights editor tool. Replays the TickSystems batching; main thread.
-        void GetSystemSchedule(TVector<FSystemScheduleEntry>& Out) const;
-
-        //~ Begin Debug Drawing
-        void DrawBillboard(int32 ResourceID, const FVector3& Location, float Scale) override;
-        void DrawLine(const FVector3& Start, const FVector3& End, const FVector4& Color, float Thickness = 1.0f, bool bDepthTest = true, float Duration = -1.0f) override;
-
-        /** Immediate-mode line sink, or null when this world has no renderer (dedicated server) or is
-         *  suspended. Single frame, thickness 1, no CPU cull -- the path for the hundred-thousand-line
-         *  cases. DrawLine above is still the one to use for timed or thick lines. */
-        FImmediateLineRenderer* GetImmediateLines() const;
-
-        /** Submit a solid triangle batch (3 pre-colored verts per tri). Duration <= 0 draws one frame.
-         *  Mode picks the depth/blend state: Opaque for meshes that must occlude themselves, Translucent
-         *  for blended overlays, XRay to ignore scene depth entirely. */
-        void DrawSolidTriangles(TVector<FSimpleElementVertex>&& Vertices, ESolidDrawMode Mode = ESolidDrawMode::Translucent, float Duration = -1.0f);
-
-        /** Queue a line of screen-space debug text for this frame, stacked top-left on the world viewport */
-        void DrawDebugText(const FString& Text, const FVector4& Color = FVector4(1.0f));
-
-        /** Render scene drains the queued debug-text lines each frame (moves them out + clears). */
-        void DrainDebugTextLines(TVector<FDebugTextLine>& Out);
-        //~ End Debug Drawing
-
-        //~ Begin Render Target Painting
-        // Stamp a soft radial brush of Color into Target at UV (0..1). RadiusUV is relative to the
-        // longer side; Strength = center opacity; Hardness > 1 sharpens. Queued, run next frame (TexturePaintPass).
-        void PaintRenderTarget(CTextureRenderTarget* Target, const FVector2& UV, float RadiusUV, const FVector4& Color, float Strength = 1.0f, float Hardness = 1.0f, CTexture* BrushMask = nullptr);
-
-        /** Clear an entire render target to Color (queued; executed during the render phase). */
-        void ClearRenderTarget(CTextureRenderTarget* Target, const FVector4& Color);
-
-        /** Render-scene Extract drains the queued paint/clear ops into the frame snapshot. */
-        void DrainRenderTargetPaints(TVector<FTexturePaintOp>& OutOps);
-        //~ End Render Target Painting
-        
-        FORCEINLINE bool IsGameWorld() const { return WorldType == EWorldType::Game; }
-        
-        void SetEntityTransform(ECS::FEntity Entity, const FTransform& NewTransform);
-
-        const FSystemContext& GetSystemContext() const { return SystemContext; }
-        
-        
         template<typename T, typename... TArgs>
         decltype(auto) EmplaceComponent(ECS::FEntity Entity, TArgs&&... Args);
-        
-        template<typename T>
-        requires(!std::is_empty_v<T>)
-        T& GetComponent(ECS::FEntity Entity);
-        
-        template<typename T>
-        T* TryGetComponent(ECS::FEntity Entity);
 
         // The registry handle stays private; views, entities and signal sinks are reached through these.
 
@@ -548,10 +363,23 @@ namespace Lumina
             return EntityRegistry.Patch<T>(Entity, std::forward<TFunc>(Func));
         }
 
-        template<typename... T>
-        void RemoveComponent(ECS::FEntity Entity)
+        template<typename T>
+        requires(!std::is_empty_v<T>)
+        T& GetComponent(ECS::FEntity Entity);
+
+        template<typename T>
+        const T& GetComponent(ECS::FEntity Entity) const
         {
-            EntityRegistry.Remove<T...>(Entity);
+            return EntityRegistry.Get<T>(Entity);
+        }
+
+        template<typename T>
+        T* TryGetComponent(ECS::FEntity Entity);
+
+        template<typename T>
+        const T* TryGetComponent(ECS::FEntity Entity) const
+        {
+            return EntityRegistry.TryGet<T>(Entity);
         }
 
         template<typename... T>
@@ -566,16 +394,10 @@ namespace Lumina
             return EntityRegistry.HasAny<T...>(Entity);
         }
 
-        template<typename T>
-        const T& GetComponent(ECS::FEntity Entity) const
+        template<typename... T>
+        void RemoveComponent(ECS::FEntity Entity)
         {
-            return EntityRegistry.Get<T>(Entity);
-        }
-
-        template<typename T>
-        const T* TryGetComponent(ECS::FEntity Entity) const
-        {
-            return EntityRegistry.TryGet<T>(Entity);
+            EntityRegistry.Remove<T...>(Entity);
         }
 
         template<typename T>
@@ -584,10 +406,16 @@ namespace Lumina
             EntityRegistry.ClearComponent<T>();
         }
 
-        NODISCARD bool IsValidEntity(ECS::FEntity Entity) const
-        {
-            return EntityRegistry.IsValid(Entity);
-        }
+        // Low-level storage access for reflection-style passes (all storages) and named/tag storages.
+        NODISCARD auto ComponentStorages() { return EntityRegistry.GetActiveStorages(); }
+
+        template<typename T>
+        NODISCARD auto& ComponentStorage() { return EntityRegistry.GetStorage<T>(); }
+
+        template<typename T>
+        NODISCARD auto& NamedStorage(uint32 Id) { return EntityRegistry.GetStorage<T>(Id); }
+
+        //~ Views and component signals.
 
         // Iteration. Returns the view directly; pass ECS::TExclude<...>{} for an exclusion set.
         template<typename... Get>
@@ -601,6 +429,22 @@ namespace Lumina
         {
             return EntityRegistry.View<Get...>(ExcludeSet);
         }
+
+        // Component lifecycle observers (pool signals); connect member functions by naming them.
+        // The using-declaration keeps CObject's destroy hook visible alongside the component sink.
+        using CObject::OnDestroy;
+
+        template<typename T> NODISCARD auto OnConstruct() { return EntityRegistry.GetSignals<T>().OnConstruct; }
+
+        template<typename T> NODISCARD auto OnDestroy()   { return EntityRegistry.GetSignals<T>().OnDestroy; }
+
+        template<typename T> NODISCARD auto OnUpdate()    { return EntityRegistry.GetSignals<T>().OnUpdate; }
+
+        NODISCARD auto OnEntityConstruct() { return EntityRegistry.OnEntityCreated(); }
+
+        NODISCARD auto OnEntityDestroy()   { return EntityRegistry.OnEntityDestroyed(); }
+
+        //~ Singletons.
 
         // Per-world singletons stored in the registry context.
         template<typename T, typename... TArgs>
@@ -616,15 +460,15 @@ namespace Lumina
         }
 
         template<typename T>
-        T& GetOrEmplaceSingleton()
-        {
-            return EntityRegistry.Ctx().GetOrEmplace<T>();
-        }
-
-        template<typename T>
         NODISCARD const T& GetSingleton() const
         {
             return EntityRegistry.Ctx().Get<T>();
+        }
+
+        template<typename T>
+        T& GetOrEmplaceSingleton()
+        {
+            return EntityRegistry.Ctx().GetOrEmplace<T>();
         }
 
         template<typename T>
@@ -639,38 +483,38 @@ namespace Lumina
             return EntityRegistry.Ctx().Find<T>();
         }
 
-        // Component lifecycle observers (pool signals); connect member functions by naming them.
-        // The using-declaration keeps CObject's destroy hook visible alongside the component sink.
-        using CObject::OnDestroy;
-        template<typename T> NODISCARD auto OnConstruct() { return EntityRegistry.GetSignals<T>().OnConstruct; }
-        template<typename T> NODISCARD auto OnDestroy()   { return EntityRegistry.GetSignals<T>().OnDestroy; }
-        template<typename T> NODISCARD auto OnUpdate()    { return EntityRegistry.GetSignals<T>().OnUpdate; }
-        NODISCARD auto OnEntityConstruct() { return EntityRegistry.OnEntityCreated(); }
-        NODISCARD auto OnEntityDestroy()   { return EntityRegistry.OnEntityDestroyed(); }
-
-        // Low-level storage access for reflection-style passes (all storages) and named/tag storages.
-        NODISCARD auto ComponentStorages() { return EntityRegistry.GetActiveStorages(); }
-
-        template<typename T>
-        NODISCARD auto& ComponentStorage() { return EntityRegistry.GetStorage<T>(); }
-
-        template<typename T>
-        NODISCARD auto& NamedStorage(uint32 Id) { return EntityRegistry.GetStorage<T>(Id); }
-
-        // Bare entity (no components); prefer ConstructEntity for a named/transformed entity.
-        NODISCARD ECS::FEntity CreateEntity() { return EntityRegistry.Create(); }
-
-        // Destroys every entity in the world (component storages retain their types).
-        void ClearAllEntities() { EntityRegistry.Clear(); }
-
         template<typename T>
         NODISCARD bool HasSingleton() const { return EntityRegistry.Ctx().Contains<T>(); }
 
         template<typename T>
         void EraseSingleton() { EntityRegistry.Ctx().Erase<T>(); }
 
+        //~ Systems.
 
-        //~ World subsystems. One CObject per subsystem class per world, so a C++ and a C# one are the same
+        void RegisterSystems();
+
+        // Enumerate every reflected engine system (alphabetical by reflected name) plus whether it is
+        // currently enabled for this world. Reflects the pending (intended) state, so a UI checkbox
+        // updates instantly even though the actual system list rebuild is deferred to the next frame.
+        void GetAllSystems(TVector<FSystemInfo>& Out) const;
+
+        // Whether System (by reflected name) is enabled for this world (reads the pending state).
+        bool IsSystemEnabled(FName System) const;
+
+        // Enable/disable a system for this world. Persists to SDefaultWorldSettings immediately and
+        // defers the live system-list rebuild to the start of the next frame (ApplyPendingSystemChanges),
+        // so it is safe to call mid-frame.
+        void SetSystemEnabled(FName System, bool bEnabled);
+
+        // Read-only snapshot of the per-stage parallel system batches + each system's declared access, for the
+        // Gameplay Insights editor tool. Replays the TickSystems batching; main thread.
+        void GetSystemSchedule(TVector<FSystemScheduleEntry>& Out) const;
+
+        // One instance of every enabled system class; the per-stage FStageSlots only point into it.
+        PROPERTY(NoSerialize)
+        TVector<TObjectPtr<CEntitySystem>>                 Systems;
+
+        //~ Subsystems. One CObject per subsystem class per world, so a C++ and a C# one are the same
         //~ thing to the world and to the details panel.
 
         // The subsystem of this class, or null when the world has none. Matches a derived class too.
@@ -691,9 +535,128 @@ namespace Lumina
         PROPERTY(NoSerialize)
         TVector<TObjectPtr<CWorldSubsystem>>               Subsystems;
 
-        // One instance of every enabled system class; the per-stage FStageSlots only point into it.
-        PROPERTY(NoSerialize)
-        TVector<TObjectPtr<CEntitySystem>>                 Systems;
+        //~ Physics scene and queries.
+
+        // C++ convenience with defaults.
+
+        Physics::IPhysicsScene* GetPhysicsScene() const { return PhysicsScene.get(); }
+
+        // Creates the physics scene if this world has none. Editor worlds skip it at init because the scene
+        // reserves hundreds of MB up front, so a tool that wants to actually simulate asks for one here.
+        Physics::IPhysicsScene* EnsurePhysicsScene();
+
+        TOptional<SRayResult> CastRay(const SRayCastSettings& Settings);
+
+        // OutHits is cleared and refilled near-to-far; reuse one buffer to keep repeated sweeps alloc-free.
+        void CastSphere(const SSphereCastSettings& Settings, TVector<SRayResult>& OutHits) const;
+
+        TOptional<SRayResult> CastSphereClosest(const SSphereCastSettings& Settings) const;
+
+        //~ Camera and the resolved view.
+
+        void SetActiveCamera(ECS::FEntity InEntity) const;
+
+        /** Switch the active camera, easing from the current view over BlendTime seconds (0 = snap). */
+        void SetActiveCamera(ECS::FEntity InEntity, float BlendTime, ECameraBlendFunction Function = ECameraBlendFunction::EaseInOut) const;
+
+        FUNCTION()
+        SCameraComponent* GetActiveCamera() const;
+
+        ECS::FEntity GetActiveCameraEntity() const;
+
+        void OnChangeCameraEvent(const FSwitchActiveCameraEvent& Event);
+
+        /** The rendered view, or null when nothing has resolved one this frame. */
+        const FResolvedSceneView* GetResolvedView() const;
+
+        //~ Renderer and render targets.
+
+        IRenderScene* GetRenderer() const { return RenderScene.get(); }
+
+        // Creates/destroys this world's renderer (through RenderSceneFactory). Both are idempotent; the
+        // world lifecycle calls them itself, but renderer swaps (e.g. a C# RenderScene hot reload) may
+        // destroy and recreate on a live world.
+        void CreateRenderer();
+
+        void DestroyRenderer();
+
+        // A world renders only when the process has a real RHI (not headless) and the world isn't a
+        // dedicated server (which is invisible even in the editor). Gates RenderScene creation.
+        NODISCARD bool ShouldRender() const;
+
+        // Per-world UI (Rml context + documents); created in InitializeWorld, freed in TeardownWorld.
+        FWorldUIContext* GetUIContext() const { return UIContext.get(); }
+
+        void EnqueueRenderTargetPaint(FTexturePaintOp&& Op);
+
+        // Stamp a soft radial brush of Color into Target at UV (0..1). RadiusUV is relative to the
+        // longer side; Strength = center opacity; Hardness > 1 sharpens. Queued, run next frame (TexturePaintPass).
+        void PaintRenderTarget(CTextureRenderTarget* Target, const FVector2& UV, float RadiusUV, const FVector4& Color, float Strength = 1.0f, float Hardness = 1.0f, CTexture* BrushMask = nullptr);
+
+        /** Clear an entire render target to Color (queued; executed during the render phase). */
+        void ClearRenderTarget(CTextureRenderTarget* Target, const FVector4& Color);
+
+        /** Render-scene Extract drains the queued paint/clear ops into the frame snapshot. */
+        void DrainRenderTargetPaints(TVector<FTexturePaintOp>& OutOps);
+
+        //~ Debug drawing.
+
+        void DrawBillboard(int32 ResourceID, const FVector3& Location, float Scale) override;
+
+        void DrawLine(const FVector3& Start, const FVector3& End, const FVector4& Color, float Thickness = 1.0f, bool bDepthTest = true, float Duration = -1.0f) override;
+
+        /** Immediate-mode line sink, or null when this world has no renderer (dedicated server) or is
+         *  suspended. Single frame, thickness 1, no CPU cull -- the path for the hundred-thousand-line
+         *  cases. DrawLine above is still the one to use for timed or thick lines. */
+        FImmediateLineRenderer* GetImmediateLines() const;
+
+        /** Submit a solid triangle batch (3 pre-colored verts per tri). Duration <= 0 draws one frame.
+         *  Mode picks the depth/blend state: Opaque for meshes that must occlude themselves, Translucent
+         *  for blended overlays, XRay to ignore scene depth entirely. */
+        void DrawSolidTriangles(TVector<FSimpleElementVertex>&& Vertices, ESolidDrawMode Mode = ESolidDrawMode::Translucent, float Duration = -1.0f);
+
+        /** Queue a line of screen-space debug text for this frame, stacked top-left on the world viewport */
+        void DrawDebugText(const FString& Text, const FVector4& Color = FVector4(1.0f));
+
+        /** Render scene drains the queued debug-text lines each frame (moves them out + clears). */
+        void DrainDebugTextLines(TVector<FDebugTextLine>& Out);
+
+        /** C#-facing debug-draw facade (World.Debug). */
+        NODISCARD FWorldDebugInterface* GetDebugInterface() { return &DebugInterface; }
+
+        //~ World settings and scene folders.
+
+        SDefaultWorldSettings& GetDefaultWorldSettings();
+
+        /** Outliner folder table for this world, created on first use. Editor-only organization. */
+        SSceneFolderComponent& GetSceneFolders();
+
+        /** The folder table without creating one, null when this world has never had one. */
+        SSceneFolderComponent* FindSceneFolders();
+
+        const SSceneFolderComponent* FindSceneFolders() const;
+
+        //~ Timers and tweens.
+
+        FTweenManager& GetTweenManager() { return EntityRegistry.Ctx().Get<FTweenManager>(); }
+
+        const FTweenManager& GetTweenManager() const { return EntityRegistry.Ctx().Get<FTweenManager>(); }
+
+        FTimerManager& GetTimerManager() { return EntityRegistry.Ctx().Get<FTimerManager>(); }
+
+        const FTimerManager& GetTimerManager() const { return EntityRegistry.Ctx().Get<FTimerManager>(); }
+
+        //~ Registry signal handlers, connected during world initialization.
+
+        void OnRelationshipComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
+
+        void OnRelationshipComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
+
+        void OnTransformComponentConstruct(ECS::FRegistry& Registry, ECS::FEntity Entity);
+
+        void OnCSharpScriptComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
+
+        void OnWidgetComponentDestroyed(ECS::FRegistry& Registry, ECS::FEntity Entity);
 
     private:
 

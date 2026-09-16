@@ -11,7 +11,7 @@ internal static class ComponentOps<T> where T : NativeStruct
 }
 
 /// The component store for a world, the C# mirror of ECS::FRegistry / FEntityRegistry. Returned wrappers point at the live component, so writes persist.
-public readonly struct EntityRegistry
+public readonly unsafe partial struct EntityRegistry
 {
     internal readonly ulong WorldHandle; // CWorld* the native helpers resolve the registry from
 
@@ -25,8 +25,12 @@ public readonly struct EntityRegistry
     /// True while the entity still exists (mirrors registry.valid). A destroyed or recycled id reads false.
     public bool Valid(Entity Entity)
     {
-        return Native.WorldIsValidEntity(WorldHandle, Entity.Id) != 0;
+        return ValidRaw(WorldHandle, Entity.Id);
     }
+
+    // The reflected CWorld::IsValidEntity thunk, bound statically so a registry facade needs no wrapper.
+    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Call_Lumina_CWorld_IsValidEntity", SuppressGCTransition = true)]
+    private static partial bool ValidRaw(ulong World, uint Entity);
 
     /// The component of type T on the entity, or null if absent (mirrors registry.try_get).
     public T? TryGet<T>(Entity Entity) where T : NativeStruct

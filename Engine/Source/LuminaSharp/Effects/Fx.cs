@@ -1,4 +1,4 @@
-using Lumina;
+﻿using Lumina;
 
 namespace LuminaSharp;
 
@@ -18,12 +18,12 @@ public static class Fx
 
     /// Bursts System at a full transform, so a scaled or pre-rotated effect keeps its authored orientation.
     public static Entity Play(CParticleSystem? System, FTransform Transform, float Lifetime = DefaultLifetime)
-        => System == null ? Entity.Null : Game.World.SpawnParticleSystem(System, Transform, Lifetime);
+        => System == null ? Entity.Null : CParticleSystemLibrary.SpawnParticleSystem(Game.World, System, Transform, Lifetime);
 
     /// Parents the effect to Target so it follows, optionally on a named socket or bone.
     public static Entity PlayAttached(CParticleSystem? System, Entity Target, string Socket = "",
         FVector3 Offset = default, float Lifetime = DefaultLifetime)
-        => System == null ? Entity.Null : Game.World.SpawnParticleSystemAttached(System, Target, Socket, Offset, Lifetime);
+        => System == null ? Entity.Null : CParticleSystemLibrary.SpawnParticleSystemAttached(Game.World, System, Target, Socket, Offset, Lifetime);
 
     /// Resolves the reference (asset-manager cached) and plays it; a null or unset reference is a no-op.
     public static Entity Play(TSoftObjectPtr<CParticleSystem> System, FVector3 Location, float Lifetime = DefaultLifetime)

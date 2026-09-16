@@ -1,4 +1,5 @@
-#include <string>
+﻿#include <string>
+#include "Animation/SkeletalMeshLibrary.h"
 #include "World/ECS/Registry.h"
 #include "WorldEditorTool.h"
 #include "Core/CoreEditorDelegates.h"
@@ -43,6 +44,7 @@
 #include "Tools/UI/ImGui/ImGuiX.h"
 #include "TerrainEditMode.h"
 #include "FoliageEditMode.h"
+#include "ModelingEditMode.h"
 #include "SequencerEditMode.h"
 #include "World/Entity/Components/TerrainComponent.h"
 #include "UI/Tools/EditorEntityUtils.h"
@@ -484,7 +486,7 @@ namespace Lumina
                         {
                             const FRelationshipComponent* Relationship = Registry.TryGet<FRelationshipComponent>(Data.Entity);
                             BeginRelationshipTransaction({ Data.Entity }, Relationship->Parent);
-                            World->AttachEntityToSocket(Data.Entity, Relationship->Parent, Socket);
+                            CSkeletalMeshLibrary::AttachEntityToSocket(World, Data.Entity, Relationship->Parent, Socket);
                             EndTransaction("Attach to Socket");
                             if (Data.Entity == DetailsEntity)
                             {
@@ -1290,6 +1292,7 @@ namespace Lumina
         EditorModes.push_back(MakeUnique<FSelectionEditorMode>());
         EditorModes.push_back(MakeUnique<FTerrainEditMode>());
         EditorModes.push_back(MakeUnique<FFoliageEditMode>());
+        EditorModes.push_back(MakeUnique<FModelingEditMode>());
         EditorModes.push_back(MakeUnique<FNavigationEditMode>());
         EditorModes.push_back(MakeUnique<FSequencerEditMode>());
 

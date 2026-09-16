@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
@@ -216,6 +216,7 @@ internal static class ScriptCompiler
         // the rewriter cannot report: a [Property] declared as a partial property is invisible to it, and
         // would surface as a bare CS9248 "must have an implementation part" with nothing naming the cause.
         "ScriptPropertyGenerator",
+        "ScriptFunctionInvokerGenerator",   // [ScriptFunction] -> the typed frame invoker
     };
 
     private static ImmutableArray<ISourceGenerator> SourceGenerators => CachedGenerators ??= LoadGenerators();

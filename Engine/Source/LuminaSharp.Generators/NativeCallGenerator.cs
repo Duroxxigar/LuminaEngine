@@ -74,7 +74,7 @@ namespace LuminaSharp
 
     private sealed record Model(string Namespace, string ClassName, string ClassModifiers, string TypeKeyword, string Member);
 
-    private enum Kind { Pass, String, Bool, Enum, Entity }
+    private enum Kind { Pass, String, Bool, Enum, Entity, Array }
 
     private static Model? BuildModel(GeneratorAttributeSyntaxContext ctx, CancellationToken ct)
     {
@@ -195,6 +195,8 @@ namespace LuminaSharp
         string retCs;
         System.Func<string, string> wrap = call => call;
         bool stringReturn = false;
+        bool arrayReturn = false;
+        string arrayElemFq = string.Empty;
         bool nativeRefReturn = false;
         bool nativeRefReturnIsCObject = false;
         string nativeRefRetType = string.Empty;
@@ -222,6 +224,14 @@ namespace LuminaSharp
                     nativeTypes.Add("byte*");   // trailing caller buffer
                     nativeTypes.Add("int");     // trailing buffer capacity
                     nativeTypes.Add("int");     // returned byte length
+                    break;
+                case Kind.Array:
+                    // The same two-pass buffer ABI as a string return, counted in elements rather than bytes.
+                    arrayReturn = true;
+                    arrayElemFq = ((IArrayTypeSymbol)method.ReturnType).ElementType.ToDisplayString(fq);
+                    nativeTypes.Add(arrayElemFq + "*");
+                    nativeTypes.Add("int");
+                    nativeTypes.Add("int");
                     break;
                 case Kind.Bool:
                     nativeTypes.Add("byte");
@@ -272,6 +282,29 @@ namespace LuminaSharp
                      + pad + "    return global::LuminaSharp.Interop.GetString(__bp, __w < __len ? __w : __len);\n"
                      + pad + "}\n";
             }
+            if (arrayReturn)
+            {
+                string prefix = callArgs.Count > 0 ? coreArgs + ", " : string.Empty;
+                // Stack scratch first, so an ordinary result costs one call and only an overflow calls twice.
+                return pad + "int __cap = 1024 / global::System.Runtime.CompilerServices.Unsafe.SizeOf<" + arrayElemFq + ">();\n"
+                     + pad + "if (__cap < 1) { __cap = 1; }\n"
+                     + pad + arrayElemFq + "* __sb = stackalloc " + arrayElemFq + "[__cap];\n"
+                     + pad + "int __len = " + field + "(" + prefix + "__sb, __cap);\n"
+                     + pad + "if (__len <= 0) { return global::System.Array.Empty<" + arrayElemFq + ">(); }\n"
+                     + pad + "if (__len <= __cap)\n" + pad + "{\n"
+                     + pad + "    " + arrayElemFq + "[] __fit = new " + arrayElemFq + "[__len];\n"
+                     + pad + "    new global::System.ReadOnlySpan<" + arrayElemFq + ">(__sb, __len).CopyTo(__fit);\n"
+                     + pad + "    return __fit;\n"
+                     + pad + "}\n"
+                     + pad + arrayElemFq + "[] __buf = new " + arrayElemFq + "[__len];\n"
+                     + pad + "int __w;\n"
+                     + pad + "fixed (" + arrayElemFq + "* __bp = __buf)\n" + pad + "{\n"
+                     + pad + "    __w = " + field + "(" + prefix + "__bp, __len);\n"
+                     + pad + "}\n"
+                     // A count that grew between the calls is clamped, never read past the buffer.
+                     + pad + "if (__w < __len) { global::System.Array.Resize(ref __buf, __w < 0 ? 0 : __w); }\n"
+                     + pad + "return __buf;\n";
+            }
             if (nativeRefReturn)
             {
                 // A CObject return goes through the per-object wrapper cache, so calling the same getter twice
@@ -295,7 +328,7 @@ namespace LuminaSharp
         bool hasSpans = spanParams.Count > 0;
 
         // Trivial shape (no marshalling fixups, plain return): expression body / one-liner.
-        if (!hasStrings && !hasSpans && !stringReturn && !nativeRefReturn)
+        if (!hasStrings && !hasSpans && !stringReturn && !arrayReturn && !nativeRefReturn)
         {
             if (method.ReturnsVoid)
             {
@@ -492,6 +525,10 @@ namespace LuminaSharp
         if (fqName == EntityType)
         {
             return Kind.Entity;
+        }
+        if (type is IArrayTypeSymbol { IsSZArray: true })
+        {
+            return Kind.Array;
         }
         return Kind.Pass;
     }

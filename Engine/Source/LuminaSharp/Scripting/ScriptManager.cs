@@ -1,4 +1,5 @@
-using System;
+﻿using System;
+using Lumina;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -429,12 +430,13 @@ internal sealed class ScriptManager
         // Same rationale for the other process-static holders of script-side state: each roots user types, or
         // GCHandles over user delegates, that would otherwise pin the collectible generation across the unload.
         // The next generation rebuilds them lazily / re-subscribes.
-        Native.ClearAllManagedTimers();       // world timers whose Action captures a script instance
-        Native.ClearAllManagedTweens();       // tween callbacks whose Action captures a script instance
+        CTimerLibrary.ClearAllManaged();      // world timers whose Action captures a script instance
         UIDataModel.DisposeAll();             // MVVM bindings (user ViewModel + native data model)
         Asset.PurgePending();                 // in-flight async asset-load callbacks
+        ScriptCallback.PurgeAll();            // in-flight one-shot callbacks handed to native
         PropertyAccessor.ClearScriptCaches(); // cached get/set delegates over user property types
         ScriptFunctionDispatch.Reset();        // [ScriptFunction] bindings, which root user MethodInfos
+        ScriptInvokerRegistry.Clear();         // generated invokers, which are delegates over user methods
         NativeObjectMarshal.ClearTypeCache();  // wrapper instantiations keyed by user parameter types
 
         // Every strong handle has to go before the unload, or it roots the generation the ALC is dropping.
@@ -447,6 +449,9 @@ internal sealed class ScriptManager
         // dropped too and re-created lazily against the next generation.
         Native.ReleaseAllManagedInstances();
         Scriptables = null;
+
+        // Last, because an OnDetach above can bind one and an earlier purge would leave it rooting this ALC.
+        DelegateBindings.PurgeAll();
 
         // Holds no handles of its own, but it holds the TypeLibrary, which holds user Types. Cleared here
         // so the teardown table stays complete rather than depending on this runtime being harmless.
