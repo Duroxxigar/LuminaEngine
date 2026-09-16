@@ -2,13 +2,16 @@
 
 #include "Core/Object/ObjectHandleTyped.h"
 #include "Containers/String.h"
+#include "Core/Object/ObjectMacros.h"
 #include "WorldTypes.h"
+#include "WorldContext.generated.h"
 
 namespace Lumina
 {
     class CWorld;
     class CGameInstance;
 
+    REFLECT()
     enum class ENetMode : uint8
     {
         Standalone,

@@ -1,4 +1,5 @@
 ﻿#include "RuntimePCH.h"
+#include "World/Entity/Systems/ParticleSystemLibrary.h"
 #include "AnimNotifyDefaults.h"
 #include "World/ECS/Registry.h"
 
@@ -91,7 +92,7 @@ namespace Lumina
 
         if (bAttachToSocket && !Socket.empty())
         {
-            World->SpawnParticleSystemAttached(ParticleSystem, Entity, FName(Socket.c_str()), Offset, Lifetime);
+            CParticleSystemLibrary::SpawnParticleSystemAttached(World, ParticleSystem, Entity, FName(Socket.c_str()), Offset, Lifetime);
             return;
         }
 
@@ -101,7 +102,7 @@ namespace Lumina
             return;
         }
 
-        const ECS::FEntity Spawned = World->SpawnParticleSystem(ParticleSystem, SpawnTransform, Lifetime);
+        const ECS::FEntity Spawned = CParticleSystemLibrary::SpawnParticleSystem(World, ParticleSystem, SpawnTransform, Lifetime);
         if (Spawned != ECS::NullEntity)
         {
             World->GetComponent<SParticleSystemComponent>(Spawned).EmitterOffset = Offset;

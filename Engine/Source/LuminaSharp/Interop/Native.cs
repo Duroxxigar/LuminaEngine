@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 
 namespace LuminaSharp;
 
@@ -40,11 +40,6 @@ public static unsafe partial class Native
     // The world's own FSystemContext*, so OnTeardown gets a valid context outside a scheduler tick.
     [NativeCall(EntryPoint = "LuminaSharp_World_GetSystemContext")] public static partial IntPtr WorldGetSystemContext(ulong World);
 
-    // Registry-backed validity, so a recycled id reads back invalid rather than merely component-less.
-    [NativeCall(EntryPoint = "LuminaSharp_World_IsValidEntity", SuppressGCTransition = true)] public static partial int WorldIsValidEntity(ulong World, uint Entity);
-
-    // Returns the true total whether or not the buffer fits, so an under-sized one is retried like FindEntityScripts.
-    [NativeCall(EntryPoint = "LuminaSharp_World_GetEntitiesByTag")] public static partial int WorldGetEntitiesByTag(ulong World, string Tag, uint* OutIds, int Capacity);
 
     // Row memory as a raw pointer, since the row type is only known at runtime; CDataTable gates the reads.
     [NativeCall(EntryPoint = "LuminaSharp_DataTable_FindRow")] public static partial IntPtr DataTableFindRow(IntPtr Table, string RowName);
@@ -62,6 +57,10 @@ public static unsafe partial class Native
     [NativeCall] public static partial IntPtr FunctionParamAt(IntPtr Function, int Index);
     [NativeCall] public static partial IntPtr FunctionReturnParam(IntPtr Function);
     [NativeCall] public static partial string FunctionGetName(IntPtr Function);
+
+    // Points native dispatch at the generated invoker, and drops every such pointer before a reload.
+    [NativeCall] public static partial void FunctionPublishInvoker(IntPtr Function, nint Invoker, IntPtr Offsets);
+    [NativeCall] public static partial void FunctionClearInvokers();
 
     // The offset of a property within whatever container holds it, which is how a call frame's blittable
     // slots are addressed without a crossing per argument.
@@ -178,6 +177,8 @@ public static unsafe partial class Native
     // handle still names a live, non-destroyed object, else zero. Pure reads -> SuppressGCTransition.
     [NativeCall(SuppressGCTransition = true)] public static partial long ObjectGetHandle(IntPtr Object);
     [NativeCall(SuppressGCTransition = true)] public static partial IntPtr ObjectResolve(int Index, int Generation);
+    [NativeCall(SuppressGCTransition = true)] public static partial IntPtr ObjectGetEntry(IntPtr Object);
+    [NativeCall(SuppressGCTransition = true)] public static partial int ObjectLayoutOffset(int Which);
 
     // Per-CObject managed-instance cache backing Wrapper<T>.ForObject: Get returns the weak GC handle of the
     // wrapper this object already has (or zero), Set installs one and frees whatever it replaces (a zero

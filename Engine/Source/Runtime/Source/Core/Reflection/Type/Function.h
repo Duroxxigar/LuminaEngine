@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Containers/Name.h"
 #include "Containers/Span.h"
@@ -105,6 +105,18 @@ namespace Lumina
         /** Frame must have been initialized and filled. Context is the object, or null for a static. */
         RUNTIME_API void Invoke(void* Context, void* Frame) const;
 
+        /** The generated managed entry point for a script function, or null while none has been published. */
+        NODISCARD void* GetManagedInvoker() const { return ManagedInvoker; }
+
+        NODISCARD const int32* GetManagedOffsets() const { return ManagedOffsets; }
+
+        /** Published by the managed binder on first dispatch, and cleared by it before a generation unloads. */
+        void SetManagedInvoker(void* Invoker, const int32* Offsets) const
+        {
+            ManagedInvoker = Invoker;
+            ManagedOffsets = Offsets;
+        }
+
     private:
 
         friend class FFunctionBuilder;
@@ -117,6 +129,11 @@ namespace Lumina
         EFunctionFlags    Flags       = EFunctionFlags::None;
         uint16            NumParams   = 0;
         uint16            ParmsSize   = 0;
+
+        // Mutable because dispatch holds the function by const reference, and publishing is a cache fill
+        // rather than a change to what the function is.
+        mutable void*         ManagedInvoker = nullptr;
+        mutable const int32*  ManagedOffsets = nullptr;
     };
 
     struct FFunctionParams;

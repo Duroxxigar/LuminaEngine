@@ -25,6 +25,9 @@ namespace Lumina
         Channel11   = BIT(13),
         Channel12   = BIT(14),
         Channel13   = BIT(15),
+
+        /** Every layer, which is what an unfiltered query means. */
+        All         = 0xFFFF,
     };
     
     ENUM_CLASS_FLAGS(ECollisionProfiles);

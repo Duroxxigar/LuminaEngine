@@ -6,11 +6,20 @@ namespace LuminaSharp;
 /// Base for the generated opaque wrappers around native CObjects. Holds a WEAK handle (the CObject's
 /// object-array index + generation) rather than a bare pointer.
 /// </summary>
-public class NativeObject
+public unsafe class NativeObject
 {
     private IntPtr RawHandle;            // pointer captured at construction; the fallback when untracked
     private int ObjectIndex = -1;        // GObjectArray slot, or -1 if the object isn't array-tracked
     private int ObjectGeneration;        // slot generation at capture; a free/reuse bumps it -> stale
+    private byte* EntryPtr;              // the slot's array entry, which outlives every object in it
+
+    // Read once. The entry outlives its objects, so revalidating through it needs no crossing at all.
+    private static readonly int GenerationOffset = Native.ObjectLayoutOffset(0);
+    private static readonly int ObjectOffset = Native.ObjectLayoutOffset(1);
+    private static readonly int FlagsOffset = Native.ObjectLayoutOffset(2);
+    private static readonly uint MarkedDestroy = (uint)Native.ObjectLayoutOffset(3);
+    private static readonly bool bFastPathUsable =
+        GenerationOffset >= 0 && ObjectOffset >= 0 && FlagsOffset >= 0 && MarkedDestroy != 0;
 
     protected internal NativeObject(IntPtr Handle)
     {
@@ -32,12 +41,26 @@ public class NativeObject
         long Packed = Native.ObjectGetHandle(Handle);
         ObjectIndex = unchecked((int)Packed);
         ObjectGeneration = (int)(Packed >> 32);
+        EntryPtr = bFastPathUsable && ObjectIndex >= 0 ? (byte*)Native.ObjectGetEntry(Handle) : null;
     }
 
     /// <summary>True while the native CObject this wraps is still alive. </summary>
-    public bool IsValid => ObjectIndex < 0
-        ? RawHandle != IntPtr.Zero
-        : Native.ObjectResolve(ObjectIndex, ObjectGeneration) != IntPtr.Zero;
+    public bool IsValid
+    {
+        get
+        {
+            if (ObjectIndex < 0)
+            {
+                return RawHandle != IntPtr.Zero;
+            }
+            if (EntryPtr != null && *(int*)(EntryPtr + GenerationOffset) == ObjectGeneration)
+            {
+                byte* Object = *(byte**)(EntryPtr + ObjectOffset);
+                return Object != null && (*(uint*)(Object + FlagsOffset) & MarkedDestroy) == 0;
+            }
+            return Native.ObjectResolve(ObjectIndex, ObjectGeneration) != IntPtr.Zero;
+        }
+    }
 
     /// <summary>True once this wrapper has been paired with a native object at all.
     /// <para>A <c>[Property]</c> accessor is a view over native bytes, so it has nothing to read
@@ -72,15 +95,54 @@ public class NativeObject
             {
                 return RawHandle;
             }
+
+            // Four loads and no crossing, which is the whole point; a recycled slot falls to the slow path
+            // because only a full resolve knows whether the handle was redirected by a reinstance.
+            if (EntryPtr != null)
+            {
+                if (*(int*)(EntryPtr + GenerationOffset) == ObjectGeneration)
+                {
+                    byte* Object = *(byte**)(EntryPtr + ObjectOffset);
+                    if (Object != null && (*(uint*)(Object + FlagsOffset) & MarkedDestroy) == 0)
+                    {
+                        return (IntPtr)Object;
+                    }
+                    throw Destroyed();
+                }
+                return ResolveRedirected();
+            }
+
             IntPtr Pointer = Native.ObjectResolve(ObjectIndex, ObjectGeneration);
             if (Pointer == IntPtr.Zero)
             {
-                throw new InvalidOperationException(
-                    "Use of a destroyed native object: the CObject this wrapper referenced has been freed. " +
-                    "Don't cache wrappers across frames or structural changes, re-fetch it (Asset.Load, the property, ...).");
+                throw Destroyed();
             }
             return Pointer;
         }
+    }
+
+    // A generation bump means the slot was recycled or the object reinstanced, and only native can tell which.
+    private IntPtr ResolveRedirected()
+    {
+        IntPtr Pointer = Native.ObjectResolve(ObjectIndex, ObjectGeneration);
+        if (Pointer == IntPtr.Zero)
+        {
+            throw Destroyed();
+        }
+
+        RawHandle = Pointer;
+        long Packed = Native.ObjectGetHandle(Pointer);
+        ObjectIndex = unchecked((int)Packed);
+        ObjectGeneration = (int)(Packed >> 32);
+        EntryPtr = ObjectIndex >= 0 ? (byte*)Native.ObjectGetEntry(Pointer) : null;
+        return Pointer;
+    }
+
+    private static InvalidOperationException Destroyed()
+    {
+        return new InvalidOperationException(
+            "Use of a destroyed native object: the CObject this wrapper referenced has been freed. " +
+            "Don't cache wrappers across frames or structural changes, re-fetch it (Asset.Load, the property, ...).");
     }
 
     /// <summary>Throws <see cref="InvalidOperationException"/> if the object has been destroyed.</summary>

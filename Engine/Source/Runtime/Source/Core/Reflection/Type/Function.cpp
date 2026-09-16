@@ -1,4 +1,4 @@
-#include "RuntimePCH.h"
+﻿#include "RuntimePCH.h"
 #include "Function.h"
 
 #include "Core/Object/Class.h"
@@ -9,7 +9,9 @@
 
 namespace Lumina
 {
-    static_assert(sizeof(FFunction) == 48, "FFunction changed size; re-check its member order.");
+    // 48 before the two managed dispatch pointers, which every function carries so that reaching them costs
+    // no indirection on the call that matters.
+    static_assert(sizeof(FFunction) == 64, "FFunction changed size; re-check its member order.");
     static_assert(std::is_trivially_destructible_v<FFunction>,
         "FFunction lives in the property arena, which destroys properties and leaves everything else alone.");
 

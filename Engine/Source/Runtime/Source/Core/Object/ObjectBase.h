@@ -42,6 +42,9 @@ namespace Lumina
 
         RUNTIME_API EObjectFlags GetFlags() const { return ObjectFlags; }
 
+        // The managed wrapper reads this flag in place rather than crossing back to ask whether an object died.
+        static size_t GetFlagsOffsetForInterop() { return offsetof(CObjectBase, ObjectFlags); }
+
         RUNTIME_API void ClearFlags(EObjectFlags Flags) const { EnumRemoveFlags(ObjectFlags, Flags); }
         RUNTIME_API void SetFlag(EObjectFlags Flags) const { EnumAddFlags(ObjectFlags, Flags); }
         RUNTIME_API bool HasAnyFlag(EObjectFlags Flag) const { return EnumHasAnyFlags(ObjectFlags, Flag); }

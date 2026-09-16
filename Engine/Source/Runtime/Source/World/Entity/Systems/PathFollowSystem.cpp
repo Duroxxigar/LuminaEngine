@@ -142,6 +142,7 @@ namespace Lumina
                     FNavQueryFilter Filter;
                     Filter.MaxCorners = SPathFollowComponent::MaxCorners;
                     const bool bFound = NavMesh && NavMesh->FindPath(AgentPos, Goal, Filter, Path) && Path.bValid;
+                    Comp.LastPathResult = NavMesh ? Path.Result : ENavPathResult::NoNavMesh;
 
                     // Nothing was asked of the navmesh, so this is not a route failure.
                     if (!bFound && Path.bQueryUnavailable)

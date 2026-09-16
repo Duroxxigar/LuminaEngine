@@ -17,6 +17,43 @@
 
 namespace Lumina::ClangUtils
 {
+    // A parameter's default expression as written, taken from the tokens past the top-level '='.
+    inline std::string GetDefaultArgument(const CXCursor& ParmCursor)
+    {
+        CXTranslationUnit TranslationUnit = clang_Cursor_getTranslationUnit(ParmCursor);
+        CXToken* Tokens = nullptr;
+        unsigned NumTokens = 0;
+        clang_tokenize(TranslationUnit, clang_getCursorExtent(ParmCursor), &Tokens, &NumTokens);
+
+        std::string Result;
+        int Depth = 0;
+        bool bPastEquals = false;
+        for (unsigned Index = 0; Index < NumTokens; ++Index)
+        {
+            const CXString Spelling = clang_getTokenSpelling(TranslationUnit, Tokens[Index]);
+            const char* Text = clang_getCString(Spelling);
+            const std::string Token = Text != nullptr ? Text : "";
+            clang_disposeString(Spelling);
+
+            if (!bPastEquals)
+            {
+                if (Token == "<") { ++Depth; }
+                else if (Token == ">") { --Depth; }
+                else if (Token == "=" && Depth == 0) { bPastEquals = true; }
+                continue;
+            }
+            Result += Token;
+        }
+        clang_disposeTokens(TranslationUnit, Tokens, NumTokens);
+
+        // The extent can run one token past the parameter, so a separator is trimmed rather than kept.
+        while (!Result.empty() && (Result.back() == ',' || Result.back() == ')'))
+        {
+            Result.pop_back();
+        }
+        return Result;
+    }
+
     // Canonicalize a path for the AllHeaders hash key (forward slashes, case preserved): the JSON
     // registration and parse-time cursor sides must agree byte-for-byte or types fail to register.
     inline std::string NormalizeHeaderPath(std::string Input)

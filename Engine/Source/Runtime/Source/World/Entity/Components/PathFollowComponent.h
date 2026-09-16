@@ -40,6 +40,7 @@ namespace Lumina
             bPathDirty     = true;
             Status         = EPathFollowStatus::Searching;
             ConsecutiveFailures = 0;
+            LastPathResult = ENavPathResult::NotQueried;
         }
 
         /** Track an entity. The system re-projects the entity's current location each tick. */
@@ -51,6 +52,7 @@ namespace Lumina
             bPathDirty   = true;
             Status       = bHasTarget ? EPathFollowStatus::Searching : EPathFollowStatus::None;
             ConsecutiveFailures = 0;
+            LastPathResult = ENavPathResult::NotQueried;
         }
 
         /** Clear the goal and any cached path. */
@@ -67,6 +69,7 @@ namespace Lumina
             PathEpoch = 0;
             Status = EPathFollowStatus::None;
             ConsecutiveFailures = 0;
+            LastPathResult = ENavPathResult::NotQueried;
         }
 
         FUNCTION()
@@ -87,6 +90,14 @@ namespace Lumina
         /** Number of consecutive failed queries since the last success. Useful for script-side give-up logic. */
         FUNCTION()
         int32 GetConsecutivePathFailures() const { return ConsecutiveFailures; }
+
+        // Why the most recent query ended as it did, so a stalled agent can say what stopped it.
+        FUNCTION()
+        ENavPathResult GetLastPathResult() const { return LastPathResult; }
+
+        // The same outcome as text, ready to drop into a log line.
+        FUNCTION()
+        FString DescribeLastPathResult() const { return FString(ToString(LastPathResult)); }
 
         // True when the next corner is a link hop that gameplay drives rather than a walk.
         FUNCTION()
@@ -166,5 +177,8 @@ namespace Lumina
 
         /** Resets to 0 on a successful query, increments on every failed query. */
         int32 ConsecutiveFailures = 0;
+
+        // Latched reason from the most recent path query, whether it succeeded or not.
+        ENavPathResult LastPathResult = ENavPathResult::NotQueried;
     };
 }

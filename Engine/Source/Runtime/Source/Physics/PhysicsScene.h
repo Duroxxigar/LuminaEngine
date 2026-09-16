@@ -12,6 +12,8 @@
 #include "Ray/RayCast.h"
 #include "World/Entity/Events/ImpulseEvent.h"
 #include "Renderer/SkeletonResource.h"
+#include "Core/Object/ObjectMacros.h"
+#include "PhysicsScene.generated.h"
 
 namespace Lumina
 {
@@ -38,6 +40,7 @@ namespace Lumina::Physics
     };
 
     // Runtime motor drive mode for a powered Hinge/Slider constraint.
+    REFLECT()
     enum class EConstraintMotorMode : uint8
     {
         Off      = 0,   // Motor disabled (joint is free / friction only).
@@ -47,26 +50,65 @@ namespace Lumina::Physics
 
     // Backend-neutral description of one constraint, built by gameplay/editor code and resolved by the scene.
     // World-space frames; a body set to ECS::NullEntity is treated as "fixed to the world".
+    REFLECT()
     struct FConstraintDesc
     {
+        GENERATED_BODY()
+
+        PROPERTY()
         EPhysicsConstraintType  Type        = EPhysicsConstraintType::Point;
+
+        PROPERTY()
         ECS::FEntity            BodyA       = ECS::NullEntity;            // ECS::NullEntity => world anchor (parent).
+
+        PROPERTY()
         ECS::FEntity            BodyB       = ECS::NullEntity;            // The constrained (child) body.
+
+        PROPERTY()
         FVector3                Anchor      = FVector3(0.0f);        // World pivot (Point/Hinge/Slider/Cone).
+
+        PROPERTY()
         FVector3                Axis        = FVector3(0.0f, 1.0f, 0.0f); // Hinge/Cone axis or Slider direction (world).
+
+        PROPERTY()
         FVector3                AnchorB     = FVector3(0.0f);        // Distance: second attach point (Anchor is the first).
+
+        PROPERTY()
         float                   MinLimit    = 0.0f;                  // Hinge angle (rad) / Slider pos (m) / Distance min.
+
+        PROPERTY()
         float                   MaxLimit    = 0.0f;                  // Hinge angle (rad) / Slider pos (m) / Distance max.
+
+        PROPERTY()
         float                   HalfConeAngle = 0.0f;               // Cone half-angle (rad).
+
+        PROPERTY()
         bool                    bHasLimits  = false;                 // When false, the joint is unlimited on its free axis.
+
+        PROPERTY()
         float                   LimitFrequency = 0.0f;               // Soft-limit spring (0 = hard limit).
+
+        PROPERTY()
         float                   LimitDamping   = 0.0f;
+
+        PROPERTY()
         float                   MaxFriction    = 0.0f;               // Hinge friction torque (N m) / Slider friction force (N).
+
+        PROPERTY()
         float                   MotorFrequency = 0.0f;               // Position-motor spring (0 = stiff default).
+
+        PROPERTY()
         float                   MotorDamping   = 0.0f;
+
+        PROPERTY()
         float                   MotorForceLimit  = 0.0f;             // Slider motor max force (N), 0 = unlimited.
+
+        PROPERTY()
         float                   MotorTorqueLimit = 0.0f;             // Hinge motor max torque (N m), 0 = unlimited.
+
+        PROPERTY()
         float                   BreakForce  = 0.0f;                  // Disable the joint when applied force exceeds this (N). 0 = unbreakable.
+
     };
 
     // One static collision instance with no entity of its own (foliage). World space; Shape wins over Mesh.

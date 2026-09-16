@@ -9,16 +9,16 @@ namespace LuminaSharp;
 /// appear with no work. Use <see cref="Sample"/> to break a hot method into sub-scopes:
 /// <code>using (Profiler.Sample("Perception")) { ... }</code>
 /// </summary>
-public static partial class Profiler
+public static class Profiler
 {
     /// <summary>True while the editor Gameplay Profiler is open (or recording is otherwise enabled).</summary>
-    public static bool Enabled => IsEnabledRaw() != 0;
+    public static bool Enabled => Lumina.CGameplayProfilerLibrary.IsProfilerEnabled();
 
     /// <summary>Open a named scope. Pair with <see cref="End"/>; prefer <see cref="Sample"/> for exception safety.</summary>
-    public static void Begin(string Name) => BeginRaw(Name);
+    public static void Begin(string Name) => Lumina.CGameplayProfilerLibrary.BeginScope(Name);
 
     /// <summary>Close the most recently opened scope.</summary>
-    public static void End() => EndRaw();
+    public static void End() => Lumina.CGameplayProfilerLibrary.EndScope();
 
     /// <summary>
     /// A <c>using</c>-scoped timer that closes when the block exits (including on exceptions):
@@ -29,14 +29,7 @@ public static partial class Profiler
     /// <summary>The disposable returned by <see cref="Sample"/>. Stack-only (a ref struct); do not store it.</summary>
     public readonly ref struct Scope
     {
-        public Scope(string Name) => BeginRaw(Name);
-        public void Dispose() => EndRaw();
+        public Scope(string Name) => Lumina.CGameplayProfilerLibrary.BeginScope(Name);
+        public void Dispose() => Lumina.CGameplayProfilerLibrary.EndScope();
     }
-
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_GameplayProfiler_Begin")]
-    private static partial void BeginRaw(string Name);
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_GameplayProfiler_End")]
-    private static partial void EndRaw();
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_GameplayProfiler_IsEnabled")]
-    private static partial int IsEnabledRaw();
 }

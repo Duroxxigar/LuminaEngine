@@ -1789,7 +1789,14 @@ namespace Lumina
         bool FindPath(const FSystemContext& Context, const FVector3& Start, const FVector3& End, const FNavQueryFilter& Filter, FNavPath& Out)
         {
             FNavMesh* Mesh = FirstReadyNavMesh(Context);
-            return Mesh && Mesh->FindPath(Start, End, Filter, Out);
+            if (!Mesh)
+            {
+                // Reset rather than leave a caller's reused path reading as its previous outcome.
+                Out = {};
+                Out.Result = ENavPathResult::NoNavMesh;
+                return false;
+            }
+            return Mesh->FindPath(Start, End, Filter, Out);
         }
 
         bool ProjectPoint(const FSystemContext& Context, const FVector3& World, const FVector3& Extents, const FNavQueryFilter& Filter, FVector3& Out)
@@ -1851,9 +1858,15 @@ namespace Lumina
         bool FindPath(CWorld* World, const FVector3& Start, const FVector3& End, int32 MaxCorners, FNavPath& Out)
         {
             FNavMesh* Mesh = FirstReadyNavMeshFromWorld(World);
+            if (!Mesh)
+            {
+                Out = {};
+                Out.Result = ENavPathResult::NoNavMesh;
+                return false;
+            }
             FNavQueryFilter Filter;
             Filter.MaxCorners = MaxCorners;
-            return Mesh && Mesh->FindPath(Start, End, Filter, Out);
+            return Mesh->FindPath(Start, End, Filter, Out);
         }
 
         bool ProjectPoint(CWorld* World, const FVector3& Point, const FVector3& Extents, FVector3& Out)

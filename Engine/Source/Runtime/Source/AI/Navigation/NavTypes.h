@@ -180,6 +180,43 @@ namespace Lumina
         OffMeshLink     = 1 << 2,
     };
 
+    // Why a path query ended as it did, set on every FindPath whether or not it produced a route.
+    REFLECT()
+    enum class ENavPathResult : uint8
+    {
+        NotQueried,
+        Success,
+        NoNavMesh,
+        NavigationCompiledOut,
+        QueryUnavailable,
+        StartOffNavMesh,
+        EndOffNavMesh,
+        NoRoute,
+        CornersUnavailable,
+        Partial,
+        Truncated,
+    };
+
+    // Reason text for a path result, phrased to read as the tail of a log line.
+    constexpr const char* ToString(ENavPathResult Result)
+    {
+        switch (Result)
+        {
+            case ENavPathResult::NotQueried:            return "no path query has run yet";
+            case ENavPathResult::Success:               return "found a complete path";
+            case ENavPathResult::NoNavMesh:             return "no baked navmesh is ready in this world";
+            case ENavPathResult::NavigationCompiledOut: return "navigation was compiled out of this build";
+            case ENavPathResult::QueryUnavailable:      return "every pooled navmesh query was busy, so nothing ran";
+            case ENavPathResult::StartOffNavMesh:       return "the start location is not on the navmesh";
+            case ENavPathResult::EndOffNavMesh:         return "the target location is not on the navmesh";
+            case ENavPathResult::NoRoute:               return "no route connects the start to the target";
+            case ENavPathResult::CornersUnavailable:    return "a corridor was found but its corners could not be extracted";
+            case ENavPathResult::Partial:               return "only found a partial path, so the target is unreachable";
+            case ENavPathResult::Truncated:             return "the path was cut short by a buffer or search limit";
+        }
+        return "unrecognized path result";
+    }
+
     /** Result of an async path request. Owned by the requester; can be polled or awaited. */
     struct FNavPath
     {
@@ -202,22 +239,45 @@ namespace Lumina
         /** FNavMesh topology epoch this was found against. A path is a snapshot, not a live corridor, so
          *  anything following one across frames re-queries once this stops matching the mesh. */
         uint64 Epoch = 0;
+
+        // Why the query ended as it did; pass to ToString for the loggable reason.
+        ENavPathResult Result = ENavPathResult::NotQueried;
     };
 
     /** Outcome of a surface walk along a straight line. */
+    REFLECT()
     struct FNavRaycastResult
     {
+        GENERATED_BODY()
+
         /** Where the walk stopped, so the wall it hit, or End when nothing blocked it. */
+        PROPERTY()
         FVector3 Point = FVector3(0.0f);
 
         /** Wall normal at the hit; zero when unobstructed. */
+        PROPERTY()
         FVector3 Normal = FVector3(0.0f);
 
-        /** Fraction along Start -> End at which the walk stopped; 1 when unobstructed. */
+        /** Fraction along Start to End at which the walk stopped, and one when unobstructed. */
+        PROPERTY()
         float T = 1.0f;
 
         /** True when a navmesh edge blocked the walk. */
+        PROPERTY()
         bool bHit = false;
+    };
+
+    /** A point query's answer, carrying the found flag a by-value result cannot express as an optional. */
+    REFLECT()
+    struct FNavPoint
+    {
+        GENERATED_BODY()
+
+        PROPERTY()
+        FVector3 Point = FVector3(0.0f);
+
+        PROPERTY()
+        bool bFound = false;
     };
 
     /** Per-call query parameters. Cheap to copy, no heap. */

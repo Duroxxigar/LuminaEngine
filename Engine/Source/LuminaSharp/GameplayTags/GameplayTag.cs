@@ -1,4 +1,5 @@
 using System;
+using Lumina;
 
 namespace LuminaSharp;
 
@@ -24,23 +25,23 @@ public readonly partial struct GameplayTag : IEquatable<GameplayTag>
     /// <summary>Intern (or look up) a dotted tag name and its ancestors; returns <see cref="None"/> if empty.</summary>
     public static GameplayTag Request(string Name)
     {
-        return string.IsNullOrEmpty(Name) ? None : new GameplayTag(RequestRaw(Name));
+        return string.IsNullOrEmpty(Name) ? None : new GameplayTag(CGameplayTagLibrary.RequestTag(Name));
     }
 
     public bool IsValid => Id != 0;
 
     /// <summary>The dotted tag name, or empty for <see cref="None"/>.</summary>
-    public string Name => Id == 0 ? string.Empty : GetNameRaw(Id);
+    public string Name => Id == 0 ? string.Empty : CGameplayTagLibrary.GetTagName(Id);
 
     /// <summary>The immediate parent tag (<c>"Ability.Fire.Fireball"</c> -> <c>"Ability.Fire"</c>), or None at the root.</summary>
-    public GameplayTag Parent => new GameplayTag(GetParentRaw(Id));
+    public GameplayTag Parent => new GameplayTag(CGameplayTagLibrary.GetParent(Id));
 
     /// <summary>
     /// Hierarchical match: true when this tag IS <paramref name="Other"/> or a descendant of it (this is at
     /// or below Other in the tree). So <c>Request("Ability.Fire.Fireball").Matches(Request("Ability.Fire"))</c>
     /// is true, but the reverse is false.
     /// </summary>
-    public bool Matches(GameplayTag Other) => MatchesRaw(Id, Other.Id) != 0;
+    public bool Matches(GameplayTag Other) => CGameplayTagLibrary.Matches(Id, Other.Id);
 
     /// <summary>Exact (non-hierarchical) tag equality.</summary>
     public bool MatchesExact(GameplayTag Other) => Id != 0 && Id == Other.Id;
@@ -51,13 +52,4 @@ public readonly partial struct GameplayTag : IEquatable<GameplayTag>
     public static bool operator ==(GameplayTag A, GameplayTag B) => A.Id == B.Id;
     public static bool operator !=(GameplayTag A, GameplayTag B) => A.Id != B.Id;
     public override string ToString() => Id == 0 ? "GameplayTag.None" : Name;
-
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_GameplayTag_Request")]
-    private static partial uint RequestRaw(string Name);
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_GameplayTag_Matches")]
-    private static partial int MatchesRaw(uint A, uint B);
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_GameplayTag_GetParent")]
-    private static partial uint GetParentRaw(uint A);
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_GameplayTag_GetName")]
-    private static partial string GetNameRaw(uint A);
 }

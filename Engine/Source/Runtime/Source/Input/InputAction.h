@@ -172,8 +172,11 @@ namespace Lumina
     // Per-frame evaluated state of one action within one input context. Plain data, mirrored byte for byte by
     // LuminaSharp.InputActionState: the script layer reads the whole array through a pointer instead of
     // crossing into native per action.
+    REFLECT()
     struct FInputActionState
     {
+        GENERATED_BODY()
+
         enum EFlags : uint32
         {
             Flag_Down     = 1u << 0,  ///< Down this frame.
@@ -183,9 +186,17 @@ namespace Lumina
             Flag_Tapped   = 1u << 4,  ///< Released this frame after less than TapTime down.
         };
 
+        PROPERTY()
         float  X = 0.0f;
+
+        PROPERTY()
         float  Y = 0.0f;
-        float  HeldTime = 0.0f;   ///< Seconds the current press has lasted; 0 while up.
+
+        /** Seconds the current press has lasted, and zero while up. */
+        PROPERTY()
+        float  HeldTime = 0.0f;
+
+        PROPERTY()
         uint32 Flags = 0;
 
         bool IsDown()     const { return (Flags & Flag_Down) != 0; }

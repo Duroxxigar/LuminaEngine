@@ -10,13 +10,27 @@ namespace Lumina
 {
     // Authoring parameters for a camera shake (see SCameraSystem::PlayCameraShake). The shake is additive on
     // the rendered view, so it composes with the cinematic blend and never moves the camera entity.
-    struct FCameraShakeParams
+    REFLECT()
+    struct RUNTIME_API FCameraShakeParams
     {
+        GENERATED_BODY()
+
+        PROPERTY()
         FVector3 LocationAmplitude = FVector3(0.0f);  // max local-space positional offset per axis (world units)
+
+        PROPERTY()
         FVector3 RotationAmplitude = FVector3(0.0f);  // max rotation per axis in degrees (X pitch, Y yaw, Z roll)
+
+        PROPERTY()
         float    Frequency         = 10.0f;           // oscillation rate (Hz)
+
+        PROPERTY()
         float    Duration          = 0.5f;            // seconds; <= 0 loops until explicitly stopped
+
+        PROPERTY()
         float    BlendInTime       = 0.05f;
+
+        PROPERTY()
         float    BlendOutTime      = 0.2f;
     };
 

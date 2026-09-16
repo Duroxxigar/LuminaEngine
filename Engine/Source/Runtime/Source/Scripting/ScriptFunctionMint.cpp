@@ -1,4 +1,4 @@
-#include "RuntimePCH.h"
+﻿#include "RuntimePCH.h"
 #include "ScriptFunctionMint.h"
 
 #include "Core/Object/ScriptClass.h"
@@ -99,7 +99,41 @@ namespace Lumina::Scripting
             return;
         }
 
+        // Straight into the generated entry point once the binder has published one, which skips the
+        // dispatcher's handle lookup, type read and cache probe entirely.
+        if (void* Invoker = Function.GetManagedInvoker())
+        {
+            using FDirect = void (*)(void*, void*, const int32*);
+            reinterpret_cast<FDirect>(Invoker)(Instance, Frame, Function.GetManagedOffsets());
+            return;
+        }
+
         using FDispatch = void (*)(void*, const void*, void*);
         reinterpret_cast<FDispatch>(Dispatcher)(Instance, &Function, Frame);
+    }
+
+    namespace
+    {
+        // Every function the managed binder published to, so a reload can drop them all before the code they
+        // point at unloads.
+        TVector<const FFunction*> GPublishedInvokers;
+    }
+
+    void PublishManagedInvoker(const FFunction& Function, void* Invoker, const int32* Offsets)
+    {
+        if (Function.GetManagedInvoker() == nullptr)
+        {
+            GPublishedInvokers.push_back(&Function);
+        }
+        Function.SetManagedInvoker(Invoker, Offsets);
+    }
+
+    void ClearManagedInvokers()
+    {
+        for (const FFunction* Function : GPublishedInvokers)
+        {
+            Function->SetManagedInvoker(nullptr, nullptr);
+        }
+        GPublishedInvokers.clear();
     }
 }

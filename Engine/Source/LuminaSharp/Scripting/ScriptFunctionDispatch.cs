@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -20,16 +20,39 @@ public static unsafe class ScriptFunctionDispatch
     // its address straight back to a new one; on the pointer alone that would silently dispatch the old method.
     private static readonly Dictionary<(IntPtr Function, Type Type), FBound> BoundByFunction = new();
 
+    // Hashing that tuple costs more than the call it guards, so a direct-mapped line answers the repeat case
+    // and the dictionary stays the authority behind it. Power of two, masked rather than divided.
+    private const int CacheLines = 256;
+    private static readonly FCacheLine[] Cache = new FCacheLine[CacheLines];
+
+    // The offset arrays this dispatcher allocated, so a reset frees them rather than leaking a generation.
+    private static readonly List<nint> OwnedOffsets = new();
+
+    private struct FCacheLine
+    {
+        public IntPtr Function;
+        public Type?  Type;
+        public FBound Bound;
+    }
+
+    // An FFunction is arena allocated, so the low bits carry no entropy and the shift is what spreads it.
+    private static int LineOf(IntPtr Function)
+    {
+        return (int)(((ulong)Function >> 4) & (CacheLines - 1));
+    }
+
     private readonly struct FBound
     {
         public FBound(MethodInfo Method, FrameMarshal.FSlot[] Parameters, bool[]? WriteBack,
-            FrameMarshal.FSlot Return, bool bHasReturn)
+            FrameMarshal.FSlot Return, bool bHasReturn, nint Invoker, int* Offsets)
         {
             this.Method = Method;
             this.Parameters = Parameters;
             this.WriteBack = WriteBack;
             this.Return = Return;
             this.bHasReturn = bHasReturn;
+            this.Invoker = Invoker;
+            this.Offsets = Offsets;
         }
 
         public readonly MethodInfo            Method;
@@ -39,6 +62,10 @@ public static unsafe class ScriptFunctionDispatch
         public readonly bool[]?               WriteBack;
         public readonly FrameMarshal.FSlot    Return;
         public readonly bool                  bHasReturn;
+
+        // A managed function pointer to the generated entry point, zero when the generator declined.
+        public readonly nint                  Invoker;
+        public readonly int*                  Offsets;
     }
 
     [ManagedExport]
@@ -57,8 +84,26 @@ public static unsafe class ScriptFunctionDispatch
                 return;
             }
 
-            if (!TryBind(Target.GetType(), Function, out FBound Bound))
+            Type Owner = Target.GetType();
+
+            // Straight off the cache line when a generated invoker is bound, so the whole FBound is never
+            // copied out just to reach two of its fields.
+            ref FCacheLine Line = ref Cache[LineOf(Function)];
+            if (Line.Function == Function && ReferenceEquals(Line.Type, Owner) && Line.Bound.Invoker != 0)
             {
+                ((delegate* managed<nint, nint, int*, void>)Line.Bound.Invoker)(
+                    Instance, Frame, Line.Bound.Offsets);
+                return;
+            }
+
+            if (!TryBind(Owner, Function, out FBound Bound))
+            {
+                return;
+            }
+
+            if (Bound.Invoker != 0)
+            {
+                ((delegate* managed<nint, nint, int*, void>)Bound.Invoker)(Instance, Frame, Bound.Offsets);
                 return;
             }
 
@@ -99,21 +144,32 @@ public static unsafe class ScriptFunctionDispatch
     // than read as whatever happened to be at the offset.
     private static bool TryBind(Type Type, IntPtr Function, out FBound Bound)
     {
+        ref FCacheLine Line = ref Cache[LineOf(Function)];
+        if (Line.Function == Function && ReferenceEquals(Line.Type, Type))
+        {
+            Bound = Line.Bound;
+            return Bound.Method != null;
+        }
+
         var Key = (Function, Type);
         if (BoundByFunction.TryGetValue(Key, out Bound))
         {
+            Line.Function = Function;
+            Line.Type = Type;
+            Line.Bound = Bound;
             return Bound.Method != null;
         }
 
         Bound = default;
 
         string Name = Native.FunctionGetName(Function);
-        MethodInfo? Method = Type.GetMethod(Name,
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+        MethodInfo? Method = FindMethod(Type, Name, out int Overloads);
 
         if (Method == null)
         {
-            Debug.LogError($"Script function '{Name}' is reflected on {Type.Name} but the method is gone; the call is dropped.");
+            Debug.LogError(Overloads > 1
+                ? $"Script function '{Name}' names {Overloads} methods on {Type.Name}, which a name cannot tell apart; the call is dropped. Give each one its own name."
+                : $"Script function '{Name}' is reflected on {Type.Name} but the method is gone; the call is dropped.");
             BoundByFunction[Key] = default;
             return false;
         }
@@ -177,9 +233,68 @@ public static unsafe class ScriptFunctionDispatch
             return false;
         }
 
-        Bound = new FBound(Method, Parameters, WriteBack, Return, bHasReturn);
+        // Only after TryBind validated the same signature, so the invoker can never widen what is accepted.
+        nint Invoker = ScriptInvokerRegistry.Find(Type, Name);
+        int* Offsets = null;
+        if (Invoker != 0)
+        {
+            // Unmanaged, so the invoker indexes it with no bounds check and the GC never has to pin it.
+            int Count2 = Parameters.Length + (bHasReturn ? 1 : 0);
+            Offsets = (int*)NativeMemory.Alloc((nuint)Count2 * sizeof(int));
+            OwnedOffsets.Add((nint)Offsets);
+            for (int Index = 0; Index < Parameters.Length; ++Index)
+            {
+                Offsets[Index] = Parameters[Index].Offset;
+            }
+            if (bHasReturn)
+            {
+                Offsets[Parameters.Length] = Return.Offset;
+            }
+
+            // Published so the native thunk calls the generated entry point directly from here on, which
+            // skips this dispatcher's handle lookup, type read and cache probe entirely.
+            Native.FunctionPublishInvoker(Function, Invoker, (IntPtr)Offsets);
+        }
+
+        Bound = new FBound(Method, Parameters, WriteBack, Return, bHasReturn, Invoker, Offsets);
         BoundByFunction[Key] = Bound;
+        Line = ref Cache[LineOf(Function)];
+        Line.Function = Function;
+        Line.Type = Type;
+        Line.Bound = Bound;
         return true;
+    }
+
+    // Walked rather than looked up with GetMethod, which throws on an overload instead of reporting one.
+    private static MethodInfo? FindMethod(Type Type, string Name, out int Overloads)
+    {
+        MethodInfo? Match = null;
+        Overloads = 0;
+
+        foreach (MethodInfo Candidate in Type.GetMethods(
+                     BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        {
+            if (Candidate.Name != Name)
+            {
+                continue;
+            }
+
+            // A shadowed base declaration loses to the most derived one, the way a C# call site resolves it.
+            if (Match != null && Match.DeclaringType != Candidate.DeclaringType)
+            {
+                if (Candidate.DeclaringType!.IsSubclassOf(Match.DeclaringType!))
+                {
+                    Match = Candidate;
+                    Overloads = 1;
+                }
+                continue;
+            }
+
+            Match = Candidate;
+            ++Overloads;
+        }
+
+        return Overloads == 1 ? Match : null;
     }
 
     /// <summary>
@@ -190,6 +305,15 @@ public static unsafe class ScriptFunctionDispatch
     internal static void Reset()
     {
         BoundByFunction.Clear();
+        Array.Clear(Cache);
+        // Cleared natively first, since a published pointer outlives this table and would dangle.
+        Native.FunctionClearInvokers();
+        foreach (nint Offsets in OwnedOffsets)
+        {
+            NativeMemory.Free((void*)Offsets);
+        }
+        OwnedOffsets.Clear();
+        ScriptInvokerRegistry.Clear();
         FrameMarshal.Reset();
     }
 }

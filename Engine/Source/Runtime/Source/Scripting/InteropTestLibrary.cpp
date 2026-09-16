@@ -1,0 +1,67 @@
+﻿#include "RuntimePCH.h"
+
+#include "InteropTestLibrary.h"
+
+namespace Lumina
+{
+    namespace
+    {
+        int32 GMakeRangeCalls = 0;
+    }
+
+    void CInteropTestLibrary::MakeRange(int32 Count, TVector<int32>& Out)
+    {
+        ++GMakeRangeCalls;
+        for (int32 Index = 0; Index < Count; ++Index)
+        {
+            Out.push_back(Index);
+        }
+    }
+
+    void CInteropTestLibrary::MakeEntityRange(int32 Count, TVector<ECS::FEntity>& Out)
+    {
+        for (int32 Index = 0; Index < Count; ++Index)
+        {
+            Out.push_back(ECS::FEntity::FromPacked((uint32)Index));
+        }
+    }
+
+    void CInteropTestLibrary::MakeVectorRange(int32 Count, TVector<FVector3>& Out)
+    {
+        for (int32 Index = 0; Index < Count; ++Index)
+        {
+            Out.push_back(FVector3((float)Index, (float)Index * 2.0f, (float)Index * 3.0f));
+        }
+    }
+
+    int32 CInteropTestLibrary::GetMakeRangeCallCount()
+    {
+        return GMakeRangeCalls;
+    }
+
+    void CInteropTestLibrary::ResetMakeRangeCallCount()
+    {
+        GMakeRangeCalls = 0;
+    }
+
+    int32 CInteropTestLibrary::BenchNoOp()
+    {
+        return 0;
+    }
+
+    FVector3 CInteropTestLibrary::BenchAddVectors(FVector3 A, FVector3 B)
+    {
+        return A + B;
+    }
+
+    int32 CInteropTestLibrary::BenchMeasureName(const FName& Name)
+    {
+        return (int32)Name.length();
+    }
+
+    FName CInteropTestLibrary::BenchGetName()
+    {
+        static const FName Name("InteropBenchmarkName");
+        return Name;
+    }
+}

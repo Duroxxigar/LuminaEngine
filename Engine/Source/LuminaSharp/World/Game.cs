@@ -16,34 +16,19 @@ public static partial class Game
     /// down and the new world starts fresh. URL forms: a world asset path ("/Game/Maps/Arena"), a hosted
     /// map ("/Game/Maps/Arena?listen?port=7777"), or a server address to connect to ("192.168.1.5:7777").
     /// </summary>
-    public static void OpenLevel(string Url) => OpenLevelRaw(Url);
+    public static void OpenLevel(string Url) => Lumina.CGameLibrary.OpenLevel(Url);
 
     /// <summary>
     /// Quits the game: exits the process in a packaged game; in the editor it ends the Play session
     /// instead. Deferred to a safe frame point, so it is fine to call from any script callback.
     /// </summary>
-    public static void Quit() => QuitRaw();
+    public static void Quit() => Lumina.CGameLibrary.QuitGame();
 
     /// The persistent game instance, or null before the project has created one.
-    public static Lumina.CGameInstance? Instance
-    {
-        get
-        {
-            IntPtr Handle = GetInstanceRaw();
-            return Handle == IntPtr.Zero ? null : Wrapper<Lumina.CGameInstance>.ForObject(Handle);
-        }
-    }
+    public static Lumina.CGameInstance? Instance => Lumina.CGameLibrary.GetGameInstance();
 
     /// The game instance as your own subclass, or null when the project runs a different one.
     public static T? GetInstance<T>() where T : Lumina.CGameInstance => Instance as T;
-
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Game_GetInstance")]
-    private static partial IntPtr GetInstanceRaw();
-
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Game_OpenLevel")]
-    private static partial void OpenLevelRaw(string Url);
-    [NativeCall(Module = "Runtime", EntryPoint = "LuminaSharp_Game_Quit")]
-    private static partial void QuitRaw();
 
     [ThreadStatic] private static Lumina.CWorld? ActiveWorld;
     [ThreadStatic] private static Entity ActiveEntity;

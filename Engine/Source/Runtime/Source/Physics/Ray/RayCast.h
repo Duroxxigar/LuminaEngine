@@ -15,7 +15,7 @@ namespace Lumina
     // Inline capacity for a query's ignore list; going past it spills to the heap, never drops bodies.
     inline constexpr size_t MaxInlineIgnoreBodies = 8;
 
-    inline constexpr ECollisionProfiles AllCollisionProfiles = (ECollisionProfiles)0xFFFF;
+    inline constexpr ECollisionProfiles AllCollisionProfiles = ECollisionProfiles::All;
 
     REFLECT()
     struct SRayResult
@@ -50,6 +50,10 @@ namespace Lumina
         /** Skeleton bone the hit body belongs to (ragdoll per-bone bodies); INDEX_NONE otherwise. */
         PROPERTY()
         int32 BoneIndex = INDEX_NONE;
+
+        /** Carries the optionality a by-value result cannot, so a miss is a zeroed struct rather than nothing. */
+        PROPERTY()
+        bool bHit = false;
     };
 
     REFLECT()

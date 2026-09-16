@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Containers/Vector.h"
 #include "Core/Math/Math.h"
@@ -140,9 +140,15 @@ namespace Lumina
 	};
 
 	/** Identifies one playing voice. Index is the context's voice slot, Generation disambiguates reuse. */
+	REFLECT()
 	struct FAudioHandle
 	{
+		GENERATED_BODY()
+
+		PROPERTY()
 		uint32 Generation = 0;
+
+		PROPERTY()
 		uint32 Index      = 0;
 
 		constexpr bool IsValid() const { return Generation != 0; }
@@ -161,6 +167,7 @@ namespace Lumina
 	};
 
 	/** Published per voice slot so the game thread can query a voice without touching the mixer. */
+	REFLECT()
 	enum class EAudioVoiceState : uint8
 	{
 		Free,
@@ -169,33 +176,51 @@ namespace Lumina
 	};
 
 	/** Everything needed to start a voice. Passed by value into the pump's pending-play queue. */
+	REFLECT()
 	struct FAudioPlayParams
 	{
+		GENERATED_BODY()
+
+		PROPERTY()
 		float Volume = 1.0f;
+		PROPERTY()
 		float Pitch = 1.0f;
+		PROPERTY()
 		bool bLooping = false;
+		PROPERTY()
 		bool bSpatialized = false;
+		PROPERTY()
 		bool bStartPaused = false;
 
+		PROPERTY()
 		FVector3 Position = FVector3(0.0f);
+		PROPERTY()
 		FVector3 Velocity = FVector3(0.0f);
+		PROPERTY()
 		FVector3 Direction = FVector3(0.0f, 0.0f, 1.0f);
 
+		PROPERTY()
 		EAudioBus Bus = EAudioBus::SFX;
+		PROPERTY()
 		SAudioAttenuation Attenuation;
 
 		/** Voices are evicted lowest-priority-first when every slot is taken. */
+		PROPERTY()
 		uint8 Priority = 128;
 
 		/** PCM frame to begin playback at. */
+		PROPERTY()
 		uint64 StartFrame = 0;
 
+		PROPERTY()
 		float FadeInSeconds = 0.0f;
 
 		/** Delays the voice without occupying the mixer, e.g. for scheduled one-shots. */
+		PROPERTY()
 		float StartDelaySeconds = 0.0f;
 
 		/** Reserve an occlusion filter up front so the first trace result applies without a pop. */
+		PROPERTY()
 		bool bUseOcclusion = false;
 	};
 

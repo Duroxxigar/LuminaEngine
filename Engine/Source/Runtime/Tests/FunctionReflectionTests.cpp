@@ -1,4 +1,4 @@
-#include <gtest/gtest.h>
+﻿#include <gtest/gtest.h>
 
 #include "Containers/String.h"
 #include "Containers/ContainerOps.h"
@@ -242,7 +242,9 @@ namespace
 
 TEST(FunctionReflection, FFunctionStaysTheSizeOfAProperty)
 {
-    EXPECT_EQ(sizeof(FFunction), 48u) << "a function is a call descriptor, not an object";
+    // 48 of description plus the two pointers script dispatch calls through. They are on the function rather
+    // than behind a lookup because finding them is the cost the direct call exists to avoid.
+    EXPECT_EQ(sizeof(FFunction), 64u) << "a function is a call descriptor, not an object";
 }
 
 TEST(FunctionReflection, AStructReportsTheFunctionsItDeclares)

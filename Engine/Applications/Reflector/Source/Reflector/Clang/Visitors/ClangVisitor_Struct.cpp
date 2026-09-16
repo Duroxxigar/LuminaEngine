@@ -993,6 +993,7 @@ namespace Lumina::Reflection::Visitor
 			{
 				Field->OwningCursor = ArgCursor;
 				Field->Name			= std::move(ArgName);
+				Field->DefaultValue = ClangUtils::GetDefaultArgument(ArgCursor);
 				NewFunction->AddArgument(std::move(Field.value()));
 			}
 			else
@@ -1475,6 +1476,7 @@ namespace Lumina::Reflection::Visitor
 			{
 				Field->OwningCursor = ArgCursor;
 				Field->Name = std::move(ArgName);
+				Field->DefaultValue = ClangUtils::GetDefaultArgument(ArgCursor);
 				NewFunction->AddArgument(std::move(Field.value()));
 			}
 			else

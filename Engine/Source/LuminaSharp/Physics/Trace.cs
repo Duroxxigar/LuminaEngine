@@ -3,19 +3,14 @@ using Lumina;
 
 namespace LuminaSharp;
 
-/// <summary>
-/// Fluent physics query (s&amp;box-style <c>Trace.Ray(a, b).Ignore(self).Run()</c>). Composes over the world's
-/// physics facade; no allocation until <see cref="Run"/>/<see cref="RunAll"/>. A mutable builder, chain and
-/// run on one line. Uses the ambient <see cref="Game.World"/>.
-/// </summary>
+/// Fluent physics query, s&amp;box style, as Trace.Ray(a, b).Ignore(self).Run(). A mutable builder over CPhysicsLibrary that allocates nothing until Run or RunAll, against the ambient Game.World.
 public struct Trace
 {
     private CWorld World;
     private FVector3 From;
     private FVector3 To;
     private float Radius;
-    private uint IgnoreId;
-    private bool Masked;
+    private Entity IgnoreEntity;
     private ECollisionProfiles Mask;
 
     private static Trace Begin(FVector3 From, FVector3 To)
@@ -24,17 +19,19 @@ public struct Trace
         T.World = Game.World;
         T.From = From;
         T.To = To;
-        T.IgnoreId = Entity.Null.Id;
+        T.IgnoreEntity = Entity.Null;
+        T.Mask = ECollisionProfiles.All;
         return T;
     }
 
-    /// <summary>A ray between two world points.</summary>
+    /// A ray between two world points.
     public static Trace Ray(FVector3 From, FVector3 To) => Begin(From, To);
 
-    /// <summary>A ray from an origin along a direction for a distance.</summary>
-    public static Trace Ray(FVector3 Origin, FVector3 Direction, float Distance) => Begin(Origin, Origin + Direction.Normalized() * Distance);
+    /// A ray from an origin along a direction for a distance.
+    public static Trace Ray(FVector3 Origin, FVector3 Direction, float Distance)
+        => Begin(Origin, Origin + Direction.Normalized() * Distance);
 
-    /// <summary>A swept sphere (thick ray) between two points.</summary>
+    /// A swept sphere, so a thick ray, between two points.
     public static Trace Sphere(float Radius, FVector3 From, FVector3 To)
     {
         Trace T = Begin(From, To);
@@ -42,72 +39,45 @@ public struct Trace
         return T;
     }
 
-    /// <summary>Skip one entity's body (typically the caster's).</summary>
+    /// Skip one entity's body, typically the caster's.
     public Trace Ignore(Entity Entity)
     {
-        IgnoreId = Entity.Id;
+        IgnoreEntity = Entity;
         return this;
     }
 
-    /// <summary>Skip the entity whose callback is running.</summary>
+    /// Skip the entity whose callback is running.
     public Trace IgnoreSelf()
     {
-        IgnoreId = Game.CurrentEntity.Id;
+        IgnoreEntity = Game.CurrentEntity;
         return this;
     }
 
-    /// <summary>Only hit bodies whose collision layer intersects <paramref name="Mask"/> (ray traces).</summary>
+    /// Only hit bodies whose collision layer intersects Mask. Ray traces only.
     public Trace WithMask(ECollisionProfiles Mask)
     {
-        Masked = true;
         this.Mask = Mask;
         return this;
     }
 
-    /// <summary>Run the query and return the closest hit, or null.</summary>
-    public RaycastHit? Run()
+    /// Runs the query and returns the closest hit. Check bHit on the result.
+    public SRayResult Run()
     {
-        FVector3 Delta = To - From;
-        float Distance = Delta.Length;
-        if (Distance <= 0.0f)
-        {
-            return null;
-        }
-        FVector3 Direction = Delta.Normalized();
-        Physics Physics = World.Physics;
-        Entity? Ignore = IgnoreId == Entity.Null.Id ? null : new Entity(IgnoreId);
         if (Radius > 0.0f)
         {
-            RaycastHit[] Hits = Physics.SphereCast(From, Direction, Distance, Radius, Ignore);
-            return Hits.Length > 0 ? Hits[0] : null;
+            SRayResult[] Hits = CPhysicsLibrary.SphereCast(World, From, To, Radius, IgnoreEntity);
+            return Hits.Length > 0 ? Hits[0] : default;
         }
-        if (Masked)
-        {
-            return Physics.RaycastFiltered(From, Direction, Distance, Mask, Ignore);
-        }
-        return Physics.Raycast(From, Direction, Distance, Ignore);
+        return CPhysicsLibrary.Raycast(World, From, To, IgnoreEntity, Mask);
     }
 
-    /// <summary>Run the query and return every hit, near to far.</summary>
-    public RaycastHit[] RunAll()
+    /// Runs the query and returns every hit, near to far.
+    public SRayResult[] RunAll()
     {
-        FVector3 Delta = To - From;
-        float Distance = Delta.Length;
-        if (Distance <= 0.0f)
-        {
-            return Array.Empty<RaycastHit>();
-        }
-        FVector3 Direction = Delta.Normalized();
-        Physics Physics = World.Physics;
-        Entity? Ignore = IgnoreId == Entity.Null.Id ? null : new Entity(IgnoreId);
         if (Radius > 0.0f)
         {
-            return Physics.SphereCast(From, Direction, Distance, Radius, Ignore);
+            return CPhysicsLibrary.SphereCast(World, From, To, Radius, IgnoreEntity);
         }
-        if (Masked)
-        {
-            return Physics.RaycastAllFiltered(From, Direction, Distance, Mask, Ignore);
-        }
-        return Physics.RaycastAll(From, Direction, Distance, Ignore);
+        return CPhysicsLibrary.RaycastAll(World, From, To, IgnoreEntity, Mask);
     }
 }

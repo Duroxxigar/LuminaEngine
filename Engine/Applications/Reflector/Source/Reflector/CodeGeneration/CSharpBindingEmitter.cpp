@@ -1156,9 +1156,93 @@ namespace Lumina::Reflection
             bool          bReadOnlySpan = false;
             // A const TVector<T>& arg, rebuilt from the span on the native side rather than passed as a pair.
             bool          bVectorArg = false;
+            // A mutable TVector<T>& the callee fills, surfaced as the C# return over the two-pass buffer ABI.
+            bool          bVectorOut = false;
+            std::string VectorElemCpp;
             // TObjectPtr<T> by value, which marshals as the handle but has to be re-wrapped at the call.
             bool          bObjectPtrValue = false;
+            // The C++ parameter's own name, so the C# signature reads like the declaration it came from.
+            std::string Name;
+            // The C++ default rewritten as a C# constant, empty when the expression has no C# equivalent.
+            std::string DefaultCSharp;
         };
+
+        std::string ArgName(const FArg& Arg, size_t Index)
+        {
+            return Arg.Name.empty() ? ArgIndexName('a', Index) : SafeIdentifier(Arg.Name);
+        }
+
+        bool IsNumericLiteral(const std::string& Text)
+        {
+            size_t Index = (Text[0] == '-' || Text[0] == '+') ? 1 : 0;
+            if (Index >= Text.size())
+            {
+                return false;
+            }
+            bool bDigit = false;
+            for (; Index < Text.size(); ++Index)
+            {
+                const char C = Text[Index];
+                if (C >= '0' && C <= '9') { bDigit = true; continue; }
+                if (C == '.' || C == 'f' || C == 'F' || C == 'x' || C == 'X'
+                    || C == 'u' || C == 'U' || C == 'l' || C == 'L'
+                    || (C >= 'a' && C <= 'e') || (C >= 'A' && C <= 'E')) { continue; }
+                return false;
+            }
+            return bDigit;
+        }
+
+        // Only an expression C# accepts as a compile-time constant converts; anything else drops its default.
+        std::string DefaultToCSharp(const FArg& Arg, const std::string& Cpp)
+        {
+            if (Cpp.empty())
+            {
+                return std::string();
+            }
+            if (Arg.Kind == EBind::Bool)
+            {
+                return (Cpp == "true" || Cpp == "false") ? Cpp : std::string();
+            }
+            if (Arg.Kind == EBind::Object)
+            {
+                return Cpp == "nullptr" ? std::string("null") : std::string();
+            }
+            if (Arg.Kind == EBind::Str)
+            {
+                // A default-constructed name or string is the empty one, which is what C# can express.
+                if (Cpp == "nullptr") { return std::string("null"); }
+                if (Cpp == "FName()" || Cpp == "FString()" || Cpp == "\"\"") { return std::string("\"\""); }
+                return std::string();
+            }
+            if (Arg.Kind == EBind::Enum)
+            {
+                const size_t Scope = Cpp.rfind("::");
+                if (Scope == std::string::npos || Scope + 2 >= Cpp.size())
+                {
+                    return std::string();
+                }
+                return Arg.CSharp + "." + Cpp.substr(Scope + 2);
+            }
+            if (Arg.Kind == EBind::Number && !Arg.bEntity)
+            {
+                return IsNumericLiteral(Cpp) ? Cpp : std::string();
+            }
+            return std::string();
+        }
+
+        // C# only allows trailing optional parameters, so a gap drops every default to its left.
+        void ResolveDefaults(std::vector<FArg>& Args)
+        {
+            bool bTailOptional = true;
+            for (size_t i = Args.size(); i-- > 0; )
+            {
+                if (!bTailOptional || Args[i].DefaultCSharp.empty())
+                {
+                    bTailOptional = false;
+                    Args[i].DefaultCSharp.clear();
+                }
+            }
+        }
 
         // Maps a bare C++ numeric spelling ("uint32") to its C# type ("uint"); false if not a numeric.
         bool NumericCSharp(const std::string& Bare, std::string& OutCSharp)
@@ -1229,6 +1313,48 @@ namespace Lumina::Reflection
             return (IsOpaqueWrapperType(Db, Qualified) || IsObjectRootType(Qualified)) ? Qualified : Name;
         }
 
+        // The C# and fully-qualified C++ spellings for an element the two-pass buffer can carry by value.
+        bool VectorElementCSharp(const FReflectionDatabase& Db, const std::string& Elem,
+            std::string& OutCSharp, std::string& OutCpp)
+        {
+            if (Elem.empty())
+            {
+                return false;
+            }
+            if (IsEntitySpelling(Elem))
+            {
+                OutCSharp = "global::LuminaSharp.Entity";
+                OutCpp = "Lumina::ECS::FEntity";
+                return true;
+            }
+            if (NumericCSharp(Elem, OutCSharp))
+            {
+                OutCpp = Elem;
+                return true;
+            }
+
+            const FReflectedStruct* S = Db.GetReflectedType<FReflectedStruct>(FStringHash(Elem));
+            if (S == nullptr)
+            {
+                const std::string Qualified = "Lumina::" + Elem;
+                S = Db.GetReflectedType<FReflectedStruct>(FStringHash(Qualified));
+                if (S == nullptr)
+                {
+                    return false;
+                }
+            }
+
+            int Size = 0;
+            int Align = 0;
+            if (!HasMetadata(*S, "CSharpValueMirror") && !IsBlittableValueStruct(*S, Db, Size, Align))
+            {
+                return false;
+            }
+            OutCSharp = GlobalCSharp(S->QualifiedName);
+            OutCpp = S->QualifiedName;
+            return true;
+        }
+
         // Conservative by design, so a strong type that merely classifies as an int is skipped, not coerced.
         bool ClassifyField(const FFieldInfo& F, const FReflectionDatabase& Db, bool bIsArg, FArg& B)
         {
@@ -1255,6 +1381,25 @@ namespace Lumina::Reflection
                 }
                 return false; // any other pointer in/out -> ambiguous marshaling
             }
+            // Checked ahead of the refusal below, which is about a by-value arg, not an out container.
+            if (bIsArg && F.Flags == EPropertyTypeFlags::Vector && F.TypeName == "Lumina::TVector"
+                && F.RawFieldType.find('&') != std::string::npos
+                && F.RawFieldType.find("const") == std::string::npos)
+            {
+                const std::string Elem = FirstTemplateArgument(F.RawFieldType);
+                std::string ElemCS;
+                std::string ElemCpp;
+                if (!VectorElementCSharp(Db, Elem, ElemCS, ElemCpp))
+                {
+                    return false;
+                }
+                B.Kind = EBind::Span;
+                B.bVectorOut = true;
+                B.VectorElemCpp = ElemCpp;
+                B.CSharp = ElemCS;
+                return true;
+            }
+
             if (bIsArg && F.RawFieldType.find('&') != std::string::npos
                 && F.RawFieldType.find("const") == std::string::npos)
             {
@@ -1386,6 +1531,39 @@ namespace Lumina::Reflection
             std::vector<FArg> Args;
         };
 
+        // A T* immediately followed by an int32 count is one C# Span over the same pair, caller owned.
+        bool TryClassifySpanPair(const std::vector<FFieldInfo>& Arguments, size_t Index,
+            const FReflectionDatabase& Db, FArg& Out)
+        {
+            const FFieldInfo& Arg = Arguments[Index];
+            if (Arg.RawFieldType.find('*') == std::string::npos || Index + 1 >= Arguments.size())
+            {
+                return false;
+            }
+
+            const std::string NextBare = StripQualifiers(Arguments[Index + 1].RawFieldType);
+            if (NextBare != "int32" && NextBare != "int")
+            {
+                return false;
+            }
+
+            std::string ElemCS;
+            std::string ElemCpp;
+            if (!VectorElementCSharp(Db, StripQualifiers(Arg.RawFieldType), ElemCS, ElemCpp))
+            {
+                return false;
+            }
+
+            Out = FArg();
+            Out.Kind = EBind::Span;
+            Out.SpanElemCpp = ElemCpp;
+            Out.bReadOnlySpan = Arg.RawFieldType.find("const") != std::string::npos;
+            Out.CSharp = (Out.bReadOnlySpan ? std::string("global::System.ReadOnlySpan<")
+                                            : std::string("global::System.Span<")) + ElemCS + ">";
+            Out.Name = Arg.Name;
+            return true;
+        }
+
         // Bound only when the name is unique in the type, so no two C# methods can collide.
         bool ClassifyFunction(const FReflectedFunction& Fn, const FReflectedStruct& Type, const FReflectionDatabase& Db, FFnBinding& Out)
         {
@@ -1414,14 +1592,36 @@ namespace Lumina::Reflection
                 }
                 Out.bVoid = false;
             }
-            for (const FFieldInfo& Arg : Fn.Arguments)
+            for (size_t i = 0; i < Fn.Arguments.size(); ++i)
             {
                 FArg A;
+                if (TryClassifySpanPair(Fn.Arguments, i, Db, A))
+                {
+                    Out.Args.push_back(A);
+                    ++i; // consume the count parameter
+                    continue;
+                }
+
+                const FFieldInfo& Arg = Fn.Arguments[i];
                 if (!ClassifyField(Arg, Db, true, A))
                 {
                     return false;
                 }
+                A.Name = Arg.Name;
+                A.DefaultCSharp = DefaultToCSharp(A, Arg.DefaultValue);
                 Out.Args.push_back(A);
+            }
+            ResolveDefaults(Out.Args);
+
+            // The thunk returns the out container's element count, leaving room for one and no real return.
+            int OutContainers = 0;
+            for (const FArg& A : Out.Args)
+            {
+                OutContainers += A.bVectorOut ? 1 : 0;
+            }
+            if (OutContainers > 1 || (OutContainers == 1 && !Out.bVoid))
+            {
+                return false;
             }
             return true;
         }
@@ -1432,15 +1632,24 @@ namespace Lumina::Reflection
             const std::string& Name = Fn.Name;
             const std::string CallThunk = "LuminaSharp_Call_" + Friendly + "_" + Name;
 
+            // An out container leaves the signature and comes back as the return, an array of its elements.
             std::string SigParams;
+            std::string VectorOutCS;
             for (size_t i = 0; i < FB.Args.size(); ++i)
             {
-                if (i != 0) { SigParams += ", "; }
-                SigParams += FB.Args[i].CSharp + " " + ArgIndexName('a', i);
+                if (FB.Args[i].bVectorOut)
+                {
+                    VectorOutCS = FB.Args[i].CSharp;
+                    continue;
+                }
+                if (!SigParams.empty()) { SigParams += ", "; }
+                SigParams += FB.Args[i].CSharp + " " + ArgName(FB.Args[i], i);
+                if (!FB.Args[i].DefaultCSharp.empty()) { SigParams += " = " + FB.Args[i].DefaultCSharp; }
             }
 
-            const std::string RetCS = FB.bVoid ? std::string("void") : FB.Ret.CSharp;
-            
+            const std::string RetCS = !VectorOutCS.empty() ? (VectorOutCS + "[]")
+                                    : FB.bVoid ? std::string("void") : FB.Ret.CSharp;
+
             if (bSuppressGCTransition)
             {
                 Writer.Linef("[global::LuminaSharp.NativeCall(Module = \"%s\", EntryPoint = \"%s\", SuppressGCTransition = true)]",
@@ -1451,7 +1660,8 @@ namespace Lumina::Reflection
                 Writer.Linef("[global::LuminaSharp.NativeCall(Module = \"%s\", EntryPoint = \"%s\")]",
                     Module.c_str(), CallThunk.c_str());
             }
-            Writer.Linef("public partial %s %s(%s);", RetCS.c_str(), Name.c_str(), SigParams.c_str());
+            Writer.Linef("public %spartial %s %s(%s);", Fn.bIsStatic ? "static " : "",
+                RetCS.c_str(), Name.c_str(), SigParams.c_str());
         }
 
         // A C# Span arrives as (T* pinned, int Length); a TVector param is rebuilt from that pair for the call.
@@ -1473,15 +1683,29 @@ namespace Lumina::Reflection
 
             std::string Params;
             std::string CallArgs;
+            std::string VectorOutElem;
             for (size_t i = 0; i < FB.Args.size(); ++i)
             {
                 const FArg& A = FB.Args[i];
                 const std::string An = ArgIndexName('A', i);
-                if (i != 0)
+                if (!CallArgs.empty())
                 {
-                    Params += ", "; CallArgs += ", ";
+                    CallArgs += ", ";
                 }
-                
+
+                // The callee fills a local the thunk owns, then copies it into the caller's buffer.
+                if (A.bVectorOut)
+                {
+                    VectorOutElem = A.VectorElemCpp;
+                    CallArgs += "__vec";
+                    continue;
+                }
+
+                if (!Params.empty())
+                {
+                    Params += ", ";
+                }
+
                 if (A.bEntity)
                 {
                     Params += "uint32 " + An; CallArgs += "static_cast<Lumina::ECS::FEntity>(" + An + ")";
@@ -1519,7 +1743,10 @@ namespace Lumina::Reflection
                 }
             }
 
-            const std::string CallExpr = "Self->" + Name + "(" + CallArgs + ")";
+            // A static has no instance, so it is called on the type and its thunk takes no Self.
+            const std::string CallExpr = Fn.bIsStatic
+                ? (std::string(Qualified) + "::" + Name + "(" + CallArgs + ")")
+                : ("Self->" + Name + "(" + CallArgs + ")");
             std::string RetCpp = "void";
             std::string Body = CallExpr + ";";
             bool bStringReturn = false;
@@ -1555,9 +1782,26 @@ namespace Lumina::Reflection
                 }
             }
 
-            if (bStringReturn)
+            if (!VectorOutElem.empty())
+            {
+                RetCpp = "int";
+                Body = "Lumina::TVector<" + VectorOutElem + "> __vec; " + CallExpr + "; "
+                     + "const int __n = (int)__vec.size(); "
+                     + "if (Buffer && Capacity > 0) { const int __c = __n < Capacity ? __n : Capacity; "
+                     + "for (int __i = 0; __i < __c; ++__i) { Buffer[__i] = __vec[(size_t)__i]; } } "
+                     + "return __n;";
+                Params += (Params.empty() ? std::string() : std::string(", ")) + VectorOutElem + "* Buffer, int Capacity";
+            }
+            else if (bStringReturn)
             {
                 Params += Params.empty() ? "char* Buffer, int Capacity" : ", char* Buffer, int Capacity";
+            }
+
+            if (Fn.bIsStatic)
+            {
+                Writer.Linef("extern \"C\" %s %s %s(%s) { %s }",
+                    Api, RetCpp.c_str(), CallThunk.c_str(), Params.c_str(), Body.c_str());
+                return;
             }
 
             const std::string ParamSig = Params.empty() ? std::string() : (", " + Params);
@@ -1741,8 +1985,8 @@ namespace Lumina::Reflection
             for (size_t i = 0; i < FB.Args.size(); ++i)
             {
                 if (i) { SigParams += ", "; ArgNames += ", "; }
-                SigParams += FB.Args[i].CSharp + " " + ArgIndexName('a', i);
-                ArgNames  += ArgIndexName('a', i);
+                SigParams += FB.Args[i].CSharp + " " + ArgName(FB.Args[i], i);
+                ArgNames  += ArgName(FB.Args[i], i);
             }
             const std::string RetCS = FB.bVoid ? std::string("void") : FB.Ret.CSharp;
 
@@ -1758,9 +2002,9 @@ namespace Lumina::Reflection
             std::string AbiParams, CallArgs;
             for (size_t i = 0; i < FB.Args.size(); ++i)
             {
-                AbiParams += ", " + SeArgAbiCS(FB.Args[i]) + " " + ArgIndexName('a', i);
+                AbiParams += ", " + SeArgAbiCS(FB.Args[i]) + " " + ArgName(FB.Args[i], i);
                 if (i) { CallArgs += ", "; }
-                CallArgs += SeArgFromAbiCS(FB.Args[i], ArgIndexName('a', i));
+                CallArgs += SeArgFromAbiCS(FB.Args[i], ArgName(FB.Args[i], i));
             }
             Writer.Line("[global::LuminaSharp.ManagedExport]");
             Writer.Line("[global::System.Runtime.InteropServices.UnmanagedCallersOnly(CallConvs = new[] { typeof(global::System.Runtime.CompilerServices.CallConvStdcall) })]");
@@ -2032,33 +2276,23 @@ namespace Lumina::Reflection
             {
                 const FFieldInfo& Arg = Fn.Arguments[i];
 
-                // A primitive pointer immediately followed by an int32 count maps to ONE C# Span over the same pair.
-                if (Arg.RawFieldType.find('*') != std::string::npos && (i + 1) < Fn.Arguments.size())
+                FArg A;
+                if (TryClassifySpanPair(Fn.Arguments, i, Db, A))
                 {
-                    const std::string Elem = StripQualifiers(Arg.RawFieldType);
-                    const std::string NextBare = StripQualifiers(Fn.Arguments[i + 1].RawFieldType);
-                    std::string ElemCS;
-                    if ((NextBare == "int32" || NextBare == "int") && NumericCSharp(Elem, ElemCS))
-                    {
-                        FArg A;
-                        A.Kind = EBind::Span;
-                        A.SpanElemCpp = Elem;
-                        A.bReadOnlySpan = Arg.RawFieldType.find("const") != std::string::npos;
-                        A.CSharp = (A.bReadOnlySpan ? std::string("global::System.ReadOnlySpan<")
-                                                    : std::string("global::System.Span<")) + ElemCS + ">";
-                        Out.Args.push_back(A);
-                        ++i; // consume the count parameter
-                        continue;
-                    }
+                    Out.Args.push_back(A);
+                    ++i; // consume the count parameter
+                    continue;
                 }
 
-                FArg A;
                 if (!ClassifyField(Arg, Db, true, A))
                 {
                     return false;
                 }
+                A.Name = Arg.Name;
+                A.DefaultCSharp = DefaultToCSharp(A, Arg.DefaultValue);
                 Out.Args.push_back(A);
             }
+            ResolveDefaults(Out.Args);
             return true;
         }
 
@@ -2070,7 +2304,8 @@ namespace Lumina::Reflection
             for (size_t i = 0; i < FB.Args.size(); ++i)
             {
                 if (i != 0) { SigParams += ", "; }
-                SigParams += FB.Args[i].CSharp + " " + ArgIndexName('a', i);
+                SigParams += FB.Args[i].CSharp + " " + ArgName(FB.Args[i], i);
+                if (!FB.Args[i].DefaultCSharp.empty()) { SigParams += " = " + FB.Args[i].DefaultCSharp; }
             }
             const std::string RetCS = FB.bVoid ? std::string("void") : FB.Ret.CSharp;
             if (bSuppressGCTransition)
@@ -2285,7 +2520,7 @@ namespace Lumina::Reflection
         {
             Writer.Linef("[global::LuminaSharp.NativeType(\"%s\")]", Struct.DisplayName.c_str());
             Writer.Line("[System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]");
-            Writer.Linef("public struct %s", Struct.DisplayName.c_str());
+            Writer.Linef("public partial struct %s", Struct.DisplayName.c_str());
             Writer.BeginBlock();
             for (const auto& Prop : Struct.Props)
             {

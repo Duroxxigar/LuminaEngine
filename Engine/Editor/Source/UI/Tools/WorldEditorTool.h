@@ -189,6 +189,9 @@ namespace Lumina
         // IEditorModeContext: lets an active mode wrap an interaction in the undo system.
         void BeginModeTransaction() override { BeginTransaction(); }
         void EndModeTransaction(const char* Name) override { EndTransaction(FName(Name)); }
+        void BeginModeCreationTransaction() override { BeginCreationTransaction(); }
+        ECS::FEntity GetModeSelectionFocus() const override { return GetLastSelectedEntity(); }
+        void SetModeSelection(ECS::FEntity Entity) override { SetSingleSelectedEntity(Entity); }
 
 
     protected:
