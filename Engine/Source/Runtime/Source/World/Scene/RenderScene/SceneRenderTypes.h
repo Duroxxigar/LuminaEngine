@@ -210,9 +210,19 @@ namespace Lumina
         Spot        = BIT(2),
         CastShadow  = BIT(3),
         Volumetric  = BIT(4),
+        // Bits 24-31 are not free, see kLightMinRoughnessShift.
     };
 
     ENUM_CLASS_FLAGS(ELightFlags);
+
+    // Quantized minimum roughness rides the top byte of FLight::Flags, which keeps FLight one cache line.
+    constexpr uint32 kLightMinRoughnessShift = 24;
+
+    inline ELightFlags PackLightMinRoughness(ELightFlags Flags, float MinRoughness)
+    {
+        const uint32 Quantized = (uint32)(Math::Clamp(MinRoughness, 0.0f, 1.0f) * 255.0f + 0.5f);
+        return (ELightFlags)((uint32)Flags | (Quantized << kLightMinRoughnessShift));
+    }
 
     struct FSceneImage
     {
@@ -530,6 +540,8 @@ namespace Lumina
         FVector4           CascadeRadii{};
         // Per-cascade shadow-map resolution; xyzw = cascades 0..3.
         FVector4           CascadeResolutions{};
+        // Ortho depth range of each cascade, which turns a shadow-map NDC z delta into world units.
+        FVector4           CascadeDepthRanges{};
 
         FVector4           ShadowParams{ 1.0f, 0.0f, 0.05f, 0.20f };
         // x = far-cascade distance-fade fraction; yzw reserved.
@@ -541,10 +553,10 @@ namespace Lumina
         RHI::TGPUSpan<FLightShadowData> Shadows;
     };
 
-    static_assert(sizeof(FSceneLightData) == 160, "FSceneLightData layout must match FLightData in Common.slang");
+    static_assert(sizeof(FSceneLightData) == 176, "FSceneLightData layout must match FLightData in Common.slang");
     VERIFY_SSBO_ALIGNMENT(FSceneLightData);
     // Relaxed block layout rejects a vector straddling 16, so the spans must follow the last one.
-    static_assert(offsetof(FSceneLightData, Lights) == 128, "Lights must sit at 128");
+    static_assert(offsetof(FSceneLightData, Lights) == 144, "Lights must sit at 144");
     
     struct FLineBatch
     {

@@ -1,6 +1,7 @@
 #pragma once
 #include "Includes/SceneGlobals.slang"
 #include "Includes/GlobalRHIStorage.slang"
+#include "Includes/Noise.slang"
 
 // Stands in for Nubis' baked volume: R = Perlin-Worley base, GBA = Worley erosion octaves.
 
@@ -13,14 +14,9 @@ struct FPushConstants
 };
 FPushConstants* Pass() { return GetPassArgs<FPushConstants>(); }
 
-float CloudHash1(float3 P)
-{
-    return frac(sin(dot(P, float3(127.1, 311.7, 74.7))) * 43758.5453);
-}
-
 float3 CloudHash3(float3 P)
 {
-    return float3(CloudHash1(P), CloudHash1(P + 19.19), CloudHash1(P + 43.71));
+    return float3(Hash31Sin(P), Hash31Sin(P + 19.19), Hash31Sin(P + 43.71));
 }
 
 // Wrapping the cell index is what makes the volume tile; without it the layer seams at every repeat.

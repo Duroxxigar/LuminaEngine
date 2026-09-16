@@ -1,4 +1,5 @@
 #include "Includes/Water.slang"
+#include "Includes/Noise.slang"
 #include "Includes/IBLRuntime.slang"
 #include "Includes/ShadowSampling.slang"
 
@@ -31,35 +32,9 @@ float3 SampleSceneColor(float2 UV)
 }
 
 // Cheap value-noise fbm used to break up procedural foam so it reads as wispy foam, not a solid white fill.
-float WaterHash(float2 P)
-{
-    return frac(sin(dot(P, float2(127.1, 311.7))) * 43758.5453);
-}
-
-float WaterValueNoise(float2 P)
-{
-    float2 I = floor(P);
-    float2 F = frac(P);
-    F = F * F * (3.0 - 2.0 * F);
-    float A = WaterHash(I);
-    float B = WaterHash(I + float2(1.0, 0.0));
-    float C = WaterHash(I + float2(0.0, 1.0));
-    float D = WaterHash(I + float2(1.0, 1.0));
-    return lerp(lerp(A, B, F.x), lerp(C, D, F.x), F.y);
-}
-
 float WaterFbm(float2 P)
 {
-    float V = 0.0;
-    float A = 0.5;
-    [unroll]
-    for (int i = 0; i < 3; ++i)
-    {
-        V += A * WaterValueNoise(P);
-        P *= 2.0;
-        A *= 0.5;
-    }
-    return V;
+    return 0.5 * FBM2D(P, 3, 0.5, 2.0);
 }
 
 [shader("fragment")]

@@ -26,6 +26,10 @@ namespace Lumina
         PROPERTY(Editable, Category = "Light")
         float Falloff = 0.8f;
 
+        /** Roughness floor this light shades with, widening its highlight so it stops sparkling on near-mirror surfaces. */
+        PROPERTY(Editable, Category = "Light", ClampMin = 0.0f, ClampMax = 1.0f)
+        float MinRoughness = 0.0f;
+
         /** When true, this light contributes to the shadow pass. */
         PROPERTY(Editable, Category = "Shadows")
         bool bCastShadows = false;
@@ -72,6 +76,10 @@ namespace Lumina
         /** Controls the steepness of the intensity falloff curve toward the attenuation radius. */
         PROPERTY(Editable, Category = "Light")
         float Falloff = 0.8f;
+
+        /** Roughness floor this light shades with, widening its highlight so it stops sparkling on near-mirror surfaces. */
+        PROPERTY(Editable, Category = "Light", ClampMin = 0.0f, ClampMax = 1.0f)
+        float MinRoughness = 0.0f;
 
         /** When true, this light contributes to the shadow pass. */
         PROPERTY(Editable, Category = "Shadows")

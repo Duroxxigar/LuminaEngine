@@ -1,6 +1,7 @@
 #pragma once
 #include "SceneGlobals.slang"
 #include "Froxel.slang"
+#include "Noise.slang"
 
 // Normalized density at a height, clamped to 1 at and below BaseH so the profile cannot run away.
 float Fog_HeightTerm(float Falloff, float BaseH, float Y)
@@ -139,46 +140,12 @@ float3 Fog_Albedo(FExponentialHeightFogParams Fog, float CosSun, float Dist)
 }
 
 // No texture, so the froxel inject and the apply pass agree bit-for-bit without a shared bind.
-float Fog_Hash(float3 P)
-{
-    P = frac(P * 0.3183099 + float3(0.1, 0.2, 0.3));
-    P *= 17.0;
-    return frac(P.x * P.y * P.z * (P.x + P.y + P.z));
-}
-
-float Fog_ValueNoise(float3 P)
-{
-    float3 I = floor(P);
-    float3 F = frac(P);
-    F = F * F * (3.0 - 2.0 * F);
-
-    float N000 = Fog_Hash(I + float3(0.0, 0.0, 0.0));
-    float N100 = Fog_Hash(I + float3(1.0, 0.0, 0.0));
-    float N010 = Fog_Hash(I + float3(0.0, 1.0, 0.0));
-    float N110 = Fog_Hash(I + float3(1.0, 1.0, 0.0));
-    float N001 = Fog_Hash(I + float3(0.0, 0.0, 1.0));
-    float N101 = Fog_Hash(I + float3(1.0, 0.0, 1.0));
-    float N011 = Fog_Hash(I + float3(0.0, 1.0, 1.0));
-    float N111 = Fog_Hash(I + float3(1.0, 1.0, 1.0));
-
-    return lerp(lerp(lerp(N000, N100, F.x), lerp(N010, N110, F.x), F.y),
-                lerp(lerp(N001, N101, F.x), lerp(N011, N111, F.x), F.y), F.z);
-}
+static const float3 kFogHashOffset = float3(0.1, 0.2, 0.3);
 
 // Fractal sum normalized to [0,1] so the octave count changes detail without changing mean density.
 float Fog_FBM(float3 P, int Octaves, float Gain)
 {
-    float Sum   = 0.0;
-    float Amp   = 1.0;
-    float Total = 0.0;
-    for (int i = 0; i < Octaves; ++i)
-    {
-        Sum   += Amp * Fog_ValueNoise(P);
-        Total += Amp;
-        Amp   *= Gain;
-        P     *= 2.02;
-    }
-    return Sum / max(Total, 1e-4);
+    return FBM3DNormalized(P, Octaves, Gain, 2.02, kFogHashOffset);
 }
 
 // Faded out with distance because the closed-form far field cannot reproduce noise and would seam.

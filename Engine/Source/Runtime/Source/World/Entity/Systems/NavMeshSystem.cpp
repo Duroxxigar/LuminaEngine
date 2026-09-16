@@ -1500,10 +1500,27 @@ namespace Lumina
                 if (CVarNavTimings.GetValue())
                 {
                     const int32 DirtyAfter = (int32)Comp.Runtime.DirtyTiles.size();
-                    if (DirtyAfter != DirtyBefore || DetectGatherMs > 1.0)
+
+                    // Logged on a steady state too, since "nothing dirtied" is the answer when a scan finds
+                    // no sources or the volume sits somewhere the geometry is not.
+                    static double LastIdleLogSeconds = 0.0;
+                    const double NowSeconds = Context.GetTime();
+                    const bool bQuiet = DirtyAfter == DirtyBefore && DetectGatherMs <= 1.0;
+                    if (!bQuiet || NowSeconds - LastIdleLogSeconds >= 2.0)
                     {
-                        LOG_INFO("NavTiming detect: {} sources in {:.2f} ms, dirty {} -> {}, pending rebakes {}.",
-                            (int32)CurrentSources.size(), DetectGatherMs, DirtyBefore, DirtyAfter, (int32)Comp.Runtime.PendingRebakes.size());
+                        if (bQuiet)
+                        {
+                            LastIdleLogSeconds = NowSeconds;
+                        }
+                        const FVector3 WExt = Comp.GetWorldExtents();
+                        LOG_INFO("NavTiming detect [{}]: {} sources in {:.2f} ms, dirty {} -> {}, pending {}, "
+                                 "box=({:.1f},{:.1f},{:.1f})+/-({:.1f},{:.1f},{:.1f}), origin=({:.1f},{:.1f},{:.1f}), tracked {}.",
+                            Context.GetWorldType() == EWorldType::Editor ? "editor" : "play",
+                            (int32)CurrentSources.size(), DetectGatherMs, DirtyBefore, DirtyAfter,
+                            (int32)Comp.Runtime.PendingRebakes.size(),
+                            Comp.Center.x, Comp.Center.y, Comp.Center.z, WExt.x, WExt.y, WExt.z,
+                            Comp.Origin.x, Comp.Origin.y, Comp.Origin.z,
+                            (int32)Comp.Runtime.EntityAABBs.size());
                     }
                 }
 

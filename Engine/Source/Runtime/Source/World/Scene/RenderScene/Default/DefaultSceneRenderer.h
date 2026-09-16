@@ -1072,6 +1072,7 @@ namespace Lumina
             // The cascade fit itself, so the shadow raster covers the region the frozen cull selected for.
             FMatrix4           CascadeShadowViewProjection[NumCascades] = {};
             FVector4           CascadeRadii       = {};
+            FVector4           CascadeDepthRanges = {};
             bool               bHasCascadeShadow  = false;
 
             uint32             CascadeViewBase  = ~0u;

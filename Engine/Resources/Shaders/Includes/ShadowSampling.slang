@@ -99,6 +99,38 @@ float SampleSunCascadeByContainment(FLight Light, float3 WorldPos)
     return SampleSunCascadeFrom(Light, WorldPos, FirstCascade);
 }
 
+// World-space gap between this point and the nearest occluder the cascade recorded toward the sun.
+float SunOccluderDepthWS(FLight Light, float3 WorldPos)
+{
+    if (Light.ShadowDataIndex == INDEX_NONE)
+    {
+        return 0.0;
+    }
+
+    // Raw depth through the point sampler, so no derivatives and the compute lane can call it.
+    [loop]
+    for (int c = 0; c < NUM_CASCADES; ++c)
+    {
+        float4x4 VP = GetShadowViewProjection(Light.ShadowDataIndex, c);
+        float4   SC = mul(VP, float4(WorldPos, 1.0));
+        float3   P  = SC.xyz / max(SC.w, 1e-6);
+        float2   UV = P.xy * 0.5 + 0.5;
+
+        if (all(UV >= 0.0) && all(UV <= 1.0) && P.z >= 0.0 && P.z <= 1.0)
+        {
+            FLightShadow Tile     = GetShadowTile(Light.ShadowDataIndex, c);
+            float2       AtlasUV  = UV * Tile.AtlasUVScale + Tile.AtlasUVOffset;
+            float        Occluder = ShadowCascade().SampleLevel(AtlasUV, 0.0).r;
+
+            // A surface that is its own nearest occluder reads 0, which is the backlit-leaf case.
+            return max(P.z - Occluder, 0.0) * LightData().CascadeDepthRanges[c];
+        }
+    }
+
+    // Past the last cascade there is no occluder record, which reads the same as nothing in the way.
+    return 0.0;
+}
+
 // Load, not Sample: the mask is full-res and screen-aligned, so the fetch is an exact 1:1 texel read.
 // Guarded on the sentinel so a specialized view whose pass did not run reads fully lit, not texture 0.
 float SampleShadowMask(float2 PixelPos)

@@ -45,6 +45,7 @@ enum ELightFlags
     CastShadow  = BIT(3),
     // Light scatters through participating media; sampled by VolumetricLighting.slang.
     Volumetric  = BIT(4),
+    // Bits 24-31 are not free, see LIGHT_MIN_ROUGHNESS_SHIFT.
 }
 
 enum EInstanceFlags
@@ -859,6 +860,14 @@ struct FLight
     float  VolumetricScatteringRadius;   // soft-core source radius (fraction of Radius) for spot/point fog
 };
 
+// Quantized minimum roughness, in the top byte of FLight.Flags so the struct stays one cache line.
+static const uint LIGHT_MIN_ROUGHNESS_SHIFT = 24u;
+
+float GetLightMinRoughness(FLight Light)
+{
+    return float(Light.Flags >> LIGHT_MIN_ROUGHNESS_SHIFT) * (1.0 / 255.0);
+}
+
 // Cold shadow data, fetched only after a light is known to cast a shadow, so it stays out
 // of the hot loop's cache footprint. One entry per shadow-casting light, capped at MAX_SHADOWS.
 struct FLightShadowData
@@ -879,6 +888,8 @@ struct FLightData
     float4 CascadeRadii;
     // Per-cascade atlas resolution (pixels per side); progressive packing gives each a different texel size.
     float4 CascadeResolutions;
+    // Ortho depth range of each cascade, which turns a shadow-map NDC z delta into world units.
+    float4 CascadeDepthRanges;
     // Directional shadow tuning (mirror FSceneLightData::ShadowParams).
     // x = normal-bias scale, y = constant depth bias, z = PCSS softness, w = cascade blend fraction.
     float4 ShadowParams;

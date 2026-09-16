@@ -63,6 +63,15 @@ float ComputeSpecularOcclusion(float NdotV, float AO, float Roughness)
     return saturate(pow(NdotV + AO, exp2(-16.0 * Roughness - 1.0)) - 1.0 + AO);
 }
 
+// Colored multi-bounce ambient occlusion (Jimenez et al. 2016), diffuse only.
+float3 AOMultiBounce(float Visibility, float3 DiffuseColor)
+{
+    float3 A =  2.0404 * DiffuseColor - 0.3324;
+    float3 B = -4.7951 * DiffuseColor + 0.6417;
+    float3 C =  2.7552 * DiffuseColor + 0.6903;
+    return max(Visibility, ((Visibility * A + B) * Visibility + C) * Visibility);
+}
+
 // Energy-conserving IBL ambient: Karis split-sum + Fdez-Aguera 2019 multi-scatter compensation.
 // N is the shading normal; V points surface->camera. AO occludes diffuse+multi-scatter, SpecAO the mirror.
 // NdotV (= saturate(dot(N,V))) and DFG (BRDF LUT scale,bias) are passed in: the caller already sampled the
@@ -98,7 +107,8 @@ void EvaluateIBLAmbientSplit(float3 WorldPos, float3 N, float3 V, float NdotV, f
     float SpecAO = ComputeSpecularOcclusion(NdotV, AO, Roughness);
 
     OutSpecular = FssEss * PreFilt * SpecAO;
-    OutDiffuse  = (FmsEms + kD) * Irradiance * AO;
+    // Only kD takes the colored bounce; FmsEms is specular energy, tinted by Favg rather than by albedo.
+    OutDiffuse  = (FmsEms * AO + kD * AOMultiBounce(AO, DiffuseColor)) * Irradiance;
 }
 
 float3 EvaluateIBLAmbient(float3 WorldPos, float3 N, float3 V, float NdotV, float2 DFG, float3 Albedo, float3 F0, float Roughness, float Metallic, float AO)
