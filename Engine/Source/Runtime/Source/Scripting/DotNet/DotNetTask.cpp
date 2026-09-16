@@ -2,7 +2,6 @@
 #include "Platform/GenericPlatform.h"
 #include "TaskSystem/TaskSystem.h"
 #include "TaskSystem/TaskTypes.h"
-#include "Scripting/ScriptCallback.h"
 
 // The managed body is type-erased into a thunk and context the native lambda forwards to.
 
@@ -27,49 +26,4 @@ LUMINA_DOTNET_EXPORT(void, Task_ParallelFor)(uint32 Num, uint32 MinRange, void* 
     {
         T(Ctx, R.Start, R.End, R.Thread);
     }, MinRange, static_cast<ETaskPriority>(Priority));
-}
-
-// Returns a heap-copied handle the C# side keeps alive and must release explicitly.
-LUMINA_DOTNET_EXPORT(void*, Task_Run)(uint64 Callback, int32 Priority)
-{
-    const FScriptCallback Body{ Callback };
-    if (!Body.IsBound())
-    {
-        return nullptr;
-    }
-
-    // One-shot, so the invoke frees the handle and nothing has to own it for the task's lifetime.
-    FTaskHandle H = Task::AsyncTask(1, 0, [Body](uint32, uint32, uint32)
-    {
-        Scripting::InvokeScriptCallback(Body, 0);
-    }, static_cast<ETaskPriority>(Priority));
-
-    return new FTaskHandle(H);
-}
-
-// Blocks until the task behind the handle has completed.
-LUMINA_DOTNET_EXPORT(void, Task_Wait)(void* Handle)
-{
-    if (Handle != nullptr)
-    {
-        (*static_cast<FTaskHandle*>(Handle))->Wait();
-    }
-}
-
-// Drops the heap-copied FTaskHandle (releases its refcount on the completion state).
-LUMINA_DOTNET_EXPORT(void, Task_Release)(void* Handle)
-{
-    delete static_cast<FTaskHandle*>(Handle);
-}
-
-// Blocks until every job submitted so far has completed.
-LUMINA_DOTNET_EXPORT(void, Task_WaitForAll)()
-{
-    GTaskSystem->WaitForAll();
-}
-
-// Number of background worker threads.
-LUMINA_DOTNET_EXPORT(int32, Task_NumWorkers)()
-{
-    return static_cast<int32>(GTaskSystem->GetNumWorkers());
 }

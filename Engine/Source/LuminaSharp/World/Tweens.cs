@@ -1,52 +1,38 @@
-﻿using System;
-using System.Runtime.InteropServices;
+using System;
 using Lumina;
 
 namespace LuminaSharp;
 
-// Curve family, chosen independently of the direction it is applied in.
-public enum Transition
-{
-    Linear, Sine, Quad, Cubic, Quart, Quint, Expo, Circ,
-    Back,
-    Elastic,
-    Bounce,
-    Spring,
-}
-
-// Which end of the curve the shaping is applied to.
-public enum Ease { In, Out, InOut, OutIn }
-
 // Tweeners run one after another; Parallel puts the next one in the same step as the last.
-public readonly unsafe partial struct Tween
+public readonly struct Tween
 {
-    internal readonly ulong World;
+    internal readonly CWorld World;
     internal readonly uint Id;
 
-    internal Tween(ulong World, uint Id)
+    internal Tween(CWorld World, uint Id)
     {
         this.World = World;
         this.Id = Id;
     }
 
-    public bool IsRunning => World != 0 && IsRunningRaw(World, Id) != 0;
+    public bool IsRunning => World != null && CTweenLibrary.IsRunning(World, Id);
 
     public Tween MoveTo(Entity Target, FVector3 Position, float Duration)
     {
-        MoveToRaw(World, Id, Target.Id, Position, Duration);
+        CTweenLibrary.MoveTo(World, Id, Target, Position, Duration);
         return this;
     }
 
     // Takes the short way around, since it slerps.
     public Tween RotateTo(Entity Target, FQuat Rotation, float Duration)
     {
-        RotateToRaw(World, Id, Target.Id, Rotation, Duration);
+        CTweenLibrary.RotateTo(World, Id, Target, Rotation, Duration);
         return this;
     }
 
     public Tween ScaleTo(Entity Target, FVector3 Scale, float Duration)
     {
-        ScaleToRaw(World, Id, Target.Id, Scale, Duration);
+        CTweenLibrary.ScaleTo(World, Id, Target, Scale, Duration);
         return this;
     }
 
@@ -54,14 +40,14 @@ public readonly unsafe partial struct Tween
     {
         ArgumentNullException.ThrowIfNull(Setter);
 
-        ValueToRaw(World, Id, From, To, Duration, ScriptCallback.OfRepeating(Setter).Token);
+        CTweenLibrary.ValueTo(World, Id, From, To, Duration, ScriptCallback.OfRepeating(Setter));
         return this;
     }
 
     // Dead time, for spacing steps apart.
     public Tween Interval(float Duration)
     {
-        IntervalRaw(World, Id, Duration);
+        CTweenLibrary.Interval(World, Id, Duration);
         return this;
     }
 
@@ -69,7 +55,7 @@ public readonly unsafe partial struct Tween
     {
         ArgumentNullException.ThrowIfNull(Callback);
 
-        CallRaw(World, Id, ScriptCallback.OfRepeating(Callback).Token);
+        CTweenLibrary.Call(World, Id, ScriptCallback.OfRepeating(Callback));
         return this;
     }
 
@@ -78,127 +64,73 @@ public readonly unsafe partial struct Tween
     {
         ArgumentNullException.ThrowIfNull(Callback);
 
-        OnFinishedRaw(World, Id, ScriptCallback.OfRepeating(Callback).Token);
+        CTweenLibrary.OnFinished(World, Id, ScriptCallback.OfRepeating(Callback));
         return this;
     }
 
     // Transition, EaseWith and Delay all apply to the tweener that was added last.
-    public Tween Trans(Transition Transition)
+    public Tween Trans(EEaseTransition Transition)
     {
-        TransRaw(World, Id, (int)Transition);
+        CTweenLibrary.Trans(World, Id, Transition);
         return this;
     }
 
-    // Named EaseWith so it does not collide with the Ease enum.
-    public Tween EaseWith(Ease Ease)
+    // Named EaseWith so it does not collide with its own argument.
+    public Tween EaseWith(EEaseType Ease)
     {
-        EaseRaw(World, Id, (int)Ease);
+        CTweenLibrary.Ease(World, Id, Ease);
         return this;
     }
 
     public Tween Delay(float Seconds)
     {
-        DelayRaw(World, Id, Seconds);
+        CTweenLibrary.Delay(World, Id, Seconds);
         return this;
     }
 
     public Tween Parallel()
     {
-        ParallelRaw(World, Id);
+        CTweenLibrary.Parallel(World, Id);
         return this;
     }
 
     // 0 repeats forever, 1 is the default single pass.
     public Tween SetLoops(int Count)
     {
-        SetLoopsRaw(World, Id, Count);
+        CTweenLibrary.SetLoops(World, Id, Count);
         return this;
     }
 
     public Tween SetSpeedScale(float Scale)
     {
-        SetSpeedScaleRaw(World, Id, Scale);
+        CTweenLibrary.SetSpeedScale(World, Id, Scale);
         return this;
     }
 
     public Tween SetPaused(bool Paused)
     {
-        SetPausedRaw(World, Id, Paused ? 1 : 0);
+        CTweenLibrary.SetPaused(World, Id, Paused);
         return this;
     }
 
     // Stops where it is; whatever it was driving keeps its current value.
-    public void Kill() => KillRaw(World, Id);
-
-    [NativeCall("LuminaSharp_Tween_MoveTo", SuppressGCTransition = true)]
-    private static partial void MoveToRaw(ulong World, uint Id, uint Entity, FVector3 Target, float Duration);
-
-    [NativeCall("LuminaSharp_Tween_RotateTo", SuppressGCTransition = true)]
-    private static partial void RotateToRaw(ulong World, uint Id, uint Entity, FQuat Target, float Duration);
-
-    [NativeCall("LuminaSharp_Tween_ScaleTo", SuppressGCTransition = true)]
-    private static partial void ScaleToRaw(ulong World, uint Id, uint Entity, FVector3 Target, float Duration);
-
-    [NativeCall("LuminaSharp_Tween_ValueTo")]
-    private static partial void ValueToRaw(ulong World, uint Id, float From, float To, float Duration,
-        ulong Callback);
-
-    [NativeCall("LuminaSharp_Tween_Interval", SuppressGCTransition = true)]
-    private static partial void IntervalRaw(ulong World, uint Id, float Duration);
-
-    [NativeCall("LuminaSharp_Tween_Call")]
-    private static partial void CallRaw(ulong World, uint Id,
-        ulong Callback);
-
-    [NativeCall("LuminaSharp_Tween_OnFinished")]
-    private static partial void OnFinishedRaw(ulong World, uint Id,
-        ulong Callback);
-
-    [NativeCall("LuminaSharp_Tween_Trans", SuppressGCTransition = true)]
-    private static partial void TransRaw(ulong World, uint Id, int Transition);
-
-    [NativeCall("LuminaSharp_Tween_Ease", SuppressGCTransition = true)]
-    private static partial void EaseRaw(ulong World, uint Id, int Ease);
-
-    [NativeCall("LuminaSharp_Tween_Delay", SuppressGCTransition = true)]
-    private static partial void DelayRaw(ulong World, uint Id, float Seconds);
-
-    [NativeCall("LuminaSharp_Tween_Parallel", SuppressGCTransition = true)]
-    private static partial void ParallelRaw(ulong World, uint Id);
-
-    [NativeCall("LuminaSharp_Tween_SetLoops", SuppressGCTransition = true)]
-    private static partial void SetLoopsRaw(ulong World, uint Id, int Count);
-
-    [NativeCall("LuminaSharp_Tween_SetSpeedScale", SuppressGCTransition = true)]
-    private static partial void SetSpeedScaleRaw(ulong World, uint Id, float Scale);
-
-    [NativeCall("LuminaSharp_Tween_SetPaused", SuppressGCTransition = true)]
-    private static partial void SetPausedRaw(ulong World, uint Id, int Paused);
-
-    [NativeCall("LuminaSharp_Tween_Kill", SuppressGCTransition = true)]
-    private static partial void KillRaw(ulong World, uint Id);
-
-    [NativeCall("LuminaSharp_Tween_IsRunning", SuppressGCTransition = true)]
-    private static partial int IsRunningRaw(ulong World, uint Id);
+    public void Kill() => CTweenLibrary.Kill(World, Id);
 }
 
 // A world's tween service, reached as World.Tweens. Game thread only.
-public readonly unsafe partial struct Tweens
+public readonly struct Tweens
 {
-    internal readonly ulong Handle;
+    internal readonly CWorld World;
 
-    internal Tweens(ulong Handle)
+    internal Tweens(CWorld World)
     {
-        this.Handle = Handle;
+        this.World = World;
     }
 
-    public bool IsValid => Handle != 0;
+    public bool IsValid => World != null;
 
-    public Tween Create() => new Tween(Handle, CreateRaw(Handle, 0u, 0));
+    public Tween Create() => new Tween(World, CTweenLibrary.Create(World, Entity.Null));
 
     // Killed automatically when Owner is destroyed, which is what a gameplay tween usually wants.
-    public Tween CreateFor(Entity Owner) => new Tween(Handle, CreateRaw(Handle, Owner.Id, 1));
-
-    [NativeCall("LuminaSharp_Tween_Create", SuppressGCTransition = true)]
-    private static partial uint CreateRaw(ulong World, uint Owner, int HasOwner);
+    public Tween CreateFor(Entity Owner) => new Tween(World, CTweenLibrary.Create(World, Owner));
 }

@@ -14,9 +14,8 @@ public unsafe partial class CWorld
     public EntityRegistry Registry => new(WorldHandle);
     public UI UI => new(WorldHandle);
     public GameplayMessageBus Messages => new(WorldHandle);
-    public Timers Timers => new(WorldHandle);
 
-    public Tweens Tweens => new(WorldHandle);
+    public Tweens Tweens => new(this);
 
     // The subsystem of type T in this world, or null when none was created. Finds a C++ one just the same.
     public T? GetSubsystem<T>() where T : NativeObject
