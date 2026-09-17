@@ -83,7 +83,7 @@ namespace Lumina
             }
         }
 
-        void DrawNavDebug(const FSystemContext& Context, const SNavMeshComponent& Comp)
+        void DrawNavDebug(const FSystemContext& Context, SNavMeshComponent& Comp)
         {
             const FNavMesh& Mesh = *Comp.Runtime.Mesh;
             const FVector3 Lift(0.0f, CVarNavDebugLift.GetValue(), 0.0f);
@@ -93,21 +93,36 @@ namespace Lumina
             if (CVarNavDebugSurface.GetValue())
             {
                 const float Alpha = CVarNavDebugSurfAlpha.GetValue();
-                const FNavDebugStats Stats = Mesh.GetDebugStats();
-                TVector<FSimpleElementVertex> SurfaceVerts;
-                SurfaceVerts.reserve((size_t)Stats.Triangles * 3);
-                Mesh.ForEachTriangle([&](const FVector3& A, const FVector3& B, const FVector3& C, uint8 Area)
+                FNavMeshRuntime& RT = Comp.Runtime;
+
+                // Hundreds of thousands of vertices, so rebuilding it per frame cost more than the bake.
+                const uint64 Epoch = Mesh.GetTopologyEpoch();
+                if (!RT.bDebugSurfaceValid || RT.DebugSurfaceEpoch != Epoch
+                    || RT.DebugSurfaceAlpha != Alpha || RT.bDebugSurfaceByArea != bColorByArea)
                 {
-                    FVector4 Color = bColorByArea ? NavAreaColor(Area) : FVector4(0.15f, 0.85f, 0.35f, 1.0f);
-                    Color.w = Alpha;
-                    const uint32 Packed = PackColor(Color);
-                    SurfaceVerts.push_back({ A + Lift, Packed });
-                    SurfaceVerts.push_back({ B + Lift, Packed });
-                    SurfaceVerts.push_back({ C + Lift, Packed });
-                });
-                if (!SurfaceVerts.empty())
+                    const FNavDebugStats Stats = Mesh.GetDebugStats();
+                    RT.DebugSurface.clear();
+                    RT.DebugSurface.reserve((size_t)Stats.Triangles * 3);
+                    Mesh.ForEachTriangle([&](const FVector3& A, const FVector3& B, const FVector3& C, uint8 Area)
+                    {
+                        FVector4 Color = bColorByArea ? NavAreaColor(Area) : FVector4(0.15f, 0.85f, 0.35f, 1.0f);
+                        Color.w = Alpha;
+                        const uint32 Packed = PackColor(Color);
+                        RT.DebugSurface.push_back({ A + Lift, Packed });
+                        RT.DebugSurface.push_back({ B + Lift, Packed });
+                        RT.DebugSurface.push_back({ C + Lift, Packed });
+                    });
+                    RT.DebugSurfaceEpoch   = Epoch;
+                    RT.DebugSurfaceAlpha   = Alpha;
+                    RT.bDebugSurfaceByArea = bColorByArea;
+                    RT.bDebugSurfaceValid  = true;
+                }
+
+                if (!RT.DebugSurface.empty())
                 {
-                    Context.DrawDebugSolidTriangles(std::move(SurfaceVerts), ESolidDrawMode::Translucent, -1.0f);
+                    // The batcher takes ownership, so the cache is copied rather than moved out of.
+                    TVector<FSimpleElementVertex> Frame(RT.DebugSurface);
+                    Context.DrawDebugSolidTriangles(std::move(Frame), ESolidDrawMode::Translucent, -1.0f);
                 }
             }
 
@@ -528,10 +543,6 @@ namespace Lumina
             const float Stride = T.TileWorldSize / float(Res - 1);
             const float Half   = T.TileWorldSize * 0.5f;
 
-            // One nav cell per quad is the finest worth emitting; also cap the grid so huge terrains stay bounded.
-            int32 Step = Math::Max(1, (int32)std::floor(Math::Max(CellSize, 0.01f) / Math::Max(Stride, 1e-4f)));
-            Step = Math::Max(Step, (int32)std::ceil((float)(Res - 1) / 256.0f));
-
             auto Height = [&](int32 Col, int32 Row) -> float
             {
                 return T.Heightmap[(size_t)Row * (size_t)Res + (size_t)Col] * T.MaxHeight;
@@ -542,12 +553,57 @@ namespace Lumina
                 return FVector3(W * FVector4(Local, 1.0f));
             };
 
-            for (int32 Row = 0; Row < Res - 1; Row += Step)
+            // Clipped to the bake box first, or a volume covering a slice of a huge terrain still pays for
+            // the whole thing and gets coarsened by it.
+            int32 ColBegin = 0, ColEnd = Res - 1, RowBegin = 0, RowEnd = Res - 1;
             {
-                const int32 RowN = Math::Min(Row + Step, Res - 1);
-                for (int32 Col = 0; Col < Res - 1; Col += Step)
+                const FMatrix4 ToLocal = Math::Inverse(W);
+                FVector3 LocalMin( FLT_MAX);
+                FVector3 LocalMax(-FLT_MAX);
+                const FVector3 Corners[8] = {
+                    {BakeMin.x, BakeMin.y, BakeMin.z}, {BakeMax.x, BakeMin.y, BakeMin.z},
+                    {BakeMin.x, BakeMax.y, BakeMin.z}, {BakeMax.x, BakeMax.y, BakeMin.z},
+                    {BakeMin.x, BakeMin.y, BakeMax.z}, {BakeMax.x, BakeMin.y, BakeMax.z},
+                    {BakeMin.x, BakeMax.y, BakeMax.z}, {BakeMax.x, BakeMax.y, BakeMax.z},
+                };
+                for (const FVector3& Corner : Corners)
                 {
-                    const int32 ColN = Math::Min(Col + Step, Res - 1);
+                    const FVector3 L = FVector3(ToLocal * FVector4(Corner, 1.0f));
+                    LocalMin = Math::Min(LocalMin, L);
+                    LocalMax = Math::Max(LocalMax, L);
+                }
+
+                // One quad of slack each way, so the clipped edge still shares vertices with its neighbor.
+                ColBegin = Math::Clamp((int32)std::floor((LocalMin.x + Half) / Stride) - 1, 0, Res - 2);
+                ColEnd   = Math::Clamp((int32)std::ceil ((LocalMax.x + Half) / Stride) + 1, ColBegin + 1, Res - 1);
+                RowBegin = Math::Clamp((int32)std::floor((LocalMin.z + Half) / Stride) - 1, 0, Res - 2);
+                RowEnd   = Math::Clamp((int32)std::ceil ((LocalMax.z + Half) / Stride) + 1, RowBegin + 1, Res - 1);
+            }
+
+            // One nav cell per quad is the finest worth emitting. The ceiling is on the quads this bake
+            // actually emits, since coarsening past the cell size turns real relief into a steep facet and
+            // Recast then marks the whole quad unwalkable.
+            int32 Step = Math::Max(1, (int32)std::floor(Math::Max(CellSize, 0.01f) / Math::Max(Stride, 1e-4f)));
+            const int32 SpanQuads = Math::Max(ColEnd - ColBegin, RowEnd - RowBegin);
+            Step = Math::Max(Step, (int32)std::ceil((float)SpanQuads / 1024.0f));
+
+            // Rows are independent, and on a world-sized bake this is the one source worth fanning out.
+            const int32 RowStrips = (RowEnd - RowBegin + Step - 1) / Step;
+            if (RowStrips <= 0)
+            {
+                return;
+            }
+
+            TVector<TVector<FVector3>> Strips((size_t)RowStrips);
+            Task::ParallelFor((uint32)RowStrips, [&](uint32 StripIndex)
+            {
+                const int32 Row  = RowBegin + (int32)StripIndex * Step;
+                const int32 RowN = Math::Min(Row + Step, RowEnd);
+                TVector<FVector3>& Strip = Strips[StripIndex];
+
+                for (int32 Col = ColBegin; Col < ColEnd; Col += Step)
+                {
+                    const int32 ColN = Math::Min(Col + Step, ColEnd);
                     const FVector3 A = Pos(Col,  Row);
                     const FVector3 B = Pos(ColN, Row);
                     const FVector3 C = Pos(ColN, RowN);
@@ -555,13 +611,24 @@ namespace Lumina
                     // Wound so the surface normal points +Y (Recast's slope test marks it walkable).
                     if (TriIntersectsAABB(A, C, B, BakeMin, BakeMax))
                     {
-                        Out.push_back(A); Out.push_back(C); Out.push_back(B);
+                        Strip.push_back(A); Strip.push_back(C); Strip.push_back(B);
                     }
                     if (TriIntersectsAABB(A, D, C, BakeMin, BakeMax))
                     {
-                        Out.push_back(A); Out.push_back(D); Out.push_back(C);
+                        Strip.push_back(A); Strip.push_back(D); Strip.push_back(C);
                     }
                 }
+            }, 1, ETaskPriority::Background);
+
+            size_t Total = 0;
+            for (const TVector<FVector3>& Strip : Strips)
+            {
+                Total += Strip.size();
+            }
+            Out.reserve(Out.size() + Total);
+            for (TVector<FVector3>& Strip : Strips)
+            {
+                Out.insert(Out.end(), Strip.begin(), Strip.end());
             }
         }
 
@@ -614,6 +681,53 @@ namespace Lumina
                 case ENavColliderType::AreaVolume:
                 case ENavColliderType::OffMeshLink:
                     break;
+            }
+        }
+
+        // Emission is pure per prim, so it fans out into per-chunk buffers and concatenates with the
+        // indices rebased. Serial emission was the whole front half of a world-sized bake.
+        void EmitNavSourcePrims(const FNavSourcePrim* Prims, size_t Count, const FVector3& EmitMin,
+            const FVector3& EmitMax, TVector<FVector3>& OutVertices, TVector<uint32>& OutIndices)
+        {
+            if (Count == 0)
+            {
+                return;
+            }
+
+            const uint32 Workers   = Math::Max(1u, Jobs::GetNumWorkers());
+            const uint32 NumChunks = (uint32)Math::Min<size_t>(Count, (size_t)Workers * 2u);
+            const size_t PerChunk  = (Count + NumChunks - 1) / NumChunks;
+
+            TVector<FGatherAccumulator> Chunks((size_t)NumChunks);
+            Task::ParallelFor(NumChunks, [&](uint32 ChunkIndex)
+            {
+                const size_t Begin = (size_t)ChunkIndex * PerChunk;
+                const size_t End   = Math::Min(Begin + PerChunk, Count);
+                FGatherAccumulator& Acc = Chunks[ChunkIndex];
+                for (size_t i = Begin; i < End; ++i)
+                {
+                    EmitNavSourcePrim(Prims[i], EmitMin, EmitMax, Acc);
+                }
+            }, 1, ETaskPriority::Background);
+
+            size_t TotalVerts = 0;
+            size_t TotalIndices = 0;
+            for (const FGatherAccumulator& Acc : Chunks)
+            {
+                TotalVerts += Acc.Vertices.size();
+                TotalIndices += Acc.Indices.size();
+            }
+            OutVertices.reserve(OutVertices.size() + TotalVerts);
+            OutIndices.reserve(OutIndices.size() + TotalIndices);
+
+            for (FGatherAccumulator& Acc : Chunks)
+            {
+                const uint32 Base = (uint32)OutVertices.size();
+                OutVertices.insert(OutVertices.end(), Acc.Vertices.begin(), Acc.Vertices.end());
+                for (uint32 Index : Acc.Indices)
+                {
+                    OutIndices.push_back(Base + Index);
+                }
             }
         }
 
@@ -1097,6 +1211,25 @@ namespace Lumina
 
         FORCEINLINE uint64 PackTileKey(int32 TX, int32 TY) { return ((uint64)(uint32)TY << 32) | (uint32)TX; }
 
+        // Rebuilt whenever Tiles change, so the settling window can tell a covered tile from a hole.
+        void RefreshTileGeometryMask(SNavMeshComponent& Comp)
+        {
+            const size_t Count = (size_t)Math::Max(0, Comp.TilesX) * (size_t)Math::Max(0, Comp.TilesY);
+            Comp.Runtime.TileHasGeometry.assign(Count, 0);
+            if (Count == 0)
+            {
+                return;
+            }
+            for (const FNavTileData& Tile : Comp.Tiles)
+            {
+                if (Tile.Blob.empty() || Tile.X < 0 || Tile.Y < 0 || Tile.X >= Comp.TilesX || Tile.Y >= Comp.TilesY)
+                {
+                    continue;
+                }
+                Comp.Runtime.TileHasGeometry[(size_t)Tile.Y * (size_t)Comp.TilesX + (size_t)Tile.X] = 1;
+            }
+        }
+
         // Snapshot at bake completion so the next change-detector tick reports zero diff.
         void RebuildEntityAABBCache(const FSystemContext& Context, const FVector3& BakeMin, const FVector3& BakeMax, THashMap<uint64, FNavSourceEntity>& OutCache)
         {
@@ -1119,14 +1252,15 @@ namespace Lumina
             TVector<FNavSourceEntry> Sources;
             CollectNavSources(Context, Out.BoundsMin, Out.BoundsMax, true, Comp.Settings.CellSize, Sources);
 
-            FGatherAccumulator Acc;
+            TVector<FNavSourcePrim> Prims;
+            Prims.reserve(Sources.size());
             for (const FNavSourceEntry& Entry : Sources)
             {
-                EmitNavSourcePrim(Entry.Prim, Out.BoundsMin, Out.BoundsMax, Acc);
                 AppendAnnotation(Entry.Prim, Out.AreaVolumes, Out.Links);
+                Prims.push_back(Entry.Prim);
             }
-            Out.Vertices = std::move(Acc.Vertices);
-            Out.Indices  = std::move(Acc.Indices);
+
+            EmitNavSourcePrims(Prims.data(), Prims.size(), Out.BoundsMin, Out.BoundsMax, Out.Vertices, Out.Indices);
         }
 
         void TickComponent(const FSystemContext& Context, ECS::FEntity Entity, SNavMeshComponent& Comp)
@@ -1236,6 +1370,7 @@ namespace Lumina
                     Comp.Runtime.bRuntimeDirty = true;
                     RebuildEntityAABBCache(Context, Comp.Center - Comp.GetWorldExtents(), Comp.Center + Comp.GetWorldExtents(), Comp.Runtime.EntityAABBs);
                     Comp.Runtime.RestartBaseline();
+                    RefreshTileGeometryMask(Comp);
                 }
             }
 
@@ -1335,6 +1470,7 @@ namespace Lumina
 
                 RebuildEntityAABBCache(Context, BakeMin, BakeMax, Comp.Runtime.EntityAABBs);
                 Comp.Runtime.RestartBaseline();
+                RefreshTileGeometryMask(Comp);
                 Comp.Runtime.DirtyTiles.clear();
             }
 
@@ -1418,6 +1554,13 @@ namespace Lumina
                     Comp.Tiles.push_back(std::move(NewTile));
                 }
 
+                if (Job->TileX >= 0 && Job->TileY >= 0 && Job->TileX < Comp.TilesX && Job->TileY < Comp.TilesY
+                    && !Comp.Runtime.TileHasGeometry.empty())
+                {
+                    Comp.Runtime.TileHasGeometry[(size_t)Job->TileY * (size_t)Comp.TilesX + (size_t)Job->TileX] =
+                        Job->ResultBlob.empty() ? 0 : 1;
+                }
+
                 // Swapping in a tile the streamer never paged in would leave it resident and unevictable.
                 const bool bStreamerOwnsResidency = Comp.Runtime.bStreamedInit;
                 if (!bStreamerOwnsResidency || Comp.Runtime.Streamer.IsResident(Job->TileX, Job->TileY))
@@ -1460,6 +1603,28 @@ namespace Lumina
                 };
 
                 int32 NewThisScan = 0;
+                auto MarkDirtyForEmptyTiles = [&](const FVector3& Mn, const FVector3& Mx)
+                {
+                    const TVector<uint8>& Mask = Comp.Runtime.TileHasGeometry;
+                    if (Mask.empty())
+                    {
+                        MarkDirtyForAABB(Mn, Mx);
+                        return;
+                    }
+                    int32 TX0, TY0, TX1, TY1;
+                    TilesForAABB(Mn, Mx, Comp.Origin, Comp.TileWorldSize, Comp.TilesX, Comp.TilesY, TX0, TY0, TX1, TY1);
+                    for (int32 ty = TY0; ty <= TY1; ++ty)
+                    {
+                        for (int32 tx = TX0; tx <= TX1; ++tx)
+                        {
+                            if (Mask[(size_t)ty * (size_t)Comp.TilesX + (size_t)tx] == 0)
+                            {
+                                Comp.Runtime.DirtyTiles.insert(PackTileKey(tx, ty));
+                            }
+                        }
+                    }
+                };
+
                 auto VisitSource = [&](uint64 Key, const FVector3& Mn, const FVector3& Mx, uint64 ContentId)
                 {
                     CurrentAABBs[Key] = FNavSourceEntity{ Mn, Mx, ContentId };
@@ -1470,6 +1635,9 @@ namespace Lumina
                         ++NewThisScan;
                         if (Comp.Runtime.bBaselineSettling)
                         {
+                            // A procedural mesh is skipped while it builds, so it arrives new AFTER the bake
+                            // and its tiles are the hole. Suppressing those is what left a ring unbuilt.
+                            MarkDirtyForEmptyTiles(Mn, Mx);
                             return;
                         }
                     }
@@ -1662,14 +1830,12 @@ namespace Lumina
                 Input.BoundsMax = Snap->BakeMax;
                 Input.Settings  = Snap->Settings;
 
-                FGatherAccumulator Acc;
                 for (const FNavSourcePrim& Prim : Snap->Prims)
                 {
-                    EmitNavSourcePrim(Prim, Snap->GatherMin, Snap->GatherMax, Acc);
                     AppendAnnotation(Prim, Input.AreaVolumes, Input.Links);
                 }
-                Input.Vertices = std::move(Acc.Vertices);
-                Input.Indices  = std::move(Acc.Indices);
+                EmitNavSourcePrims(Snap->Prims.data(), Snap->Prims.size(), Snap->GatherMin, Snap->GatherMax,
+                    Input.Vertices, Input.Indices);
 
                 // One binning pass feeds every dirty tile, rather than each tile rescanning the soup.
                 TVector<FNavTileCoord> Coords;

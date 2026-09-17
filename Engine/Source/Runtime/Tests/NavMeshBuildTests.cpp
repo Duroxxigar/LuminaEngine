@@ -903,3 +903,73 @@ TEST(NavMeshBuild, PathResultDefaultsToNotQueriedAndEveryReasonIsDistinct)
         Seen.emplace_back(Reason);
     }
 }
+
+// A flat plane spanning thousands of tiles has to come back walkable everywhere. Partial coverage on a
+// world-sized bake is the live symptom, so this is the smallest thing that reproduces it.
+TEST(NavMeshBuild, WorldSizedPlaneIsWalkableInEveryTile)
+{
+    FNavBuildInput In = MakeGroundPlane(450.0f);
+
+    FNavBuildOutput Out;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(std::move(In), Out));
+    ASSERT_GT(Out.TilesX * Out.TilesY, 2000) << "grid too small to exercise the world-sized path";
+
+    int32 Empty = 0;
+    for (const FNavTileData& Tile : Out.Tiles)
+    {
+        if (Tile.Blob.empty())
+        {
+            ++Empty;
+        }
+    }
+
+    // The outermost ring can legitimately be empty where the plane stops inside the padded bounds.
+    const int32 Total    = (int32)Out.Tiles.size();
+    const int32 EdgeRing = 2 * (Out.TilesX + Out.TilesY);
+    EXPECT_LE(Empty, EdgeRing)
+        << Empty << " of " << Total << " tiles baked empty over a flat plane (grid "
+        << Out.TilesX << "x" << Out.TilesY << "); geometry is not reaching every tile";
+}
+
+// A large raised mesh sitting on ground must not leave a ring of empty tiles around its footprint. Whole
+// tiles going empty is tile-granular, so it is a geometry-reaching-the-tile fault, not a slope one.
+TEST(NavMeshBuild, LargeRaisedMeshLeavesNoRingOfEmptyTiles)
+{
+    FNavBuildInput In;
+    ApplyTestSettings(In);
+
+    // Ground everywhere, then a broad plateau over the middle with vertical sides.
+    AddGroundQuad(In, -120.0f, -120.0f, 120.0f, 120.0f, 0.0f);
+    AddGroundQuad(In,  -40.0f,  -40.0f,  40.0f,  40.0f, 6.0f);
+    GrowBounds(In, 4.0f);
+
+    FNavBuildOutput Out;
+    ASSERT_TRUE(NavMeshBuilder::BakeSync(std::move(In), Out));
+    ASSERT_GT(Out.TilesX * Out.TilesY, 100);
+
+    // Mapped so a failure shows the shape of the hole rather than only its size.
+    std::string Map;
+    int32 Empty = 0;
+    for (int32 Y = 0; Y < Out.TilesY; ++Y)
+    {
+        for (int32 X = 0; X < Out.TilesX; ++X)
+        {
+            bool bFound = false;
+            for (const FNavTileData& Tile : Out.Tiles)
+            {
+                if (Tile.X == X && Tile.Y == Y)
+                {
+                    bFound = !Tile.Blob.empty();
+                    break;
+                }
+            }
+            Map += bFound ? '#' : '.';
+            Empty += bFound ? 0 : 1;
+        }
+        Map += '\n';
+    }
+
+    const int32 EdgeRing = 2 * (Out.TilesX + Out.TilesY);
+    EXPECT_LE(Empty, EdgeRing) << Empty << " empty tiles on a " << Out.TilesX << "x" << Out.TilesY
+                               << " grid:\n" << Map;
+}
