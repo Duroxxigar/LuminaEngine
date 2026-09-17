@@ -1722,7 +1722,7 @@ namespace Lumina::Reflection
                     else
                     {
                         const std::string Ctor = A.bIsName ? std::string("Lumina::FName") : std::string("Lumina::FString");
-                        CallArgs += "((" + An + "Len > 0) ? " + Ctor + "(" + An + ", (size_t)" + An + "Len) : " + Ctor + "())";
+                        CallArgs += "((" + An + "Len > 0) ? " + Ctor + "(Lumina::FStringView(" + An + ", (size_t)" + An + "Len)) : " + Ctor + "())";
                     }
                 }
                 else if (A.Kind == EBind::Span)
@@ -2344,7 +2344,7 @@ namespace Lumina::Reflection
                 {
                     Params += "const char* " + An + ", int " + An + "Len";
                     const std::string Ctor = A.bIsName ? std::string("Lumina::FName") : std::string("Lumina::FString");
-                    CallArgs += "((" + An + "Len > 0) ? " + Ctor + "(" + An + ", (size_t)" + An + "Len) : " + Ctor + "())";
+                    CallArgs += "((" + An + "Len > 0) ? " + Ctor + "(Lumina::FStringView(" + An + ", (size_t)" + An + "Len)) : " + Ctor + "())";
                 }
                 else if (A.Kind == EBind::Span)
                 {
