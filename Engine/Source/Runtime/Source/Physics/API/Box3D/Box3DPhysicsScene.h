@@ -20,6 +20,8 @@
 
 namespace Lumina
 {
+    struct SCharacterMovementComponent;
+    struct SCharacterPhysicsComponent;
     struct SCompoundColliderComponent;
     struct SDefaultWorldSettings;
     struct STransformComponent;
@@ -100,6 +102,26 @@ namespace Lumina::Physics
         bool                bSensorB;
     };
 
+    // Characters that owe a full collide-and-solve this substep, gathered so the pass can fan out.
+    struct FCharacterWork
+    {
+        SCharacterPhysicsComponent*     Physics;
+        SCharacterMovementComponent*    Movement;
+    };
+
+    struct FPendingCharacterPush
+    {
+        b3BodyId    Body;
+        b3Vec3      Impulse;
+        b3Vec3      Point;
+    };
+
+    // One bucket per task-thread slot, cache isolated so neighboring workers do not share a line.
+    struct alignas(64) FCharacterPushBucket
+    {
+        TVector<FPendingCharacterPush> Pushes;
+    };
+
     class FBox3DPhysicsScene : public IPhysicsScene
     {
     public:
@@ -124,6 +146,7 @@ namespace Lumina::Physics
 
         void ApplyDirtyTransforms(float FixedDt);
         void UpdateCharacters(float FixedDt);
+        void StepCharacter(const FCharacterWork& Work, float FixedDt, uint32 ThreadSlot);
         void LatchCharacterInput();
         void BuildInterpolatedTransforms(float Alpha);
         void ApplyInterpolatedTransforms();
@@ -315,6 +338,12 @@ namespace Lumina::Physics
         TQueue<ECS::FEntity>                    PendingRigidBodyCreations;
 
         TAtomic<bool>                           bStepInProgress{ false };
+
+        // Offsets the re-validation phase of resting characters so a settled crowd does not poll on one step.
+        uint64                                  CharacterStepCounter = 0;
+
+        TVector<FCharacterWork>                 CharacterWorkScratch;
+        TVector<FCharacterPushBucket>           CharacterPushScratch;
 
         int32                                   BodyBatchDepth = 0;
         TVector<ECS::FEntity>                   BatchedBodyCreations;

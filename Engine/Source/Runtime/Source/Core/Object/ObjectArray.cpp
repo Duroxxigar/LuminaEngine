@@ -32,7 +32,7 @@ namespace Lumina
             {
                 if (Objects[i])
                 {
-                    Memory::Delete(Objects[i]);
+                    Memory::DeleteArray(Objects[i]);
                     Objects[i] = nullptr;
                 }
             }
@@ -127,21 +127,32 @@ namespace Lumina
         // Freed indices are recycled, so index order alone cannot keep a class alive past its instances.
         auto DestroyPass = [this](bool bTypeObjects)
         {
-            ForEachObject([bTypeObjects](CObjectBase* Object, int32)
+            // Classified before anything dies, since IsA reads the class objects this pass goes on to free.
+            TVector<TPair<int32, CObjectBase*>> Matched;
+            ForEachObject([&Matched, bTypeObjects](CObjectBase* Object, int32 Index)
             {
                 if (Object->IsA<CField>() == bTypeObjects)
                 {
-                    Object->BeginDestroyForShutdown();
+                    Matched.emplace_back(Index, Object);
                 }
             });
 
-            ForEachObject([bTypeObjects](CObjectBase* Object, int32)
+            // An OnDestroy can free something else in the list, so the slot is rechecked before each step.
+            for (const TPair<int32, CObjectBase*>& Entry : Matched)
             {
-                if (Object->IsA<CField>() == bTypeObjects)
+                if (GetObjectByIndex(Entry.first) == Entry.second)
                 {
-                    Object->FinishDestroyForShutdown();
+                    Entry.second->BeginDestroyForShutdown();
                 }
-            });
+            }
+
+            for (const TPair<int32, CObjectBase*>& Entry : Matched)
+            {
+                if (GetObjectByIndex(Entry.first) == Entry.second)
+                {
+                    Entry.second->FinishDestroyForShutdown();
+                }
+            }
         };
 
         DestroyPass(/*bTypeObjects*/ false);

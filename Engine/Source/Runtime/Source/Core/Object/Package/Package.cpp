@@ -890,7 +890,13 @@ namespace Lumina
         PackageToDestroy->ExportTable.clear();
         PackageToDestroy->ImportTable.clear();
         PackageToDestroy->RemoveFromRoot();
-        PackageToDestroy->ConditionalBeginDestroy();
+
+        // ConditionalDestroy refuses an already-marked object, so the husk mark comes off for the free itself.
+        PackageToDestroy->ClearFlags(OF_MarkedDestroy);
+        if (!GObjectArray.ConditionalDestroy(PackageToDestroy))
+        {
+            PackageToDestroy->SetFlag(OF_MarkedDestroy);
+        }
 
         return true;
     }

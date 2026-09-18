@@ -40,6 +40,11 @@ namespace Lumina
         bool        bAwaitingGround = true;
         uint32      AwaitingGroundSteps = 0;
 
+        // A grounded, motionless character on static ground skips its collide-and-solve until woken.
+        bool        bResting = false;
+        b3BodyId    RestGroundBody{};
+        float       RestLookYaw = 0.0f;
+
         float       Radius = 0.35f;
         float       HalfHeight = 0.55f;
         float       Padding = 0.02f;
