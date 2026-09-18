@@ -424,7 +424,7 @@ namespace Lumina
             }
             ImDrawList* Dl = ImGui::GetWindowDrawList();
             Dl->AddRectFilled(Pos, ImVec2(Pos.x + SwatchSize.x, Pos.y + SwatchSize.y), Fill, 4.0f);
-            Dl->AddRect(Pos, ImVec2(Pos.x + SwatchSize.x, Pos.y + SwatchSize.y), Border, 4.0f, 0, bSelected ? 2.5f : 1.0f);
+            Dl->AddRect(Pos, ImVec2(Pos.x + SwatchSize.x, Pos.y + SwatchSize.y), Border, 4.0f, bSelected ? 2.5f : 1.0f, 0);
 
             if (ImGui::IsItemHovered() && !Terrain.Layers[i].Name.empty())
             {
@@ -771,7 +771,7 @@ namespace Lumina
             }
             if (Count >= 2)
             {
-                Draw->AddPolyline(Points, Count, Color, ImDrawFlags_Closed, Thickness);
+                Draw->AddPolyline(Points, Count, Color, Thickness, ImDrawFlags_Closed);
             }
         };
 

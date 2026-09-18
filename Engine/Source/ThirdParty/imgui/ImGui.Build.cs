@@ -16,6 +16,9 @@ public class ImGui : LuminaThirdPartyModuleRules
 
         PublicDefinitions.Add("GLFW_INCLUDE_NONE");
 
+        // volk is vendored one directory deeper than the backend expects.
+        PublicDefinitions.Add("IMGUI_IMPL_VULKAN_VOLK_FILENAME=<volk/volk.h>");
+
         // ImGui vendors several optional back ends and add-ons; only the ones the engine uses
         // are built.
         bUseExplicitSourceList = true;

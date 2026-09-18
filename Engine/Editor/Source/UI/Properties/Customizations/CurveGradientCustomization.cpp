@@ -83,7 +83,7 @@ namespace Lumina
             // Screen Y grows downward, so a high value maps to a small Y.
             Points[i].y = Max.y - Pad - (Size.y - Pad * 2.0f) * Math::Clamp(Norm, 0.0f, 1.0f);
         }
-        DrawList->AddPolyline(Points, kThumbnailSamples, IM_COL32(120, 190, 255, 255), 0, 1.5f);
+        DrawList->AddPolyline(Points, kThumbnailSamples, IM_COL32(120, 190, 255, 255), 1.5f, 0);
 
         ImGui::Dummy(Size);
     }

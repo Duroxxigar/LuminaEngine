@@ -376,7 +376,7 @@ namespace Lumina
             const ImU32 Border = IsE ? IM_COL32(150, 120, 60, 255) : IM_COL32(90, 130, 190, 255);
 
             DL->AddRectFilled(P0, P1, Fill, 3.0f);
-            DL->AddRect(P0, P1, Border, 3.0f, 0, 1.5f);
+            DL->AddRect(P0, P1, Border, 3.0f, 1.5f, 0);
 
             char Label[8];
             snprintf(Label, sizeof Label, "%u", c);

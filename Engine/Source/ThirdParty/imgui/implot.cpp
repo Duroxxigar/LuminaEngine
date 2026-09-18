@@ -3111,7 +3111,7 @@ void EndPlot() {
 
     // render border
     if (render_border)
-        DrawList.AddRect(plot.PlotRect.Min, plot.PlotRect.Max, GetStyleColorU32(ImPlotCol_PlotBorder), 0, ImDrawFlags_RoundCornersAll, gp.Style.PlotBorderSize);
+        DrawList.AddRect(plot.PlotRect.Min, plot.PlotRect.Max, GetStyleColorU32(ImPlotCol_PlotBorder), 0, gp.Style.PlotBorderSize, ImDrawFlags_RoundCornersAll);
 
     // render tags
     for (int i = 0; i < gp.Tags.Size; ++i) {

@@ -38,6 +38,18 @@
         static bool const value = sizeof(test<T>(0)) == sizeof(yes);               \
     };
 
+// ImRect::Floor() was removed in imgui 1.92.9.
+namespace {
+    void FloorRect(ImRect& rect)
+    {
+        rect.Min.x = IM_TRUNC(rect.Min.x);
+        rect.Min.y = IM_TRUNC(rect.Min.y);
+        rect.Max.x = IM_TRUNC(rect.Max.x);
+        rect.Max.y = IM_TRUNC(rect.Max.y);
+    }
+}
+
+
 
 namespace ax {
 namespace NodeEditor {
@@ -544,7 +556,7 @@ static void ImDrawList_AddBezierWithArrows(ImDrawList* drawList, const ImCubicBe
 
         ImDrawList_PathBezierOffset(drawList, half_thickness, curve.P3, curve.P2, curve.P1, curve.P0);
 
-        drawList->PathStroke(color, true, strokeThickness);
+        drawList->PathStroke(color, strokeThickness, ImDrawFlags_Closed);
     }
 }
 
@@ -569,7 +581,7 @@ void ed::Pin::Draw(ImDrawList* drawList, DrawFlags flags)
         {
             FringeScaleScope fringe(1.0f);
             drawList->AddRect(m_Bounds.Min, m_Bounds.Max,
-                m_BorderColor, m_Rounding, m_Corners, m_BorderWidth);
+                m_BorderColor, m_Rounding, m_BorderWidth, m_Corners);
         }
 
         if (!Editor->IsSelected(m_Node))
@@ -670,7 +682,7 @@ void ed::Node::Draw(ImDrawList* drawList, DrawFlags flags)
                 drawList->AddRect(
                     m_GroupBounds.Min,
                     m_GroupBounds.Max,
-                    m_GroupBorderColor, m_GroupRounding, c_AllRoundCornersFlags, m_GroupBorderWidth);
+                    m_GroupBorderColor, m_GroupRounding, m_GroupBorderWidth, c_AllRoundCornersFlags);
             }
         }
 
@@ -723,7 +735,7 @@ void ed::Node::DrawBorder(ImDrawList* drawList, ImU32 color, float thickness, fl
         const ImVec2 extraOffset = ImVec2(offset, offset);
 
         drawList->AddRect(m_Bounds.Min - extraOffset, m_Bounds.Max + extraOffset,
-            color, ImMax(0.0f, m_Rounding + offset), c_AllRoundCornersFlags, thickness);
+            color, ImMax(0.0f, m_Rounding + offset), thickness, c_AllRoundCornersFlags);
     }
 }
 
@@ -1659,7 +1671,7 @@ void ed::EditorContext::SetNodePosition(NodeId nodeId, const ImVec2& position)
     if (node->m_Bounds.Min != position)
     {
         node->m_Bounds.Translate(position - node->m_Bounds.Min);
-        node->m_Bounds.Floor();
+        FloorRect(node->m_Bounds);
         MakeDirty(NodeEditor::SaveReasonFlags::Position, node);
     }
 }
@@ -1679,7 +1691,7 @@ void ed::EditorContext::SetGroupSize(NodeId nodeId, const ImVec2& size)
     {
         node->m_GroupBounds.Min = node->m_Bounds.Min;
         node->m_GroupBounds.Max = node->m_Bounds.Min + size;
-        node->m_GroupBounds.Floor();
+        FloorRect(node->m_GroupBounds);
         MakeDirty(NodeEditor::SaveReasonFlags::Size, node);
     }
 }
@@ -1757,10 +1769,10 @@ void ed::EditorContext::UpdateNodeState(Node* node)
 
     node->m_Bounds.Min      = settings->m_Location;
     node->m_Bounds.Max      = node->m_Bounds.Min + settings->m_Size;
-    node->m_Bounds.Floor();
+    FloorRect(node->m_Bounds);
     node->m_GroupBounds.Min = settings->m_Location;
     node->m_GroupBounds.Max = node->m_GroupBounds.Min + settings->m_GroupSize;
-    node->m_GroupBounds.Floor();
+    FloorRect(node->m_GroupBounds);
 }
 
 void ed::EditorContext::RemoveSettings(Object* object)
@@ -3792,7 +3804,7 @@ bool ed::SizeAction::Process(const Control& control)
         if ((m_Pivot & NodeRegion::Right) == NodeRegion::Right)
             newBounds.Max.x = ImMax(newBounds.Min.x + minimumSize.x, Editor->AlignPointToGrid(newBounds.Max.x + dragOffset.x));
 
-        newBounds.Floor();
+        FloorRect(newBounds);
 
         m_LastSize = newBounds.GetSize();
 
@@ -5302,7 +5314,7 @@ void ed::NodeBuilder::End()
     ImGui::EndGroup();
 
     m_NodeRect = ImGui_GetItemRect();
-    m_NodeRect.Floor();
+    FloorRect(m_NodeRect);
 
     if (m_CurrentNode->m_Bounds.GetSize() != m_NodeRect.GetSize())
     {
@@ -5410,7 +5422,7 @@ void ed::NodeBuilder::PinRect(const ImVec2& a, const ImVec2& b)
     IM_ASSERT(nullptr != m_CurrentPin);
 
     m_CurrentPin->m_Bounds = ImRect(a, b);
-    m_CurrentPin->m_Bounds.Floor();
+    FloorRect(m_CurrentPin->m_Bounds);
     m_ResolvePinRect     = false;
 }
 
@@ -5460,7 +5472,7 @@ void ed::NodeBuilder::Group(const ImVec2& size)
         ImGui::Dummy(size);
 
     m_GroupBounds = ImGui_GetItemRect();
-    m_GroupBounds.Floor();
+    FloorRect(m_GroupBounds);
 }
 
 ImDrawList* ed::NodeBuilder::GetUserBackgroundDrawList() const

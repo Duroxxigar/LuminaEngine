@@ -2032,7 +2032,7 @@ namespace Lumina
                                 const ImVec2 P(S.x + ViewportOrigin.x, S.y + ViewportOrigin.y);
                                 const ImU32 C = bVertexSnapApplied ? SnapCol : ArmedCol;
                                 DL->AddRectFilled(ImVec2(P.x - 3, P.y - 3), ImVec2(P.x + 3, P.y + 3), C);
-                                DL->AddRect(ImVec2(P.x - 7, P.y - 7), ImVec2(P.x + 7, P.y + 7), C, 0.0f, 0, 2.0f);
+                                DL->AddRect(ImVec2(P.x - 7, P.y - 7), ImVec2(P.x + 7, P.y + 7), C, 0.0f, 2.0f, 0);
                             }
                         }
 
@@ -2169,7 +2169,7 @@ namespace Lumina
                     const ImVec2 ScreenStart = ImVec2(Origin.x + SelectionBox.Start.x,   Origin.y + SelectionBox.Start.y);
                     const ImVec2 ScreenEnd   = ImVec2(Origin.x + SelectionBox.Current.x, Origin.y + SelectionBox.Current.y);
                     DrawList->AddRectFilled(ScreenStart, ScreenEnd, IM_COL32(100, 150, 255, 50));
-                    DrawList->AddRect(ScreenStart, ScreenEnd, IM_COL32(100, 150, 255, 255), 0.0f, 0, 2.0f);
+                    DrawList->AddRect(ScreenStart, ScreenEnd, IM_COL32(100, 150, 255, 255), 0.0f, 2.0f, 0);
                 }
                 if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && SelectionBox.bActive)
                 {
@@ -4966,7 +4966,7 @@ namespace Lumina
         ImDrawList* DrawList = ImGui::GetWindowDrawList();
         DrawList->AddRectFilled(CursorPos, ImVec2(CursorPos.x + HeaderSize.x, CursorPos.y + HeaderSize.y), IM_COL32(25, 25, 30, 255), 6.0f);
         
-        DrawList->AddRect(CursorPos, ImVec2(CursorPos.x + HeaderSize.x, CursorPos.y + HeaderSize.y), IM_COL32(45, 45, 52, 255), 6.0f, 0, 1.0f);
+        DrawList->AddRect(CursorPos, ImVec2(CursorPos.x + HeaderSize.x, CursorPos.y + HeaderSize.y), IM_COL32(45, 45, 52, 255), 6.0f, 1.0f, 0);
         
         ImVec2 IconPos = CursorPos;
         IconPos.x += 12.0f;
@@ -5031,7 +5031,7 @@ namespace Lumina
             ImU32 ChipBorder = bHovered ? IM_COL32(80, 100, 140, 255) : IM_COL32(65, 80, 115, 255);
             
             DrawList->AddRectFilled(ChipPos, ImVec2(ChipPos.x + ChipSize.x, ChipPos.y + ChipSize.y), ChipBg, 12.0f);
-            DrawList->AddRect(ChipPos, ImVec2(ChipPos.x + ChipSize.x, ChipPos.y + ChipSize.y), ChipBorder, 12.0f, 0, 1.0f);
+            DrawList->AddRect(ChipPos, ImVec2(ChipPos.x + ChipSize.x, ChipPos.y + ChipSize.y), ChipBorder, 12.0f, 1.0f, 0);
             
             DrawList->AddText(ImVec2(ChipPos.x + 10.0f, ChipPos.y + 5.0f), IM_COL32(130, 160, 210, 255), LE_ICON_TAG);
             

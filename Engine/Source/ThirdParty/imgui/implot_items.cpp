@@ -2248,7 +2248,7 @@ IMPLOT_INLINE void RenderPieSlice(ImDrawList& draw_list, const ImPlotPoint& cent
     draw_list.AddConvexPolyFilled(buffer, n + 2, col);
     
     // border (for AA)
-    draw_list.AddPolyline(buffer, n + 2, col, 0, 2.0f);
+    draw_list.AddPolyline(buffer, n + 2, col, 2.0f, 0);
 }
 
 template <typename T>

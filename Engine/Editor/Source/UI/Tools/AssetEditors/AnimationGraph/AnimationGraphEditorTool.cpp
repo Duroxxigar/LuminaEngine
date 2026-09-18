@@ -1664,7 +1664,7 @@ namespace Lumina
                               EditorColors::U32(EditorColors::WithAlpha(EditorColors::FrameBg(), Alpha)), Rounding);
             DL->AddRect(Min, Max,
                         EditorColors::U32(EditorColors::WithAlpha(bIsOutput ? EditorColors::Success() : Category, Alpha)),
-                        Rounding, 0, (bIsOutput ? 2.4f : 1.4f) * Scale);
+                        Rounding, (bIsOutput ? 2.4f : 1.4f) * Scale, 0);
 
             // Clip is a safety net only; every string below is measured and ellipsized to fit.
             DL->PushClipRect(Min, Max, true);

@@ -715,7 +715,7 @@ namespace Lumina
             const bool bSel = (SelectedKind == ENotifyKind::State && SelectedIndex == i);
             FVector4 C = State.Color;
             DrawList->AddRectFilled(ImVec2(X0, BarY0), ImVec2(X1, BarY1), ToU32(FVector4(C.x, C.y, C.z, 0.35f)), 3.0f);
-            DrawList->AddRect(ImVec2(X0, BarY0), ImVec2(X1, BarY1), bSel ? IM_COL32(255, 255, 255, 230) : ToU32(C), 3.0f, 0, bSel ? 2.0f : 1.0f);
+            DrawList->AddRect(ImVec2(X0, BarY0), ImVec2(X1, BarY1), bSel ? IM_COL32(255, 255, 255, 230) : ToU32(C), 3.0f, bSel ? 2.0f : 1.0f, 0);
             // Edge grips.
             DrawList->AddRectFilled(ImVec2(X0, BarY0), ImVec2(X0 + 3.0f, BarY1), ToU32(C));
             DrawList->AddRectFilled(ImVec2(X1 - 3.0f, BarY0), ImVec2(X1, BarY1), ToU32(C));

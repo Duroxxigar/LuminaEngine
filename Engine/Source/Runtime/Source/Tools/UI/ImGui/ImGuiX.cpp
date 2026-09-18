@@ -929,7 +929,7 @@ namespace Lumina::ImGuiX
 		float border_size = 1.0f; // window->WindowBorderSize;
 		if (border_size > 0.0f && !(Window->Flags & ImGuiWindowFlags_NoBackground))
 		{
-			Window->DrawList->AddRect(Window->Pos, { Window->Pos.x + Window->Size.x,  Window->Pos.y + Window->Size.y }, ImGui::GetColorU32(ImGuiCol_Border), rounding, 0, border_size);
+			Window->DrawList->AddRect(Window->Pos, { Window->Pos.x + Window->Size.x,  Window->Pos.y + Window->Size.y }, ImGui::GetColorU32(ImGuiCol_Border), rounding, border_size, 0);
 		}
 
 	    int border_held = Window->ResizeBorderHeld;
@@ -949,7 +949,7 @@ namespace Lumina::ImGuiX
 
 			Window->DrawList->PathArcTo(p1, rounding, def.OuterAngle - IM_PI * 0.25f, def.OuterAngle);
 			Window->DrawList->PathArcTo(p2, rounding, def.OuterAngle, def.OuterAngle + IM_PI * 0.25f);
-			Window->DrawList->PathStroke(ImGui::GetColorU32(ImGuiCol_SeparatorActive), 0, ImMax(2.0f, border_size)); // Thicker than usual
+			Window->DrawList->PathStroke(ImGui::GetColorU32(ImGuiCol_SeparatorActive), ImMax(2.0f, border_size), 0); // Thicker than usual
 		}
 		if (g.Style.FrameBorderSize > 0 && !(Window->Flags & ImGuiWindowFlags_NoTitleBar) && !Window->DockIsActive)
 		{

@@ -538,7 +538,7 @@ namespace Lumina
             DrawList->AddRectFilled(ImVec2(X0 + 1, SectionY0 + 3), ImVec2(X1 - 1, SectionY0 + kMontageSectionHeight - 3), kSectionFill, 3.0f);
             if (bSel)
             {
-                DrawList->AddRect(ImVec2(X0 + 1, SectionY0 + 3), ImVec2(X1 - 1, SectionY0 + kMontageSectionHeight - 3), IM_COL32(255, 255, 255, 230), 3.0f, 0, 2.0f);
+                DrawList->AddRect(ImVec2(X0 + 1, SectionY0 + 3), ImVec2(X1 - 1, SectionY0 + kMontageSectionHeight - 3), IM_COL32(255, 255, 255, 230), 3.0f, 2.0f, 0);
             }
             DrawList->AddText(ImVec2(X0 + 6, SectionY0 + 4), IM_COL32(255, 255, 255, 235), Section.Name.c_str());
 
@@ -638,7 +638,7 @@ namespace Lumina
 
                 DrawList->AddRectFilled(ImVec2(X0, BarY0), ImVec2(X1, BarY1), kSegmentFill, 3.0f);
                 DrawList->AddRect(ImVec2(X0, BarY0), ImVec2(X1, BarY1),
-                                  bSel ? IM_COL32(255, 255, 255, 235) : kSegmentBorder, 3.0f, 0, bSel ? 2.0f : 1.0f);
+                                  bSel ? IM_COL32(255, 255, 255, 235) : kSegmentBorder, 3.0f, bSel ? 2.0f : 1.0f, 0);
 
                 const int32 Loops = Math::Max(Segment.LoopCount, 1);
                 for (int32 L = 1; L < Loops; ++L)
@@ -684,7 +684,7 @@ namespace Lumina
             const bool bSel = (SelectedKind == ESelectionKind::NotifyState && SelectedIndex == i);
             DrawList->AddRectFilled(ImVec2(X0, NotifyY0 + 4), ImVec2(X1, NotifyY0 + kMontageNotifyHeight - 4), kNotifyStateFill, 3.0f);
             DrawList->AddRect(ImVec2(X0, NotifyY0 + 4), ImVec2(X1, NotifyY0 + kMontageNotifyHeight - 4),
-                              bSel ? IM_COL32(255, 255, 255, 230) : IM_COL32(238, 199, 89, 200), 3.0f, 0, bSel ? 2.0f : 1.0f);
+                              bSel ? IM_COL32(255, 255, 255, 230) : IM_COL32(238, 199, 89, 200), 3.0f, bSel ? 2.0f : 1.0f, 0);
             DrawList->AddText(ImVec2(X0 + 5, NotifyY0 + 5), IM_COL32(255, 255, 255, 220), State.Name.c_str());
 
             const ImVec2 M = IO.MousePos;

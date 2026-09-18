@@ -774,7 +774,7 @@ namespace Lumina
                 : EditorColors::WithAlpha(EditorColors::WindowBg(), 0.94f);
 
             DL->AddRectFilled(BadgeMin, BadgeMax, EditorColors::U32(BadgeBg), SM::BadgeRounding);
-            DL->AddRect(BadgeMin, BadgeMax, LineU32, SM::BadgeRounding, 0, bSelected || bHovered ? 1.8f : 1.1f);
+            DL->AddRect(BadgeMin, BadgeMax, LineU32, SM::BadgeRounding, bSelected || bHovered ? 1.8f : 1.1f, 0);
             DL->AddText(Font, FontSize, ImVec2(Mid.x - TextSize.x * 0.5f, Mid.y - TextSize.y * 0.5f),
                         EditorColors::U32(bSelected ? EditorColors::TextPrimary() : EditorColors::TextDim()), BadgeText.c_str());
 

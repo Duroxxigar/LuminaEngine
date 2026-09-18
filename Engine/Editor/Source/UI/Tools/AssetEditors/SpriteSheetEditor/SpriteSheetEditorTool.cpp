@@ -156,7 +156,7 @@ namespace Lumina
             const int32 Slot = Math::Clamp(Preview.Frame, 0, (int32)Clip->Frames.size() - 1);
             const int32 Cell = Math::Clamp(Clip->Frames[Slot], 0, HF * VF - 1);
             const ImVec2 Min(Origin.x + (Cell % HF) * CellW, Origin.y + (Cell / HF) * CellH);
-            DrawList->AddRect(Min, ImVec2(Min.x + CellW, Min.y + CellH), kCurrentColor, 0.0f, 0, 2.0f);
+            DrawList->AddRect(Min, ImVec2(Min.x + CellW, Min.y + CellH), kCurrentColor, 0.0f, 2.0f, 0);
         }
 
         ImGui::InvisibleButton("##SheetCanvas", Size);

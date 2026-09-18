@@ -1935,7 +1935,7 @@ namespace Lumina
             float(PreviewWidth)  / float(Math::Max(1u, PreviewRTWidth)),
             float(PreviewHeight) / float(Math::Max(1u, PreviewRTHeight)));
         DL->AddImage(Tex, CanvasMin, CanvasMax, ImVec2(0.0f, 0.0f), Uv1);
-        DL->AddRect(CanvasMin, CanvasMax, IM_COL32(80, 80, 95, 255), 0.0f, 0, 1.0f);
+        DL->AddRect(CanvasMin, CanvasMax, IM_COL32(80, 80, 95, 255), 0.0f, 1.0f, 0);
 
         // The preview is only a texture, so scrollbars and hover states are dead until input is forwarded.
         {
@@ -2000,7 +2000,7 @@ namespace Lumina
                 const ImVec2 A(CanvasMin.x + (CanvasSize.x - Sz.x) * 0.5f,
                                CanvasMin.y + (CanvasSize.y - Sz.y) * 0.5f);
                 const ImVec2 B(A.x + Sz.x, A.y + Sz.y);
-                DL->AddRect(A, B, SafeU, 0.0f, 0, 1.5f);
+                DL->AddRect(A, B, SafeU, 0.0f, 1.5f, 0);
             };
             DrawSafe(SafeZoneAction);
             DrawSafe(SafeZoneTitle);
@@ -2684,7 +2684,7 @@ namespace Lumina
                 }
                 if (OverlayDetail == EOverlayDetail::Assigned && !bAssigned)
                 {
-                    DL->AddRect(TMin, TMax, IM_COL32(150, 160, 175, 55), 3.0f, 0, 1.0f);
+                    DL->AddRect(TMin, TMax, IM_COL32(150, 160, 175, 55), 3.0f, 1.0f, 0);
                     continue;
                 }
             }
@@ -2704,13 +2704,13 @@ namespace Lumina
                 // Anchored exactly at the top-left so it reads as a placeable marker, not a misaligned box.
                 const ImVec2 P = TMin;
                 DL->AddRectFilled(P, ImVec2(P.x + Ts.x + 8.0f, P.y + Ts.y + 4.0f), IM_COL32(18, 18, 26, 230), 3.0f);
-                DL->AddRect(P, ImVec2(P.x + Ts.x + 8.0f, P.y + Ts.y + 4.0f), Line, 3.0f, 0, Thick);
+                DL->AddRect(P, ImVec2(P.x + Ts.x + 8.0f, P.y + Ts.y + 4.0f), Line, 3.0f, Thick, 0);
                 DL->AddText(ImVec2(P.x + 4.0f, P.y + 2.0f), Line, Label);
             }
             else
             {
                 DL->AddRectFilled(TMin, TMax, Fill, 3.0f);
-                DL->AddRect(TMin, TMax, Line, 3.0f, 0, Thick);
+                DL->AddRect(TMin, TMax, Line, 3.0f, Thick, 0);
 
                 ImVec2 TagPos(TMin.x, TMin.y - Ts.y - 3.0f);
                 if (TagPos.y < CanvasMin.y) TagPos = ImVec2(TMin.x + 3.0f, TMin.y + 3.0f);
