@@ -93,23 +93,6 @@ namespace Lumina
         float                                   DebugSurfaceAlpha = -1.0f;
         bool                                    bDebugSurfaceByArea = false;
         bool                                    bDebugSurfaceValid = false;
-
-        /** A world populates procedurally after it loads, and the bake already covered what arrives, so a
-         *  source appearing during this window joins the baseline rather than dirtying its tiles. */
-        bool                                    bBaselineSettling = true;
-        int32                                   BaselineQuietScans = 0;
-        float                                   BaselineAge = 0.0f;
-
-        /** One byte per tile, so a source arriving during settling can still fill a hole the bake left.
-         *  Geometry that lands on a tile which already baked was covered; a tile that is empty was not. */
-        TVector<uint8>                          TileHasGeometry;
-
-        void RestartBaseline()
-        {
-            bBaselineSettling = true;
-            BaselineQuietScans = 0;
-            BaselineAge = 0.0f;
-        }
     };
 
     /** Bake volume (world AABB at Center +/- Extents); multiple components union at bake time. */
