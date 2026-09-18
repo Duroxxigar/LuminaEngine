@@ -5,6 +5,7 @@
 #include "AI/Navigation/NavTileStreamer.h"
 #include "AI/Navigation/NavTypes.h"
 #include "Memory/SmartPtr.h"
+#include "World/Scene/RenderScene/SceneRenderTypes.h"
 #include "NavMeshComponent.generated.h"
 
 namespace Lumina
@@ -85,18 +86,13 @@ namespace Lumina
         // Throttles the geometry change scan to DynamicRebuildInterval.
         float                                   DynamicScanTimer = 0.0f;
 
-        /** A world populates procedurally after it loads, and the bake already covered what arrives, so a
-         *  source appearing during this window joins the baseline rather than dirtying its tiles. */
-        bool                                    bBaselineSettling = true;
-        int32                                   BaselineQuietScans = 0;
-        float                                   BaselineAge = 0.0f;
-
-        void RestartBaseline()
-        {
-            bBaselineSettling = true;
-            BaselineQuietScans = 0;
-            BaselineAge = 0.0f;
-        }
+        /** The debug surface is hundreds of thousands of vertices, so it is rebuilt only when the mesh
+         *  topology or its coloring changes rather than once per frame. */
+        TVector<FSimpleElementVertex>           DebugSurface;
+        uint64                                  DebugSurfaceEpoch = 0;
+        float                                   DebugSurfaceAlpha = -1.0f;
+        bool                                    bDebugSurfaceByArea = false;
+        bool                                    bDebugSurfaceValid = false;
     };
 
     /** Bake volume (world AABB at Center +/- Extents); multiple components union at bake time. */

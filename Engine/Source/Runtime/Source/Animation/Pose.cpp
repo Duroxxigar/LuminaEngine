@@ -236,40 +236,6 @@ namespace Lumina
             }
         }
 
-        // Out = A + B * S.
-        static void AddScaledArray(float* Out, const float* A, const float* B, float S, int Count)
-        {
-            using namespace SIMD;
-            const VFloat8 Vs = VFloat8::Broadcast(S);
-            int i = 0;
-            for (; i + 8 <= Count; i += 8)
-            {
-                MulAdd(VFloat8::Load(B + i), Vs, VFloat8::Load(A + i)).Store(Out + i);
-            }
-            for (; i < Count; ++i)
-            {
-                Out[i] = A[i] + B[i] * S;
-            }
-        }
-
-        // Out = A * Mix(1, B, S), i.e. A * (1 + S*(B - 1)).
-        static void MulLerpOneArray(float* Out, const float* A, const float* B, float S, int Count)
-        {
-            using namespace SIMD;
-            const VFloat8 Vs  = VFloat8::Broadcast(S);
-            const VFloat8 One = VFloat8::Broadcast(1.0f);
-            int i = 0;
-            for (; i + 8 <= Count; i += 8)
-            {
-                const VFloat8 Factor = MulAdd(VFloat8::Load(B + i) - One, Vs, One);
-                (VFloat8::Load(A + i) * Factor).Store(Out + i);
-            }
-            for (; i < Count; ++i)
-            {
-                Out[i] = A[i] * (1.0f + S * (B[i] - 1.0f));
-            }
-        }
-
         // Out = A / B, lanes with B <= Eps pass A through (ratio 1).
         static void DivSafeArray(float* Out, const float* A, const float* B, int Count)
         {
@@ -684,11 +650,11 @@ namespace Lumina
 
             for (int32 s = FPose::StreamTx; s <= FPose::StreamTz; ++s)
             {
-                Detail::AddScaledArray(Out.Stream(s), Base.Stream(s), Delta.Stream(s), Alpha, Lanes);
+                SIMD::AddScaledArray(Out.Stream(s), Base.Stream(s), Delta.Stream(s), Alpha, Lanes);
             }
             for (int32 s = FPose::StreamSx; s <= FPose::StreamSz; ++s)
             {
-                Detail::MulLerpOneArray(Out.Stream(s), Base.Stream(s), Delta.Stream(s), Alpha, Lanes);
+                SIMD::MulLerpOneArray(Out.Stream(s), Base.Stream(s), Delta.Stream(s), Alpha, Lanes);
             }
 
             // Slerps identity toward Delta by alpha, then layers the result onto Base.

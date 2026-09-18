@@ -133,51 +133,56 @@ namespace Lumina
         AddToRoot();
     }
     
+    // The shutdown sweep runs OnDestroy a phase before the free, so this, not the claim, keeps it single.
+    void CObjectBase::RunOnDestroyOnce()
+    {
+        if (HasAnyFlag(OF_DestroyStarted))
+        {
+            return;
+        }
+
+        SetFlag(OF_DestroyStarted);
+        OnDestroy();
+    }
+
     void CObjectBase::DestroyInternal()
     {
         SetFlag(OF_MarkedDestroy);
 
-        OnDestroy();
+        RunOnDestroyOnce();
 
         GCObjectAllocator.FreeCObject(this);
     }
 
     void CObjectBase::BeginDestroyForShutdown()
     {
-        if (HasAnyFlag(OF_MarkedDestroy))
-        {
-            return;
-        }
-
         SetFlag(OF_MarkedDestroy);
 
-        OnDestroy();
+        RunOnDestroyOnce();
     }
 
     void CObjectBase::FinishDestroyForShutdown()
     {
-        // An object created during the OnDestroy pass was never visited, so give it the same teardown.
-        if (!HasAnyFlag(OF_MarkedDestroy))
+        // The claim is what keeps this exactly once even though the sweep does no other bookkeeping.
+        if (!GObjectArray.TryClaimDestroyForShutdown(this))
         {
-            SetFlag(OF_MarkedDestroy);
-            OnDestroy();
+            return;
         }
+
+        // An object created during the OnDestroy pass was never visited, so give it the same teardown.
+        SetFlag(OF_MarkedDestroy);
+        RunOnDestroyOnce();
 
         GCObjectAllocator.FreeCObject(this);
     }
 
     void CObjectBase::ForceDestroyNow()
     {
-        if (HasAnyFlag(OF_MarkedDestroy))
-        {
-            return;
-        }
-
         // Valid at shutdown but a bug at runtime, so long-lived non-owning references must be weak.
         DEBUG_ASSERT(GObjectArray.IsShuttingDown() || GObjectArray.GetStrongRefCountByIndex(InternalIndex) == 0,
             "ForceDestroyNow on an object with live strong references; holders will dangle. Use TWeakObjectPtr for non-owning references.");
 
-        DestroyInternal();
+        GObjectArray.ForceDestroy(this);
     }
 
     void CObjectBase::ConditionalBeginDestroy()
@@ -189,11 +194,6 @@ namespace Lumina
     int32 CObjectBase::GetStrongRefCount() const
     {
         return GObjectArray.GetStrongRefCountByIndex(InternalIndex);
-    }
-
-    int32 CObjectBase::GetWeakRefCount() const
-    {
-        return GObjectArray.GetWeakRefCountByIndex(InternalIndex);
     }
 
     void CObjectBase::HandleNameChange(const FName& NewName, CPackage* NewPackage) noexcept

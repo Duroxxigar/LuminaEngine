@@ -855,8 +855,8 @@ namespace Lumina
 
         if (DefaultMaterial)
         {
+            // The root set holds the only strong reference, so unrooting is what destroys it.
             DefaultMaterial->RemoveFromRoot();
-            DefaultMaterial->ConditionalBeginDestroy();
             DefaultMaterial = nullptr;
         }
         
@@ -1001,8 +1001,8 @@ namespace Lumina
 
         if (DefaultTerrainMaterial)
         {
+            // The root set holds the only strong reference, so unrooting is what destroys it.
             DefaultTerrainMaterial->RemoveFromRoot();
-            DefaultTerrainMaterial->ConditionalBeginDestroy();
             DefaultTerrainMaterial = nullptr;
         }
 

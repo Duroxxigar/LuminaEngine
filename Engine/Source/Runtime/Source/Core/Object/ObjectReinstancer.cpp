@@ -166,20 +166,32 @@ namespace Lumina
             Provider.VisitObjectReferences(Repoint);
         });
 
-        FString Stranded;
+        // Captured as handles, since destroying one original can free another one in the same map.
+        TVector<TPair<FObjectHandle, CObject*>> Doomed;
+        Doomed.reserve(ObjectMap.size());
         for (const auto& [Old, New] : ObjectMap)
         {
             if (Old->IsA<CClass>())
             {
                 continue;   // a retired class is taken out by whoever minted it, not here
             }
+            Doomed.emplace_back(GObjectArray.GetHandleByObject(Old), Old);
+        }
+
+        FString Stranded;
+        for (const TPair<FObjectHandle, CObject*>& Entry : Doomed)
+        {
+            if (GObjectArray.ResolveHandle(Entry.first) != Entry.second)
+            {
+                continue;   // an earlier destroy in this loop already took it
+            }
 
             // Forcing it down while a strong reference survives would dangle that holder. The original is
             // already renamed aside and resolves to nothing, so leaving it to its refcount is safe, and a
             // reference the walk could not reach keeps working until its owner lets go.
-            if (GObjectArray.GetStrongRefCountByIndex(Old->GetInternalIndex()) == 0)
+            if (GObjectArray.GetStrongRefCountByIndex(Entry.first.Index) == 0)
             {
-                Old->ForceDestroyNow();
+                Entry.second->ForceDestroyNow();
             }
             else
             {
@@ -187,7 +199,7 @@ namespace Lumina
                 if (Result.OriginalsOutlivingTheSwap <= 4)
                 {
                     Stranded += Stranded.empty() ? "" : ", ";
-                    Stranded += Old->GetName().c_str();
+                    Stranded += Entry.second->GetName().c_str();
                 }
             }
         }

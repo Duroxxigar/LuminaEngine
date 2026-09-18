@@ -29,9 +29,12 @@ namespace Lumina
         {
             Object = InObject;
             Entry  = (InObject != nullptr) ? GObjectArray.GetEntry((const CObjectBase*)InObject) : nullptr;
-            if (Entry != nullptr)
+
+            // An entry-less object is pre-registration, so there is nothing to refcount and nothing to refuse.
+            if (Entry != nullptr && !Entry->AddStrongRefIfAlive())
             {
-                Entry->AddStrongRef();
+                Object = nullptr;
+                Entry  = nullptr;
             }
         }
 
@@ -47,9 +50,10 @@ namespace Lumina
 
             Object = InObject;
             Entry  = InEntry;
-            if (Entry != nullptr)
+            if (Entry != nullptr && !Entry->AddStrongRefIfAlive())
             {
-                Entry->AddStrongRef();
+                Object = nullptr;
+                Entry  = nullptr;
             }
         }
 
@@ -170,15 +174,6 @@ namespace Lumina
             return Live ? GObjectArray.GetHandleByObject(Live) : FObjectHandle();
         }
 
-        // Release ownership without decrementing ref count
-        T* Detach()
-        {
-            T* Temp = Object;
-            Object = nullptr;
-            Entry  = nullptr;
-            return Temp;
-        }
-
         void Reset()
         {
             ReleaseInternal();
@@ -202,23 +197,12 @@ namespace Lumina
     class TWeakObjectPtr
     {
     private:
+        // Entries never die and the generation is what invalidates a handle, so a weak ref needs no count.
         FObjectHandle Handle;
 
-        void AddWeakRefInternal()
+        void ClearHandle()
         {
-            if (Handle.IsValid())
-            {
-                GObjectArray.AddWeakRefByIndex(Handle.Index);
-            }
-        }
-
-        void ReleaseWeakRefInternal()
-        {
-            if (Handle.IsValid())
-            {
-                GObjectArray.ReleaseWeakRefByIndex(Handle.Index);
-                Handle = FObjectHandle();
-            }
+            Handle = FObjectHandle();
         }
 
     public:
@@ -229,87 +213,59 @@ namespace Lumina
             if (InObject)
             {
                 Handle = GObjectArray.GetHandleByObject(InObject);
-                AddWeakRefInternal();
             }
         }
 
         TWeakObjectPtr(const FObjectHandle& InHandle) : Handle(InHandle)
         {
-            AddWeakRefInternal();
         }
 
-        TWeakObjectPtr(const TObjectPtr<T>& Strong)
+        TWeakObjectPtr(const TObjectPtr<T>& Strong) : Handle(Strong.GetHandle())
         {
-            Handle = Strong.GetHandle();
-            AddWeakRefInternal();
         }
 
-        TWeakObjectPtr(const TWeakObjectPtr& Other) : Handle(Other.Handle)
-        {
-            AddWeakRefInternal();
-        }
+        TWeakObjectPtr(const TWeakObjectPtr& Other) = default;
 
         TWeakObjectPtr(TWeakObjectPtr&& Other) noexcept : Handle(Other.Handle)
         {
-            Other.Handle = FObjectHandle();
+            Other.ClearHandle();
         }
 
         template<typename U>
         requires std::is_base_of_v<T, U>
         TWeakObjectPtr(const TWeakObjectPtr<U>& Other) : Handle(Other.Handle)
         {
-            AddWeakRefInternal();
         }
 
-        ~TWeakObjectPtr()
-        {
-            ReleaseWeakRefInternal();
-        }
+        ~TWeakObjectPtr() = default;
 
-        TWeakObjectPtr& operator=(const TWeakObjectPtr& Other)
-        {
-            if (this != &Other)
-            {
-                ReleaseWeakRefInternal();
-                Handle = Other.Handle;
-                AddWeakRefInternal();
-            }
-            return *this;
-        }
+        TWeakObjectPtr& operator=(const TWeakObjectPtr& Other) = default;
 
         TWeakObjectPtr& operator=(TWeakObjectPtr&& Other) noexcept
         {
             if (this != &Other)
             {
-                ReleaseWeakRefInternal();
                 Handle = Other.Handle;
-                Other.Handle = FObjectHandle();
+                Other.ClearHandle();
             }
             return *this;
         }
 
         TWeakObjectPtr& operator=(T* InObject)
         {
-            ReleaseWeakRefInternal();
-            if (InObject)
-            {
-                Handle = GObjectArray.GetHandleByObject(InObject);
-                AddWeakRefInternal();
-            }
+            Handle = (InObject != nullptr) ? GObjectArray.GetHandleByObject(InObject) : FObjectHandle();
             return *this;
         }
 
         TWeakObjectPtr& operator=(const TObjectPtr<T>& Strong)
         {
-            ReleaseWeakRefInternal();
             Handle = Strong.GetHandle();
-            AddWeakRefInternal();
             return *this;
         }
 
         TWeakObjectPtr& operator=(std::nullptr_t)
         {
-            ReleaseWeakRefInternal();
+            ClearHandle();
             return *this;
         }
 
@@ -347,7 +303,7 @@ namespace Lumina
 
         void Reset()
         {
-            ReleaseWeakRefInternal();
+            ClearHandle();
         }
 
         bool operator==(const TWeakObjectPtr& Other) const { return Handle == Other.Handle; }

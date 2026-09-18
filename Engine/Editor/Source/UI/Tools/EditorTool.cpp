@@ -153,6 +153,13 @@ namespace Lumina
             InputViewport->SetWorld(World);
             InputViewport->GetContext().SetInputMode(EInputMode::Game);
             FInputViewportRegistry::Get().Register(InputViewport.get());
+
+            RegisterAction({"Draw NavMesh", "View", "Toggle the navmesh debug overlay (View Mode > Navigation)",
+                FInputChord{ImGuiKey_P}, []
+                {
+                    FConsoleRegistry& Console = FConsoleRegistry::Get();
+                    Console.SetAs("Nav.DrawDebug", !Console.GetAs<bool>("Nav.DrawDebug"));
+                }});
         }
 
         OnInitialize();
@@ -1121,7 +1128,7 @@ namespace Lumina
             if (const bool* bValue = FConsoleRegistry::Get().TryGetAs<bool>("Nav.DrawDebug"))
             {
                 bool bProxy = *bValue;
-                if (ImGui::MenuItem("Draw NavMesh", nullptr, &bProxy))
+                if (ImGui::MenuItem("Draw NavMesh", "P", &bProxy))
                 {
                     FConsoleRegistry::Get().SetAs("Nav.DrawDebug", bProxy);
                 }
@@ -1183,6 +1190,8 @@ namespace Lumina
                     { ERenderSceneDebugFlags::TriangleID,       "Triangle ID"       },
                     // Deferred opaque only, since the wire comes from the VisBuffer triangle terrain never enters.
                     { ERenderSceneDebugFlags::WireframeOverlay, "Wireframe Overlay" },
+                    // Green is one triangle per 2x2 quad, red is one live lane in four.
+                    { ERenderSceneDebugFlags::QuadEfficiency,   "Quad Efficiency"   },
                 };
                 static const FViewModeEntry Lighting[] =
                 {

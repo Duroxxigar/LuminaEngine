@@ -13,5 +13,7 @@
 #define LUMINA_PROFILE_SECTION_CALLSTACK(x, Depth)  ZoneScopedNS(x, Depth)
 
 #define LUMINA_PROFILE_TAG(x)                       ZoneText(x, strlen(x))
+// Renames the open zone, so a dispatcher's bar reads as the work rather than as the dispatcher.
+#define LUMINA_PROFILE_NAME(x)                      ZoneName(x, strlen(x))
 #define LUMINA_PROFILE_LOG(text, size)              TracyMessage(text, size)
 #define LUMINA_PROFILE_VALUE(text, value)           TracyPlot(text, value)

@@ -53,7 +53,6 @@ namespace Lumina
         RUNTIME_API void ForceDestroyNow();
         RUNTIME_API void ConditionalBeginDestroy();
         RUNTIME_API int32 GetStrongRefCount() const;
-        RUNTIME_API int32 GetWeakRefCount() const;
 
         /** Low-level rename; rewires hash buckets. Caller must guarantee safety. */
         RUNTIME_API void HandleNameChange(const FName& NewName, CPackage* NewPackage = nullptr) noexcept;
@@ -77,6 +76,8 @@ namespace Lumina
 
         RUNTIME_API void AddObject();
         
+        RUNTIME_API void RunOnDestroyOnce();
+
         RUNTIME_API void DestroyInternal();
         
         RUNTIME_API void BeginDestroyForShutdown();

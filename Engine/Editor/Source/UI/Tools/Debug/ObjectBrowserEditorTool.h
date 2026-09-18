@@ -43,7 +43,6 @@ namespace Lumina
         FString      FlagsText;             // precomputed: decoding flags builds a string
         EObjectFlags Flags = OF_None;
         int32        StrongRefs = 0;
-        int32        WeakRefs = 0;
         bool         bIsAsset = false;
     };
 

@@ -32,7 +32,7 @@ namespace Lumina
             {
                 if (Objects[i])
                 {
-                    Memory::Delete(Objects[i]);
+                    Memory::DeleteArray(Objects[i]);
                     Objects[i] = nullptr;
                 }
             }
@@ -127,21 +127,32 @@ namespace Lumina
         // Freed indices are recycled, so index order alone cannot keep a class alive past its instances.
         auto DestroyPass = [this](bool bTypeObjects)
         {
-            ForEachObject([bTypeObjects](CObjectBase* Object, int32)
+            // Classified before anything dies, since IsA reads the class objects this pass goes on to free.
+            TVector<TPair<int32, CObjectBase*>> Matched;
+            ForEachObject([&Matched, bTypeObjects](CObjectBase* Object, int32 Index)
             {
                 if (Object->IsA<CField>() == bTypeObjects)
                 {
-                    Object->BeginDestroyForShutdown();
+                    Matched.emplace_back(Index, Object);
                 }
             });
 
-            ForEachObject([bTypeObjects](CObjectBase* Object, int32)
+            // An OnDestroy can free something else in the list, so the slot is rechecked before each step.
+            for (const TPair<int32, CObjectBase*>& Entry : Matched)
             {
-                if (Object->IsA<CField>() == bTypeObjects)
+                if (GetObjectByIndex(Entry.first) == Entry.second)
                 {
-                    Object->FinishDestroyForShutdown();
+                    Entry.second->BeginDestroyForShutdown();
                 }
-            });
+            }
+
+            for (const TPair<int32, CObjectBase*>& Entry : Matched)
+            {
+                if (GetObjectByIndex(Entry.first) == Entry.second)
+                {
+                    Entry.second->FinishDestroyForShutdown();
+                }
+            }
         };
 
         DestroyPass(/*bTypeObjects*/ false);
@@ -199,7 +210,7 @@ namespace Lumina
             Item->IncrementGeneration();
             Generation = Item->GetGeneration();
 
-            Item->ResetRefCounts();
+            Item->ResetRefCount();
             Item->SetObj(Object);
         }
         else
@@ -214,7 +225,7 @@ namespace Lumina
 
             Generation = 1;
             Item->Generation.store(Generation, std::memory_order_release);
-            Item->ResetRefCounts();
+            Item->ResetRefCount();
             Item->SetObj(Object);
 
             ChunkedArray.IncrementElementCount();
@@ -355,7 +366,21 @@ namespace Lumina
                   "Something outlived the object it referenced; the reference was dropped instead of applied.",
             Site, (const void*)Object, Object->GetInternalIndex(), (const void*)Occupant,
             OccupantClass != nullptr ? OccupantClass->GetName().c_str() : "empty");
+
+        // Fatal outside Shipping, so the next one stops at the release site instead of accruing in a log.
+        DEBUG_ASSERT(FScopedStaleReferenceTolerance::IsTolerated(),
+            "Stale CObject reference released; see the error above for the slot and its current occupant.");
         return false;
+    }
+
+    void FCObjectArray::ReportUnbalancedRelease(const char* Site, const CObjectBase* Object) const
+    {
+        LOG_ERROR("FCObjectArray::{}: unbalanced release of {}; the entry's strong count was already zero or "
+                  "the object was claimed for destruction. Destruction was skipped.",
+            Site, (const void*)Object);
+
+        DEBUG_ASSERT(FScopedStaleReferenceTolerance::IsTolerated(),
+            "Unbalanced CObject release; a holder released a reference it did not own.");
     }
 
     FCObjectEntry* FCObjectArray::GetEntry(const CObjectBase* Object) const
@@ -392,8 +417,7 @@ namespace Lumina
         int32 NewCount = 0;
         if (!Entry->ReleaseStrongRef(NewCount))
         {
-            LOG_ERROR("FCObjectArray::ReleaseStrongRefEntry: unbalanced release; the entry's strong count was "
-                      "already zero. Destruction was skipped.");
+            ReportUnbalancedRelease("ReleaseStrongRefEntry", Expected);
             return false;
         }
 
@@ -414,7 +438,7 @@ namespace Lumina
             FCObjectEntry* Item = ChunkedArray.GetItem(Object->GetInternalIndex());
             if (Item != nullptr && OwnsSlot(Object, Item, "AddStrongRef"))
             {
-                Item->AddStrongRef();
+                Item->AddStrongRefIfAlive();
             }
         }
     }
@@ -436,11 +460,7 @@ namespace Lumina
                 int32 NewCount = 0;
                 if (!Item->ReleaseStrongRef(NewCount))
                 {
-                    const CClass* Class = Object->GetClass();
-                    LOG_ERROR("FCObjectArray::ReleaseStrongRef: unbalanced release of {} ('{}') at slot {}; "
-                              "its strong count was already zero. Destruction was skipped.",
-                        (const void*)Object, Class != nullptr ? Class->GetName().c_str() : "unknown",
-                        Object->GetInternalIndex());
+                    ReportUnbalancedRelease("ReleaseStrongRef", Object);
                     return false;
                 }
 
@@ -474,12 +494,46 @@ namespace Lumina
             return nullptr; // being destroyed
         }
 
-        // The lock serializes against ConditionalDestroy, so there is no resurrection after free.
-        Item->AddStrongRef();
+        // Refused outright once the destroy is claimed, so there is no resurrection after free.
+        if (!Item->AddStrongRefIfAlive())
+        {
+            return nullptr;
+        }
         return Object;
     }
 
     bool FCObjectArray::ConditionalDestroy(CObjectBase* Object)
+    {
+        return DestroyClaimed(Object, false, "ConditionalDestroy");
+    }
+
+    bool FCObjectArray::ForceDestroy(CObjectBase* Object)
+    {
+        return DestroyClaimed(Object, true, "ForceDestroy");
+    }
+
+    bool FCObjectArray::TryClaimDestroyForShutdown(CObjectBase* Object)
+    {
+        if (Object == nullptr)
+        {
+            return false;
+        }
+
+        FCObjectEntry* Item = ChunkedArray.GetItem(Object->GetInternalIndex());
+        if (Item == nullptr)
+        {
+            return true; // never registered, so the sweep is the only thing that can reach it
+        }
+
+        if (Item->GetObj() != Object)
+        {
+            return false; // freed already, and the slot has moved on
+        }
+
+        return Item->TryClaimDestroyForced();
+    }
+
+    bool FCObjectArray::DestroyClaimed(CObjectBase* Object, bool bForced, const char* Site)
     {
         if (Object == nullptr)
         {
@@ -489,79 +543,24 @@ namespace Lumina
         {
             FRecursiveScopeLock Lock(Mutex);
 
-            const FCObjectEntry* Item = ChunkedArray.GetItem(Object->GetInternalIndex());
-            if (!OwnsSlot(Object, Item, "ConditionalDestroy"))
+            FCObjectEntry* Item = ChunkedArray.GetItem(Object->GetInternalIndex());
+            if (!OwnsSlot(Object, Item, Site))
             {
                 return false; // freed already, and the slot has moved on
             }
 
-            if (Object->HasAnyFlag(OF_MarkedDestroy))
+            // The claim, not the lock, is what makes this exactly once across every destroy path.
+            if (!(bForced ? Item->TryClaimDestroyForced() : Item->TryClaimDestroyIfUnreferenced()))
             {
-                return false; // already being destroyed
-            }
-
-            if (Item->IsReferenced())
-            {
-                return false; // (re)acquired a strong ref since the count hit zero, keep it alive
-            }
-
-            // Marked under the lock so a concurrent upgrade refuses, and torn down outside it to avoid deadlock.
-            Object->SetFlag(OF_MarkedDestroy);
-        }
-
-        Object->DestroyInternal();
-        return true;
-    }
-
-    void FCObjectArray::AddStrongRefByIndex(int32 Index)
-    {
-        if (FCObjectEntry* Item = ChunkedArray.GetItem(Index))
-        {
-            Item->AddStrongRef();
-        }
-    }
-
-    bool FCObjectArray::ReleaseStrongRefByIndex(int32 Index)
-    {
-        if (bShuttingDown)
-        {
-            return false;
-        }
-        if (FCObjectEntry* Item = ChunkedArray.GetItem(Index))
-        {
-            int32 NewCount = 0;
-            if (!Item->ReleaseStrongRef(NewCount))
-            {
-                LOG_ERROR("FCObjectArray::ReleaseStrongRefByIndex: unbalanced release at slot {}; its strong "
-                          "count was already zero. Destruction was skipped.", Index);
                 return false;
             }
 
-            if (NewCount == 0)
-            {
-                if (CObjectBase* Object = Item->GetObj())
-                {
-                    return ConditionalDestroy(Object);
-                }
-            }
+            Object->SetFlag(OF_MarkedDestroy);
         }
-        return false;
-    }
 
-    void FCObjectArray::AddWeakRefByIndex(int32 Index)
-    {
-        if (FCObjectEntry* Item = ChunkedArray.GetItem(Index))
-        {
-            Item->AddWeakRef();
-        }
-    }
-
-    void FCObjectArray::ReleaseWeakRefByIndex(int32 Index)
-    {
-        if (FCObjectEntry* Item = ChunkedArray.GetItem(Index))
-        {
-            Item->ReleaseWeakRef();
-        }
+        // Outside the lock, since OnDestroy runs arbitrary teardown.
+        Object->DestroyInternal();
+        return true;
     }
 
     bool FCObjectArray::IsReferencedByIndex(int32 Index) const
@@ -576,12 +575,6 @@ namespace Lumina
         return Item ? Item->GetStrongRefCount() : 0;
     }
 
-    int32 FCObjectArray::GetWeakRefCountByIndex(uint32 Index) const
-    {
-        const FCObjectEntry* Item = ChunkedArray.GetItem(Index);
-        return Item ? Item->GetWeakRefCount() : 0;
-    }
-
     int32 FCObjectArray::GetNumAliveObjects() const
     {
         return ChunkedArray.GetNumElements() - (int32)FreeIndices.size();
@@ -590,5 +583,25 @@ namespace Lumina
     int32 FCObjectArray::GetMaxObjects() const
     {
         return ChunkedArray.GetMaxElements();
+    }
+
+    namespace
+    {
+        thread_local int32 GStaleReferenceTolerance = 0;
+    }
+
+    FScopedStaleReferenceTolerance::FScopedStaleReferenceTolerance()
+    {
+        ++GStaleReferenceTolerance;
+    }
+
+    FScopedStaleReferenceTolerance::~FScopedStaleReferenceTolerance()
+    {
+        --GStaleReferenceTolerance;
+    }
+
+    bool FScopedStaleReferenceTolerance::IsTolerated()
+    {
+        return GStaleReferenceTolerance > 0;
     }
 }

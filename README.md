@@ -163,6 +163,17 @@ https://github.com/user-attachments/assets/3d797479-fc47-4b8f-baf4-87315709d0c2
 AMD RDNA2 (RX 6000) or newer, or Intel Arc. The renderer's geometry pipeline is
 built on them, so the editor refuses to start on anything older and says so.
 
+That GPU also needs **4 GB of graphics memory, 6 GB or more recommended**. The
+renderer reserves well over a gigabyte before any content loads (render targets,
+two 4K shadow atlases, and a 1 GB streaming texture pool by default), and a card
+under the minimum does not degrade gracefully, it renders corrupt frames and
+eventually loses the device. The check runs at device selection alongside the
+mesh-shader one and names the shortfall. A few mesh-capable parts land under the
+line, mostly 2 GB laptop chips such as the GeForce MX550 and MX570.
+
+`-ignoreminspec` runs anyway, unsupported. `-minvram=N` sets a different
+threshold, which is how to see the rejection dialog on hardware that passes.
+
 #### Windows
 
 - Windows 10 (1803 or newer) or Windows 11, 64-bit
@@ -399,10 +410,10 @@ Regenerating prints the resolved feature set, e.g.
 > [!TIP]
 > - **"Vulkan Device Unsuitable: No GPU meeting the renderer's requirements was
 >   found"?** The log names each GPU it rejected and why. If the reason is
->   `no VK_EXT_mesh_shader` for every device, the hardware is below the floor in
->   [Requirements](#requirements). If a GPU you expected is missing from the list
->   entirely, the Vulkan loader is not seeing its driver; check
->   `vulkaninfo --summary` and compare.
+>   `no VK_EXT_mesh_shader` or `below the ... MiB minimum` for every device, the
+>   hardware is below the floor in [Requirements](#requirements). If a GPU you
+>   expected is missing from the list entirely, the Vulkan loader is not seeing
+>   its driver; check `vulkaninfo --summary` and compare.
 > - **Hybrid-graphics laptop starting on the wrong GPU?** The device is chosen at
 >   startup and the discrete one is preferred when it enumerates at all. If it
 >   does not appear in `vulkaninfo --summary`, the proprietary driver is not

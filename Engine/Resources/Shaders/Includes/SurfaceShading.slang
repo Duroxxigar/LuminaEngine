@@ -195,6 +195,26 @@ float ComputeShadowFactor(FLight Light, float3 FragmentPos, float3 Normal, float
     return Shadow / Weight;
 }
 
+// Reach and step count live on the directional light, so a scene with no sun falls back to these.
+static const float kLocalContactReachMeters = 0.15;
+static const uint  kLocalContactSteps       = 8u;
+
+// Kept out of ComputeShadowFactor, which inlines at two sites; only local lights ever reach this one.
+float LocalContactShadow(FLight Light, float3 FragmentPos, float3 Normal, float2 ScreenPos)
+{
+    const float SunReach = LightData().ShadowParams2.z;
+    const uint  SunSteps = (uint)LightData().ShadowParams2.w;
+
+    const float Reach = SunReach > 0.0 ? SunReach : kLocalContactReachMeters;
+    const uint  Steps = SunSteps > 0u  ? SunSteps : kLocalContactSteps;
+
+    const float3 ViewP = mul(GetCameraView(), float4(FragmentPos, 1.0)).xyz;
+    const float3 ViewN = NormalWorldToView(Normal);
+    const float3 ViewL = normalize(NormalWorldToView(normalize(Light.Position - FragmentPos)));
+
+    return ContactShadow(ViewP, ViewN, ViewL, InterleavedGradientNoise(ScreenPos), Reach, Steps);
+}
+
 // Not compiled into a compute lane: the penumbra readout differentiates shadow-space depth with
 // ddx/ddy. The deferred renderer resolves debug views in SceneDebugViewPixel.slang for that reason.
 #ifndef SHADING_COMPUTE
@@ -802,6 +822,12 @@ FShadedSurface ShadeGBuffer(FGBufferData G, float3 WorldPosition, float3 ViewPos
             if (Light.ShadowDataIndex != INDEX_NONE)
             {
                 Shadow = ComputeShadowFactor(Light, WorldPosition, bBackFacing ? -N : N, ViewPosition, ScreenPos, bReceiveShadow);
+            }
+
+            // Independent of the shadow map, so a light with no atlas tile can still ground what sits under it.
+            if (bReceiveShadow && HasFlag(Light.Flags, ELightFlags::ContactShadow))
+            {
+                Shadow = min(Shadow, LocalContactShadow(Light, WorldPosition, bBackFacing ? -N : N, ScreenPos));
             }
 
             if (bFoliage)

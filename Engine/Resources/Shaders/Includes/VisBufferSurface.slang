@@ -18,6 +18,53 @@ struct FVisTriangle
     bool        bValid;
 };
 
+// Fraction of a 2x2 quad's shading lanes that produced a visible pixel, from the visibility IDs alone.
+
+// One triangle over the quad scores 1.0; four triangles, or one clipping a corner, scores 0.25.
+
+// Counts only what survived depth, so this is micro-triangle and silhouette waste, not occluded overdraw.
+float QuadLaneEfficiency(uint VisBufferIndex, int2 Texel)
+{
+    const int2 Base = Texel & ~1;
+
+    uint Raw[4];
+    Raw[0] = LoadTexture2DUInt(VisBufferIndex, Base + int2(0, 0));
+    Raw[1] = LoadTexture2DUInt(VisBufferIndex, Base + int2(1, 0));
+    Raw[2] = LoadTexture2DUInt(VisBufferIndex, Base + int2(0, 1));
+    Raw[3] = LoadTexture2DUInt(VisBufferIndex, Base + int2(1, 1));
+
+    uint Covered  = 0u;
+    uint Distinct = 0u;
+
+    [unroll]
+    for (uint i = 0u; i < 4u; ++i)
+    {
+        if (Raw[i] == 0u)
+        {
+            continue;
+        }
+        Covered += 1u;
+
+        // Equality means same triangle of the same draw, so each distinct value is one shading invocation.
+        bool bSeen = false;
+        [unroll]
+        for (uint j = 0u; j < 4u; ++j)
+        {
+            bSeen = bSeen || (j < i && Raw[j] == Raw[i]);
+        }
+        if (!bSeen)
+        {
+            Distinct += 1u;
+        }
+    }
+
+    if (Distinct == 0u)
+    {
+        return 1.0;
+    }
+    return float(Covered) / (4.0 * float(Distinct));
+}
+
 // Resolves the draw-list slot without touching the meshlet header, for the passes that only need to know
 // which material owns the pixel. Returns ~0u for background and for any entry this frame did not write.
 uint ResolveVisInstance(uint VisRaw, uint DrawListCount)

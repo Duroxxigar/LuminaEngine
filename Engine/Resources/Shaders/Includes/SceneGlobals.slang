@@ -672,6 +672,16 @@ float3 LightComplexityColor(uint Count)
     return float3(1.0, 0.0, 0.0);
 }
 
+// Ramp for the quad-efficiency view. Green is one triangle per quad, red is one live lane in four.
+float3 QuadEfficiencyColor(float Efficiency)
+{
+    if (Efficiency >= 0.99) return float3(0.0, 0.55, 0.15);
+    if (Efficiency >= 0.74) return float3(0.55, 0.75, 0.0);
+    if (Efficiency >= 0.49) return float3(1.0, 0.65, 0.0);
+    if (Efficiency >= 0.32) return float3(1.0, 0.30, 0.0);
+    return float3(1.0, 0.0, 0.0);
+}
+
 // Per-froxel hashed hue for the "Light Clusters" view. Empty froxels are dimmed; froxels at the
 // LIGHTS_PER_CLUSTER write cap turn white so light-list saturation is obvious.
 float3 ClusterDebugColor(uint ClusterIndex, uint LightCount)

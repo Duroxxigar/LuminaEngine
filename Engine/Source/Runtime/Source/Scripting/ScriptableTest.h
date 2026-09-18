@@ -90,6 +90,28 @@ namespace Lumina
         TObjectPtr<CObject> Child;
     };
 
+    /** Throwaway counter of its own teardown, so a test can prove OnDestroy is not reentered. */
+    REFLECT()
+    class RUNTIME_API CDestroyCountTest : public CObject
+    {
+        GENERATED_BODY()
+    public:
+
+        void OnDestroy() override
+        {
+            ++DestroyCount;
+            if (bReenterOnDestroy)
+            {
+                ConditionalBeginDestroy();
+            }
+        }
+
+        // Static, since the count has to outlive the object it counts.
+        static inline int32 DestroyCount = 0;
+
+        bool bReenterOnDestroy = false;
+    };
+
     // Throwaway world subsystem, gated off so discovery never puts one in a real world. The test flips the
     // gate to prove CreateMissing honors ShouldCreate and runs the lifecycle in order.
     REFLECT()

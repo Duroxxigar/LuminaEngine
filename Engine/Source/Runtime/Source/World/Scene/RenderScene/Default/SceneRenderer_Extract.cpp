@@ -2606,6 +2606,10 @@ namespace Lumina
             Light.VolumetricIntensity = PointLight.VolumetricIntensity;
             Light.VolumetricScatteringRadius = PointLight.VolumetricScatteringRadius;
         }
+        if (PointLight.bContactShadows)
+        {
+            Light.Flags |= ELightFlags::ContactShadow;
+        }
         Light.Flags = PackLightMinRoughness(Light.Flags, PointLight.MinRoughness);
 
         if (PointLight.bCastShadows && ShouldRequestShadow(Light.Position, Light.Radius))
@@ -2680,6 +2684,10 @@ namespace Lumina
             Light.Flags             |= ELightFlags::Volumetric;
             Light.VolumetricIntensity = SpotLight.VolumetricIntensity;
             Light.VolumetricScatteringRadius = SpotLight.VolumetricScatteringRadius;
+        }
+        if (SpotLight.bContactShadows)
+        {
+            Light.Flags |= ELightFlags::ContactShadow;
         }
         Light.Flags = PackLightMinRoughness(Light.Flags, SpotLight.MinRoughness);
 

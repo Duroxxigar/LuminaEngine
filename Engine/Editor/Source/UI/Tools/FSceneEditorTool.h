@@ -416,6 +416,10 @@ namespace Lumina
         bool                    bCameraPreviewResizing = false;
         bool                    bCameraPreviewMouseOver = false;
 
+        // The camera popup's euler row is authored, since re-deriving it snaps 179 to a gimbal-equivalent triple.
+        FVector3                CameraEulerDegrees = FVector3(0.0f);
+        FQuat                   CameraEulerRotationSource = FQuat::Identity();
+
 
 
         // Tool-window body: resolves the last-selected entity, rebuilds tables, draws the panel.

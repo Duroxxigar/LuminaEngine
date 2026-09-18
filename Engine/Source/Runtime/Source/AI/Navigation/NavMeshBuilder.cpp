@@ -441,7 +441,28 @@ namespace Lumina::NavMeshBuilder
         // Aggregate per-tile failures into one log line.
         std::atomic<uint32> FailCount{ 0 };
 
-        Task::ParallelFor(TileCount, [&](uint32 Index)
+        // Row-major order has workers scattered across unrelated bands at once, which reads as random
+        // chunks appearing. Sorting by distance from the middle makes the mesh grow outwards instead, and
+        // it costs one sort of the tile indices.
+        TVector<uint32> Order((size_t)TileCount);
+        {
+            for (uint32 i = 0; i < TileCount; ++i)
+            {
+                Order[i] = i;
+            }
+            const float CenterX = (float)(Grid.TilesX - 1) * 0.5f;
+            const float CenterY = (float)(Grid.TilesY - 1) * 0.5f;
+            Algo::Sort(Order, [&](uint32 A, uint32 B)
+            {
+                const float AX = (float)(A % (uint32)Grid.TilesX) - CenterX;
+                const float AY = (float)(A / (uint32)Grid.TilesX) - CenterY;
+                const float BX = (float)(B % (uint32)Grid.TilesX) - CenterX;
+                const float BY = (float)(B / (uint32)Grid.TilesX) - CenterY;
+                return (AX * AX + AY * AY) < (BX * BX + BY * BY);
+            });
+        }
+
+        Task::ParallelFor(TileCount, [&](uint32 Slot)
         {
             if (Handle.bCancelRequested.load(std::memory_order_acquire))
             {
@@ -449,6 +470,7 @@ namespace Lumina::NavMeshBuilder
                 return;
             }
 
+            const uint32 Index = Order[Slot];
             const int32 TX = (int32)(Index % (uint32)Grid.TilesX);
             const int32 TY = (int32)(Index / (uint32)Grid.TilesX);
 

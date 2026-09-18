@@ -28,8 +28,20 @@ namespace Lumina::Physics
         // Below this the character is treated as at rest, so slope drift is cut instead of decayed toward zero.
         constexpr float kRestSpeedSq = 0.01f * 0.01f;
 
+        // Below this a floor normal is too close to horizontal for the ramp solve to stay finite.
+        constexpr float kMinRampNormalY = 0.1f;
+
         // A couple of seconds of fixed steps, long past any deferred collider build.
         constexpr uint32 kAwaitingGroundWarnSteps = 120;
+
+        // How often a resting character re-runs a full step anyway, so a world change that raises no wake
+        // signal cannot hold it stale. Power of two, and the phase is offset per entity so a settled crowd
+        // does not poll on the same step.
+        constexpr uint64 kRestPollMask = 15;
+
+        // A character step is microseconds of world queries, so the fan-out pays for itself at a low count.
+        constexpr uint32 kCharacterParallelThreshold = 16;
+        constexpr uint32 kCharacterParallelGrain = 4;
 
         // Gathered per move iteration; the extras are only needed to push whatever the mover leaned on.
         struct FMoverPlanes
@@ -84,6 +96,28 @@ namespace Lumina::Physics
         bool MoverCastFilter(b3ShapeId ShapeId, void* Context)
         {
             return MoverAcceptsShape(*static_cast<const FMoverPlanes*>(Context), ShapeId);
+        }
+
+        // A resting character runs none of the world queries below, so everything that could move it wakes it here.
+        bool ShouldWakeResting(const FPhysicsCharacterHandle& Character, const SCharacterMovementComponent& Movement)
+        {
+            if (Movement.bHasPendingMoveInput || Movement.bPendingJump || Movement.bPendingLaunch || Movement.bPendingTeleport)
+            {
+                return true;
+            }
+
+            if (Movement.bUseControllerRotation && Math::Abs(Movement.PendingLookYaw - Character.RestLookYaw) > LE_SMALL_NUMBER)
+            {
+                return true;
+            }
+
+            // A script can write Velocity onto the component directly instead of staging a launch.
+            if (Math::LengthSquared(Movement.Velocity) > kRestSpeedSq)
+            {
+                return true;
+            }
+
+            return !b3Body_IsValid(Character.RestGroundBody);
         }
 
     }
@@ -248,16 +282,13 @@ namespace Lumina::Physics
         ECS::FRegistry& Registry = ECS::GetWorldRegistry(*World);
         auto View = Registry.View<SCharacterPhysicsComponent, SCharacterMovementComponent>();
 
-        // Impulses are staged here so the collide-and-solve pass stays a read-only world query.
-        struct FPendingPush
-        {
-            b3BodyId    Body;
-            b3Vec3      Impulse;
-            b3Vec3      Point;
-        };
-        static thread_local TVector<FPendingPush> Pushes;
-        Pushes.clear();
+        ++CharacterStepCounter;
+        int64 RestingCount = 0;
 
+        CharacterWorkScratch.clear();
+
+        // Resting, teleporting and unseated characters resolve here, so the fan-out below is a uniform
+        // collide-and-solve over characters that all owe the same work.
         View.ForEach([&](ECS::FEntity Entity, SCharacterPhysicsComponent& Physics, SCharacterMovementComponent& Movement)
         {
             if (!Physics.Character)
@@ -266,6 +297,18 @@ namespace Lumina::Physics
             }
 
             FPhysicsCharacterHandle& Character = *Physics.Character;
+
+            if (Character.bResting)
+            {
+                const bool bPollDue = ((CharacterStepCounter + (uint64)(Entity).Value) & kRestPollMask) == 0;
+                if (!bPollDue && !ShouldWakeResting(Character, Movement))
+                {
+                    ++RestingCount;
+                    return;
+                }
+
+                Character.bResting = false;
+            }
 
             if (Movement.bPendingTeleport)
             {
@@ -346,323 +389,436 @@ namespace Lumina::Physics
                 Character.bAwaitingGround = false;
             }
 
-            // Snapshotting each substep leaves the pose from before the last one, which is what interp blends from.
-            Physics.LastBodyPosition = Character.Position;
-            Physics.LastBodyRotation = Character.Rotation;
+            CharacterWorkScratch.push_back({ &Physics, &Movement });
+        });
 
-            const bool bHasMovementInput = Movement.bHasPendingMoveInput;
-            const FVector3 DesiredDirection = Movement.PendingMoveDirection;
-            const float TargetSpeed = bHasMovementInput ? Movement.MoveSpeed * Movement.PendingMoveThrottle : 0.0f;
-            const FVector3 TargetVelocity = DesiredDirection * TargetSpeed;
+        const uint32 WorkCount = (uint32)CharacterWorkScratch.size();
 
-            // Ground state was resolved at the end of the previous substep.
-            const bool bWasGrounded = Character.bGrounded;
+        const uint32 ThreadSlots = Math::Max(GTaskSystem->GetNumTaskThreads(), 1u);
+        if (CharacterPushScratch.size() < ThreadSlots)
+        {
+            CharacterPushScratch.resize(ThreadSlots);
+        }
 
-            Movement.bGrounded = Character.bGrounded;
-            Movement.GroundNormal = Character.GroundNormal;
-            Movement.GroundEntity = Character.GroundEntity;
+        for (FCharacterPushBucket& Bucket : CharacterPushScratch)
+        {
+            Bucket.Pushes.clear();
+        }
 
-            if (!bWasGrounded && Movement.bGrounded)
+        if (WorkCount > kCharacterParallelThreshold)
+        {
+            Task::ParallelFor(WorkCount, [&](uint32 Index, uint32 Thread)
             {
-                Movement.JumpCount = 0;
+                StepCharacter(CharacterWorkScratch[Index], FixedDt, Thread);
+            },
+            kCharacterParallelGrain);
+        }
+        else
+        {
+            for (uint32 Index = 0; Index < WorkCount; ++Index)
+            {
+                StepCharacter(CharacterWorkScratch[Index], FixedDt, 0);
             }
+        }
 
-            FQuat TargetRotation = Character.Rotation;
-            if (Movement.bUseControllerRotation)
+        // Box3D body writes touch shared world arrays, so the proxy sync and the pushes land after the fan-out.
+        for (const FCharacterWork& Work : CharacterWorkScratch)
+        {
+            const FPhysicsCharacterHandle& Character = *Work.Physics->Character;
+            b3Body_SetTransform(Character.ProxyBody, Box3DUtils::ToB3Vec3(Character.Position),
+                Box3DUtils::ToB3Quat(Character.Rotation));
+        }
+
+        for (const FCharacterPushBucket& Bucket : CharacterPushScratch)
+        {
+            for (const FPendingCharacterPush& Push : Bucket.Pushes)
             {
-                TargetRotation = FQuat(FVector3(0.0f, Math::Radians(Movement.PendingLookYaw), 0.0f));
-            }
-            else if (Movement.bOrientRotationToMovement && bHasMovementInput)
-            {
-                const float TargetYaw = Math::Atan2(DesiredDirection.x, DesiredDirection.z);
-                const FQuat Yawed = FQuat(FVector3(0.0f, TargetYaw, 0.0f));
-                TargetRotation = Math::Slerp(TargetRotation, Yawed, Math::Clamp(Movement.RotationRate * FixedDt, 0.0f, 1.0f));
-            }
-
-            FVector3 HorizontalVelocity(Movement.Velocity.x, 0.0f, Movement.Velocity.z);
-            const float CurrentSpeed = Math::Length(HorizontalVelocity);
-
-            if (bHasMovementInput)
-            {
-                const float Accel = Movement.bGrounded ? Movement.Acceleration : Movement.Acceleration * Movement.AirControl;
-                const float Blend = Math::Clamp(Accel * FixedDt, 0.0f, 1.0f);
-                HorizontalVelocity = Math::Mix(HorizontalVelocity, TargetVelocity, Blend);
-            }
-            else if (Movement.bGrounded)
-            {
-                const float NewSpeed = Math::Max(0.0f, CurrentSpeed - Movement.Deceleration * FixedDt);
-
-                HorizontalVelocity = CurrentSpeed > 0.001f
-                    ? Math::Normalize(HorizontalVelocity) * NewSpeed
-                    : FVector3(0.0f);
-
-                HorizontalVelocity *= Math::Max(0.0f, 1.0f - Movement.GroundFriction * FixedDt);
-
-                // A standing character comes to a hard stop rather than decaying toward zero forever.
-                if (Math::LengthSquared(HorizontalVelocity) < kRestSpeedSq)
+                if (b3Body_IsValid(Push.Body))
                 {
-                    HorizontalVelocity = FVector3(0.0f);
+                    b3Body_ApplyLinearImpulse(Push.Body, Push.Impulse, Push.Point, true);
                 }
+            }
+        }
+
+        LUMINA_PROFILE_VALUE("Physics/RestingCharacters", RestingCount);
+    }
+
+    void FBox3DPhysicsScene::StepCharacter(const FCharacterWork& Work, float FixedDt, uint32 ThreadSlot)
+    {
+        SCharacterPhysicsComponent& Physics = *Work.Physics;
+        SCharacterMovementComponent& Movement = *Work.Movement;
+        FPhysicsCharacterHandle& Character = *Physics.Character;
+
+        // Snapshotting each substep leaves the pose from before the last one, which is what interp blends from.
+        Physics.LastBodyPosition = Character.Position;
+        Physics.LastBodyRotation = Character.Rotation;
+
+        const bool bHasMovementInput = Movement.bHasPendingMoveInput;
+        const FVector3 DesiredDirection = Movement.PendingMoveDirection;
+        const float TargetSpeed = bHasMovementInput ? Movement.MoveSpeed * Movement.PendingMoveThrottle : 0.0f;
+        const FVector3 TargetVelocity = DesiredDirection * TargetSpeed;
+
+        // Ground state was resolved at the end of the previous substep.
+        const bool bWasGrounded = Character.bGrounded;
+
+        Movement.bGrounded = Character.bGrounded;
+        Movement.GroundNormal = Character.GroundNormal;
+        Movement.GroundEntity = Character.GroundEntity;
+
+        FQuat TargetRotation = Character.Rotation;
+        if (Movement.bUseControllerRotation)
+        {
+            TargetRotation = FQuat(FVector3(0.0f, Math::Radians(Movement.PendingLookYaw), 0.0f));
+        }
+        else if (Movement.bOrientRotationToMovement && bHasMovementInput)
+        {
+            const float TargetYaw = Math::Atan2(DesiredDirection.x, DesiredDirection.z);
+            const FQuat Yawed = FQuat(FVector3(0.0f, TargetYaw, 0.0f));
+            TargetRotation = Math::Slerp(TargetRotation, Yawed, Math::Clamp(Movement.RotationRate * FixedDt, 0.0f, 1.0f));
+        }
+
+        FVector3 HorizontalVelocity(Movement.Velocity.x, 0.0f, Movement.Velocity.z);
+        const float CurrentSpeed = Math::Length(HorizontalVelocity);
+
+        if (bHasMovementInput)
+        {
+            const float Accel = Movement.bGrounded ? Movement.Acceleration : Movement.Acceleration * Movement.AirControl;
+            const float Blend = Math::Clamp(Accel * FixedDt, 0.0f, 1.0f);
+            HorizontalVelocity = Math::Mix(HorizontalVelocity, TargetVelocity, Blend);
+        }
+        else if (Movement.bGrounded)
+        {
+            const float NewSpeed = Math::Max(0.0f, CurrentSpeed - Movement.Deceleration * FixedDt);
+
+            HorizontalVelocity = CurrentSpeed > 0.001f
+                ? Math::Normalize(HorizontalVelocity) * NewSpeed
+                : FVector3(0.0f);
+
+            HorizontalVelocity *= Math::Max(0.0f, 1.0f - Movement.GroundFriction * FixedDt);
+
+            // A standing character comes to a hard stop rather than decaying toward zero forever.
+            if (Math::LengthSquared(HorizontalVelocity) < kRestSpeedSq)
+            {
+                HorizontalVelocity = FVector3(0.0f);
+            }
+        }
+        else
+        {
+            HorizontalVelocity *= Math::Max(0.0f, 1.0f - (Movement.GroundFriction * 0.1f) * FixedDt);
+        }
+
+        Movement.Velocity.x = HorizontalVelocity.x + Character.GroundVelocity.x;
+        Movement.Velocity.z = HorizontalVelocity.z + Character.GroundVelocity.z;
+
+        if (Movement.bGrounded)
+        {
+            Movement.Velocity.y = Character.GroundVelocity.y;
+        }
+        else
+        {
+            Movement.Velocity.y += Movement.Gravity * FixedDt;
+        }
+
+        bool bJumpedThisStep = false;
+        if (Movement.bPendingJump)
+        {
+            Movement.bPendingJump = false;
+
+            if (Movement.JumpCount < Movement.MaxJumpCount)
+            {
+                Movement.Velocity.y = Movement.JumpSpeed;
+                ++Movement.JumpCount;
+                bJumpedThisStep = true;
+            }
+        }
+
+        // Applied after the ground and jump blocks so an upward impulse survives while still grounded.
+        if (Movement.bPendingLaunch)
+        {
+            Movement.bPendingLaunch = false;
+
+            if (Movement.bLaunchOverrideHorizontal)
+            {
+                Movement.Velocity.x = Movement.PendingLaunchVelocity.x;
+                Movement.Velocity.z = Movement.PendingLaunchVelocity.z;
             }
             else
             {
-                HorizontalVelocity *= Math::Max(0.0f, 1.0f - (Movement.GroundFriction * 0.1f) * FixedDt);
+                Movement.Velocity.x += Movement.PendingLaunchVelocity.x;
+                Movement.Velocity.z += Movement.PendingLaunchVelocity.z;
             }
 
-            Movement.Velocity.x = HorizontalVelocity.x + Character.GroundVelocity.x;
-            Movement.Velocity.z = HorizontalVelocity.z + Character.GroundVelocity.z;
+            Movement.Velocity.y = Movement.bLaunchOverrideVertical
+                ? Movement.PendingLaunchVelocity.y
+                : Movement.Velocity.y + Movement.PendingLaunchVelocity.y;
 
-            if (Movement.bGrounded)
-            {
-                Movement.Velocity.y = Character.GroundVelocity.y;
-            }
-            else
-            {
-                Movement.Velocity.y += Movement.Gravity * FixedDt;
-            }
+            bJumpedThisStep |= Movement.Velocity.y > 0.0f;
+        }
 
-            bool bJumpedThisStep = false;
-            if (Movement.bPendingJump)
-            {
-                Movement.bPendingJump = false;
+        Character.Rotation = TargetRotation;
+        Character.Velocity = Movement.Velocity;
 
-                if (Movement.JumpCount < Movement.MaxJumpCount)
+        const b3Capsule Mover = Character.MakeMoverCapsule();
+
+        b3Pos Position = Box3DUtils::ToB3Vec3(Character.Position);
+        const b3Pos StartPosition = Position;
+
+        FMoverPlanes Gathered;
+        Gathered.IgnoreBody = Character.ProxyBody;
+        Gathered.Profile = Character.Profile;
+        Gathered.bPermissive = Box3DUtils::UsesPermissiveCollisionFilter();
+        Gathered.bCollideWithCharacters = Character.bCollideWithCharacters;
+
+        auto GatherAt = [&](b3Pos At)
+        {
+            Gathered.Count = 0;
+            Gathered.Origin = At;
+            b3World_CollideMover(WorldId, At, &Mover, Character.Filter, &GatherPlanes, &Gathered);
+        };
+
+        auto FindWalkablePlane = [&]()
+        {
+            int32 Best = INDEX_NONE;
+            float BestUp = Character.CosMaxSlope;
+            for (int32 i = 0; i < Gathered.Count; ++i)
+            {
+                const float Up = Gathered.Planes[i].plane.normal.y;
+                if (Up >= BestUp)
                 {
-                    Movement.Velocity.y = Movement.JumpSpeed;
-                    ++Movement.JumpCount;
-                    bJumpedThisStep = true;
+                    BestUp = Up;
+                    Best = i;
                 }
             }
+            return Best;
+        };
 
-            // Applied after the ground and jump blocks so an upward impulse survives while still grounded.
-            if (Movement.bPendingLaunch)
+        // Box3D's documented mover order is cast and move first, then gather at the new pose, then solve.
+        // Solving before the cast would feed the depenetration push back through the cast, and on a slope
+        // that push has a horizontal component, which walks the character downhill every frame.
+        b3Vec3 Desired = b3MulSV(FixedDt, Box3DUtils::ToB3Vec3(Character.Velocity));
+
+        // On a walkable floor the move follows the surface instead of being bent onto it by the plane solver.
+        // Projection would shave the horizontal delta by the slope cosine and rotate it toward the contour,
+        // so solving only the vertical is what keeps the authored heading and speed exact on a ramp.
+        if (bWasGrounded && !bJumpedThisStep && Character.GroundNormal.y >= Character.CosMaxSlope
+            && Character.GroundNormal.y > kMinRampNormalY)
+        {
+            const FVector3& Ground = Character.GroundNormal;
+            Desired.y = -(Desired.x * Ground.x + Desired.z * Ground.z) / Ground.y;
+        }
+        const float TravelFraction = b3World_CastMover(WorldId, Position, &Mover, Desired, Character.Filter, &MoverCastFilter, &Gathered);
+
+        Position = b3Add(Position, b3MulSV(TravelFraction, Desired));
+
+        GatherAt(Position);
+
+        // The solver slides the unused remainder along whatever was hit, and corrects any overlap.
+        const b3Vec3 Remaining = b3MulSV(1.0f - TravelFraction, Desired);
+        const b3PlaneSolverResult Solved = b3SolvePlanes(Remaining, Gathered.Planes, Gathered.Count);
+        Position = b3Add(Position, Solved.delta);
+
+
+        // Overlap is resolved against a zero target so it can never become motion, which is what made the
+        // solve delta walk the character downhill when it was cast. A capsule spawned inside geometry needs
+        // several passes to escape; a resting one exits on the first because there is nothing to push out of.
+        bool bPushedOut = false;
+        for (int32 Recovery = 0; Recovery < Character.MaxCollisionIterations; ++Recovery)
+        {
+            GatherAt(Position);
+            bPushedOut = false;
+
+            const b3PlaneSolverResult Push = b3SolvePlanes(b3Vec3_zero, Gathered.Planes, Gathered.Count);
+            if (b3LengthSquared(Push.delta) < kMoveTolerance * kMoveTolerance)
             {
-                Movement.bPendingLaunch = false;
+                break;
+            }
 
-                if (Movement.bLaunchOverrideHorizontal)
+            Position = b3Add(Position, Push.delta);
+            bPushedOut = true;
+        }
+
+        if (bPushedOut)
+        {
+            GatherAt(Position);
+        }
+
+        int32 GroundPlane = FindWalkablePlane();
+
+        // Stair handling lifts by the step height, retries the blocked move, then settles back down.
+        const float WantedHorizontal = b3Length(b3Vec3{ Desired.x, 0.0f, Desired.z });
+        const b3Vec3 Achieved = b3Sub(Position, StartPosition);
+        const float AchievedHorizontal = b3Length(b3Vec3{ Achieved.x, 0.0f, Achieved.z });
+
+        if (bWasGrounded && Character.StepHeight > 0.0f && WantedHorizontal > kMoveTolerance
+            && AchievedHorizontal < WantedHorizontal * 0.9f)
+        {
+            const b3Vec3 StepUp{ 0.0f, Character.StepHeight, 0.0f };
+            const float UpFraction = b3World_CastMover(WorldId, StartPosition, &Mover, StepUp, Character.Filter, &MoverCastFilter, &Gathered);
+
+            if (UpFraction > 0.5f)
+            {
+                const b3Pos Raised = b3Add(StartPosition, b3MulSV(UpFraction, StepUp));
+                const b3Vec3 Forward{ Desired.x, 0.0f, Desired.z };
+                const float ForwardFraction = b3World_CastMover(WorldId, Raised, &Mover, Forward, Character.Filter, &MoverCastFilter, &Gathered);
+
+                if (ForwardFraction * WantedHorizontal > AchievedHorizontal + kMoveTolerance)
                 {
-                    Movement.Velocity.x = Movement.PendingLaunchVelocity.x;
-                    Movement.Velocity.z = Movement.PendingLaunchVelocity.z;
+                    const b3Pos Stepped = b3Add(Raised, b3MulSV(ForwardFraction, Forward));
+                    const b3Vec3 StepDown{ 0.0f, -Character.StepHeight, 0.0f };
+                    const float DownFraction = b3World_CastMover(WorldId, Stepped, &Mover, StepDown, Character.Filter, &MoverCastFilter, &Gathered);
+
+                    Position = b3Add(Stepped, b3MulSV(DownFraction, StepDown));
+                    GatherAt(Position);
+                    GroundPlane = FindWalkablePlane();
+                }
+            }
+        }
+
+        // Only a move that actually left the ground gets pulled back down. Settling every frame would
+        // re-seat the capsule in the floor so the next solve could push it out along the slope again.
+        if (GroundPlane == INDEX_NONE && bWasGrounded && !bJumpedThisStep && Character.Velocity.y <= 0.0f)
+        {
+            const b3Vec3 Drop{ 0.0f, -Character.StickToFloorDistance, 0.0f };
+            const float DropFraction = b3World_CastMover(WorldId, Position, &Mover, Drop, Character.Filter, &MoverCastFilter, &Gathered);
+
+            if (DropFraction < 1.0f)
+            {
+                const b3Pos Landed = b3Add(Position, b3MulSV(DropFraction, Drop));
+                GatherAt(Landed);
+
+                const int32 LandedPlane = FindWalkablePlane();
+                if (LandedPlane != INDEX_NONE)
+                {
+                    Position = Landed;
+                    GroundPlane = LandedPlane;
                 }
                 else
                 {
-                    Movement.Velocity.x += Movement.PendingLaunchVelocity.x;
-                    Movement.Velocity.z += Movement.PendingLaunchVelocity.z;
+                    GatherAt(Position);
                 }
-
-                Movement.Velocity.y = Movement.bLaunchOverrideVertical
-                    ? Movement.PendingLaunchVelocity.y
-                    : Movement.Velocity.y + Movement.PendingLaunchVelocity.y;
-
-                bJumpedThisStep |= Movement.Velocity.y > 0.0f;
-            }
-
-            Character.Rotation = TargetRotation;
-            Character.Velocity = Movement.Velocity;
-
-            const b3Capsule Mover = Character.MakeMoverCapsule();
-
-            b3Pos Position = Box3DUtils::ToB3Vec3(Character.Position);
-            const b3Pos StartPosition = Position;
-
-            FMoverPlanes Gathered;
-            Gathered.IgnoreBody = Character.ProxyBody;
-            Gathered.Profile = Character.Profile;
-            Gathered.bPermissive = Box3DUtils::UsesPermissiveCollisionFilter();
-            Gathered.bCollideWithCharacters = Character.bCollideWithCharacters;
-
-            auto GatherAt = [&](b3Pos At)
-            {
-                Gathered.Count = 0;
-                Gathered.Origin = At;
-                b3World_CollideMover(WorldId, At, &Mover, Character.Filter, &GatherPlanes, &Gathered);
-            };
-
-            auto FindWalkablePlane = [&]()
-            {
-                int32 Best = INDEX_NONE;
-                float BestUp = Character.CosMaxSlope;
-                for (int32 i = 0; i < Gathered.Count; ++i)
-                {
-                    const float Up = Gathered.Planes[i].plane.normal.y;
-                    if (Up >= BestUp)
-                    {
-                        BestUp = Up;
-                        Best = i;
-                    }
-                }
-                return Best;
-            };
-
-            // Box3D's documented mover order is cast and move first, then gather at the new pose, then solve.
-            // Solving before the cast would feed the depenetration push back through the cast, and on a slope
-            // that push has a horizontal component, which walks the character downhill every frame.
-            const b3Vec3 Desired = b3MulSV(FixedDt, Box3DUtils::ToB3Vec3(Character.Velocity));
-            const float TravelFraction = b3World_CastMover(WorldId, Position, &Mover, Desired, Character.Filter, &MoverCastFilter, &Gathered);
-
-            Position = b3Add(Position, b3MulSV(TravelFraction, Desired));
-
-            GatherAt(Position);
-
-            // The solver slides the unused remainder along whatever was hit, and corrects any overlap.
-            const b3Vec3 Remaining = b3MulSV(1.0f - TravelFraction, Desired);
-            const b3PlaneSolverResult Solved = b3SolvePlanes(Remaining, Gathered.Planes, Gathered.Count);
-            Position = b3Add(Position, Solved.delta);
-
-
-            // Overlap is resolved against a zero target so it can never become motion, which is what made the
-            // solve delta walk the character downhill when it was cast. A capsule spawned inside geometry needs
-            // several passes to escape; a resting one exits on the first because there is nothing to push out of.
-            bool bPushedOut = false;
-            for (int32 Recovery = 0; Recovery < Character.MaxCollisionIterations; ++Recovery)
-            {
-                GatherAt(Position);
-                bPushedOut = false;
-
-                const b3PlaneSolverResult Push = b3SolvePlanes(b3Vec3_zero, Gathered.Planes, Gathered.Count);
-                if (b3LengthSquared(Push.delta) < kMoveTolerance * kMoveTolerance)
-                {
-                    break;
-                }
-
-                Position = b3Add(Position, Push.delta);
-                bPushedOut = true;
-            }
-
-            if (bPushedOut)
-            {
-                GatherAt(Position);
-            }
-
-            int32 GroundPlane = FindWalkablePlane();
-
-            // Stair handling lifts by the step height, retries the blocked move, then settles back down.
-            const float WantedHorizontal = b3Length(b3Vec3{ Desired.x, 0.0f, Desired.z });
-            const b3Vec3 Achieved = b3Sub(Position, StartPosition);
-            const float AchievedHorizontal = b3Length(b3Vec3{ Achieved.x, 0.0f, Achieved.z });
-
-            if (bWasGrounded && Character.StepHeight > 0.0f && WantedHorizontal > kMoveTolerance
-                && AchievedHorizontal < WantedHorizontal * 0.9f)
-            {
-                const b3Vec3 StepUp{ 0.0f, Character.StepHeight, 0.0f };
-                const float UpFraction = b3World_CastMover(WorldId, StartPosition, &Mover, StepUp, Character.Filter, &MoverCastFilter, &Gathered);
-
-                if (UpFraction > 0.5f)
-                {
-                    const b3Pos Raised = b3Add(StartPosition, b3MulSV(UpFraction, StepUp));
-                    const b3Vec3 Forward{ Desired.x, 0.0f, Desired.z };
-                    const float ForwardFraction = b3World_CastMover(WorldId, Raised, &Mover, Forward, Character.Filter, &MoverCastFilter, &Gathered);
-
-                    if (ForwardFraction * WantedHorizontal > AchievedHorizontal + kMoveTolerance)
-                    {
-                        const b3Pos Stepped = b3Add(Raised, b3MulSV(ForwardFraction, Forward));
-                        const b3Vec3 StepDown{ 0.0f, -Character.StepHeight, 0.0f };
-                        const float DownFraction = b3World_CastMover(WorldId, Stepped, &Mover, StepDown, Character.Filter, &MoverCastFilter, &Gathered);
-
-                        Position = b3Add(Stepped, b3MulSV(DownFraction, StepDown));
-                        GatherAt(Position);
-                        GroundPlane = FindWalkablePlane();
-                    }
-                }
-            }
-
-            // Only a move that actually left the ground gets pulled back down. Settling every frame would
-            // re-seat the capsule in the floor so the next solve could push it out along the slope again.
-            if (GroundPlane == INDEX_NONE && bWasGrounded && !bJumpedThisStep && Character.Velocity.y <= 0.0f)
-            {
-                const b3Vec3 Drop{ 0.0f, -Character.StickToFloorDistance, 0.0f };
-                const float DropFraction = b3World_CastMover(WorldId, Position, &Mover, Drop, Character.Filter, &MoverCastFilter, &Gathered);
-
-                if (DropFraction < 1.0f)
-                {
-                    const b3Pos Landed = b3Add(Position, b3MulSV(DropFraction, Drop));
-                    GatherAt(Landed);
-
-                    const int32 LandedPlane = FindWalkablePlane();
-                    if (LandedPlane != INDEX_NONE)
-                    {
-                        Position = Landed;
-                        GroundPlane = LandedPlane;
-                    }
-                    else
-                    {
-                        GatherAt(Position);
-                    }
-                }
-            }
-
-            Character.bGrounded = GroundPlane != INDEX_NONE && !bJumpedThisStep;
-
-            if (Character.bGrounded)
-            {
-                Character.GroundNormal = Box3DUtils::FromB3Vec3(Gathered.Planes[GroundPlane].plane.normal);
-
-                const b3BodyId GroundBody = b3Shape_GetBody(Gathered.Shapes[GroundPlane]);
-                void* GroundUserData = b3Body_IsValid(GroundBody) ? b3Body_GetUserData(GroundBody) : nullptr;
-                Character.GroundEntity = GroundUserData != nullptr ? (UnpackEntity(GroundUserData)).Value : 0xFFFFFFFFu;
-                Character.GroundVelocity = b3Body_IsValid(GroundBody)
-                    ? Box3DUtils::FromB3Vec3(b3Body_GetWorldPointVelocity(GroundBody, Gathered.Points[GroundPlane]))
-                    : FVector3(0.0f);
-            }
-            else
-            {
-                Character.GroundNormal = FVector3(0.0f, 1.0f, 0.0f);
-                Character.GroundEntity = 0xFFFFFFFFu;
-                Character.GroundVelocity = FVector3(0.0f);
-            }
-
-            // Push whatever the mover leaned on, so crates and props still respond to being walked into.
-            for (int32 i = 0; i < Gathered.Count; ++i)
-            {
-                const b3BodyId HitBody = b3Shape_GetBody(Gathered.Shapes[i]);
-                if (!b3Body_IsValid(HitBody) || b3Body_GetType(HitBody) != b3_dynamicBody)
-                {
-                    continue;
-                }
-
-                const b3Vec3 Normal = b3Neg(Gathered.Planes[i].plane.normal);
-                const b3Vec3 Point = Gathered.Points[i];
-
-                const float InvMassB = b3Body_GetInverseMass(HitBody);
-                const b3Matrix3 InvInertiaB = b3Body_GetWorldInverseRotationalInertia(HitBody);
-
-                const float InvMassCharacter = Character.Mass > 0.0f ? 1.0f / Character.Mass : 0.0f;
-                const b3Vec3 RadiusB = b3SubPos(Point, b3Body_GetWorldCenter(HitBody));
-                const b3Vec3 CrossB = b3Cross(RadiusB, Normal);
-                const float NormalK = InvMassCharacter + InvMassB + b3Dot(CrossB, b3MulMV(InvInertiaB, CrossB));
-                if (NormalK <= 0.0f)
-                {
-                    continue;
-                }
-
-                const b3Vec3 VelocityB = b3Add(b3Body_GetLinearVelocity(HitBody), b3Cross(b3Body_GetAngularVelocity(HitBody), RadiusB));
-                const float NormalVelocity = b3Dot(b3Sub(VelocityB, Box3DUtils::ToB3Vec3(Character.Velocity)), Normal);
-
-                float Impulse = Math::Max(-NormalVelocity / NormalK, 0.0f);
-                Impulse = Math::Min(Impulse, Character.MaxStrength * FixedDt);
-
-                Pushes.push_back({ HitBody, b3MulSV(Impulse, Normal), Point });
-            }
-
-            Character.Position = Box3DUtils::FromB3Vec3(Position);
-
-            // b3ClipVector ignores planes with a zero push, and every gather rebuilds the set with zero pushes.
-            b3SolvePlanes(b3Vec3_zero, Gathered.Planes, Gathered.Count);
-
-            // Without this, velocity accumulates every frame the mover is pressed against a surface.
-            Character.Velocity = Box3DUtils::FromB3Vec3(b3ClipVector(Box3DUtils::ToB3Vec3(Character.Velocity), Gathered.Planes, Gathered.Count));
-            Movement.Velocity = Character.Velocity;
-
-            // The proxy follows the mover so queries, contacts and other bodies stay in sync.
-            b3Body_SetTransform(Character.ProxyBody, Box3DUtils::ToB3Vec3(Character.Position), Box3DUtils::ToB3Quat(Character.Rotation));
-        });
-
-        for (const FPendingPush& Push : Pushes)
-        {
-            if (b3Body_IsValid(Push.Body))
-            {
-                b3Body_ApplyLinearImpulse(Push.Body, Push.Impulse, Push.Point, true);
             }
         }
+
+        const bool bNowGrounded = GroundPlane != INDEX_NONE && !bJumpedThisStep;
+
+        // The landing edge is only visible here, where this step's ground has been resolved against the last one.
+        if (bNowGrounded && !bWasGrounded)
+        {
+            Movement.JumpCount = 0;
+        }
+
+        Character.bGrounded = bNowGrounded;
+
+        if (Character.bGrounded)
+        {
+            Character.GroundNormal = Box3DUtils::FromB3Vec3(Gathered.Planes[GroundPlane].plane.normal);
+
+            const b3BodyId GroundBody = b3Shape_GetBody(Gathered.Shapes[GroundPlane]);
+            void* GroundUserData = b3Body_IsValid(GroundBody) ? b3Body_GetUserData(GroundBody) : nullptr;
+            Character.GroundEntity = GroundUserData != nullptr ? (UnpackEntity(GroundUserData)).Value : 0xFFFFFFFFu;
+            Character.GroundVelocity = b3Body_IsValid(GroundBody)
+                ? Box3DUtils::FromB3Vec3(b3Body_GetWorldPointVelocity(GroundBody, Gathered.Points[GroundPlane]))
+                : FVector3(0.0f);
+        }
+        else
+        {
+            Character.GroundNormal = FVector3(0.0f, 1.0f, 0.0f);
+            Character.GroundEntity = 0xFFFFFFFFu;
+            Character.GroundVelocity = FVector3(0.0f);
+        }
+
+        // Rest is only safe against things that cannot move on their own. A neighboring character proxy
+        // counts as inert because the mover never pushes one, it is only blocked by it.
+        bool bRestableContacts = true;
+
+        // Push whatever the mover leaned on, so crates and props still respond to being walked into.
+        for (int32 i = 0; i < Gathered.Count; ++i)
+        {
+            const b3BodyId HitBody = b3Shape_GetBody(Gathered.Shapes[i]);
+            if (!b3Body_IsValid(HitBody))
+            {
+                continue;
+            }
+
+            const b3BodyType HitType = b3Body_GetType(HitBody);
+            if (HitType != b3_staticBody && !Box3DUtils::IsCharacterProxyUserData(b3Shape_GetUserData(Gathered.Shapes[i])))
+            {
+                bRestableContacts = false;
+            }
+
+            if (HitType != b3_dynamicBody)
+            {
+                continue;
+            }
+
+            const b3Vec3 Normal = b3Neg(Gathered.Planes[i].plane.normal);
+            const b3Vec3 Point = Gathered.Points[i];
+
+            const float InvMassB = b3Body_GetInverseMass(HitBody);
+            const b3Matrix3 InvInertiaB = b3Body_GetWorldInverseRotationalInertia(HitBody);
+
+            const float InvMassCharacter = Character.Mass > 0.0f ? 1.0f / Character.Mass : 0.0f;
+            const b3Vec3 RadiusB = b3SubPos(Point, b3Body_GetWorldCenter(HitBody));
+            const b3Vec3 CrossB = b3Cross(RadiusB, Normal);
+            const float NormalK = InvMassCharacter + InvMassB + b3Dot(CrossB, b3MulMV(InvInertiaB, CrossB));
+            if (NormalK <= 0.0f)
+            {
+                continue;
+            }
+
+            const b3Vec3 VelocityB = b3Add(b3Body_GetLinearVelocity(HitBody), b3Cross(b3Body_GetAngularVelocity(HitBody), RadiusB));
+            const float NormalVelocity = b3Dot(b3Sub(VelocityB, Box3DUtils::ToB3Vec3(Character.Velocity)), Normal);
+
+            float Impulse = Math::Max(-NormalVelocity / NormalK, 0.0f);
+            Impulse = Math::Min(Impulse, Character.MaxStrength * FixedDt);
+
+            CharacterPushScratch[ThreadSlot].Pushes.push_back({ HitBody, b3MulSV(Impulse, Normal), Point });
+        }
+
+        Character.Position = Box3DUtils::FromB3Vec3(Position);
+
+        // b3ClipVector ignores planes with a zero push, and every gather rebuilds the set with zero pushes.
+        b3SolvePlanes(b3Vec3_zero, Gathered.Planes, Gathered.Count);
+
+        // Only a wall may take speed away. Clipping horizontal velocity against a walkable floor removes its
+        // into-slope component every step, so a character on a ramp settles below its authored speed.
+        for (int32 i = 0; i < Gathered.Count; ++i)
+        {
+            if (Gathered.Planes[i].plane.normal.y >= Character.CosMaxSlope)
+            {
+                Gathered.Planes[i].clipVelocity = false;
+            }
+        }
+
+        // Without this, velocity accumulates every frame the mover is pressed against a surface.
+        Character.Velocity = Box3DUtils::FromB3Vec3(b3ClipVector(Box3DUtils::ToB3Vec3(Character.Velocity), Gathered.Planes, Gathered.Count));
+        Movement.Velocity = Character.Velocity;
+
+        const bool bSettled = Character.bGrounded
+            && bRestableContacts
+            && !bHasMovementInput
+            && Math::LengthSquared(Character.Velocity) < kRestSpeedSq
+            && Math::LengthSquared(Character.GroundVelocity) < kRestSpeedSq
+            && b3LengthSquared(b3Sub(Position, StartPosition)) < kMoveTolerance * kMoveTolerance;
+
+        if (!bSettled)
+        {
+            return;
+        }
+
+        // Only static ground rests. A platform or another character can walk out from under the capsule
+        // without any signal the cheap wake check would see.
+        const b3BodyId GroundBody = b3Shape_GetBody(Gathered.Shapes[GroundPlane]);
+        if (!b3Body_IsValid(GroundBody) || b3Body_GetType(GroundBody) != b3_staticBody)
+        {
+            return;
+        }
+
+        Character.Velocity = FVector3(0.0f);
+        Movement.Velocity = FVector3(0.0f);
+
+        Character.bResting = true;
+        Character.RestGroundBody = GroundBody;
+        Character.RestLookYaw = Movement.PendingLookYaw;
     }
 }

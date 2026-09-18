@@ -3,6 +3,7 @@
 #include "ImportHelpers.h"
 #include "Paths/Paths.h"
 #include "Memory/MemoryTracking.h"
+#include "Core/Math/SIMD/PixelOps.h"
 #include "Renderer/RHITexture.h"
 
 // Declarations only; StbImageImpl.cpp compiles the implementations for the whole engine.
@@ -213,13 +214,7 @@ namespace Lumina::Import::Textures
                     {
                         Result.Format = EFormat::RGBA16_UNORM;
                         TVector<uint16> rgba16Data(x * y * 4);
-                        for (int i = 0; i < x * y; ++i)
-                        {
-                            rgba16Data[i * 4 + 0] = data[i * 3 + 0];
-                            rgba16Data[i * 4 + 1] = data[i * 3 + 1];
-                            rgba16Data[i * 4 + 2] = data[i * 3 + 2];
-                            rgba16Data[i * 4 + 3] = 0xFFFF; // Max value for 16-bit
-                        }
+                        SIMD::ExpandRGBToRGBA16(data, rgba16Data.data(), (size_t)x * (size_t)y);
                         size_t dataSize = rgba16Data.size() * sizeof(uint16);
                         Result.Pixels.assign(reinterpret_cast<uint8*>(rgba16Data.data()), reinterpret_cast<uint8*>(rgba16Data.data()) + dataSize);
                     }
@@ -262,13 +257,7 @@ namespace Lumina::Import::Textures
                 {
                     Result.Format = bIsSRGB ? EFormat::SRGBA8_UNORM : EFormat::RGBA8_UNORM;
                     TVector<uint8> rgba8Data(x * y * 4);
-                    for (int i = 0; i < x * y; ++i)
-                    {
-                        rgba8Data[i * 4 + 0] = data[i * 3 + 0];
-                        rgba8Data[i * 4 + 1] = data[i * 3 + 1];
-                        rgba8Data[i * 4 + 2] = data[i * 3 + 2];
-                        rgba8Data[i * 4 + 3] = 0xFF;
-                    }
+                    SIMD::ExpandRGBToRGBA8(data, rgba8Data.data(), (size_t)x * (size_t)y);
                     Result.Pixels = std::move(rgba8Data);
                 }
                 break;
@@ -353,13 +342,7 @@ namespace Lumina::Import::Textures
                     {
                         Result.Format = EFormat::RGBA16_UNORM;
                         TVector<uint16> rgba16Data(x * y * 4);
-                        for (int i = 0; i < x * y; ++i)
-                        {
-                            rgba16Data[i * 4 + 0] = Data[i * 3 + 0];
-                            rgba16Data[i * 4 + 1] = Data[i * 3 + 1];
-                            rgba16Data[i * 4 + 2] = Data[i * 3 + 2];
-                            rgba16Data[i * 4 + 3] = 0xFFFF; // Max value for 16-bit
-                        }
+                        SIMD::ExpandRGBToRGBA16(Data, rgba16Data.data(), (size_t)x * (size_t)y);
                         size_t dataSize = rgba16Data.size() * sizeof(uint16);
                         Result.Pixels.assign(reinterpret_cast<uint8*>(rgba16Data.data()), reinterpret_cast<uint8*>(rgba16Data.data()) + dataSize);
                     }
@@ -402,13 +385,7 @@ namespace Lumina::Import::Textures
                 {
                     Result.Format = bIsSRGB ? EFormat::SRGBA8_UNORM : EFormat::RGBA8_UNORM;
                     TVector<uint8> rgba8Data(x * y * 4);
-                    for (int i = 0; i < x * y; ++i)
-                    {
-                        rgba8Data[i * 4 + 0] = data[i * 3 + 0];
-                        rgba8Data[i * 4 + 1] = data[i * 3 + 1];
-                        rgba8Data[i * 4 + 2] = data[i * 3 + 2];
-                        rgba8Data[i * 4 + 3] = 0xFF;
-                    }
+                    SIMD::ExpandRGBToRGBA8(data, rgba8Data.data(), (size_t)x * (size_t)y);
                     Result.Pixels = std::move(rgba8Data);
                 }
                 break;

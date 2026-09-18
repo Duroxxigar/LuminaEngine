@@ -27,8 +27,8 @@ namespace Lumina
 
             Package->ClearDirty();
             Package->SetFlag(OF_MarkedDestroy);
+            // The root set holds the only strong reference, so unrooting is what destroys it.
             Package->RemoveFromRoot();
-            Package->ConditionalBeginDestroy();
         }
 
         CTexture* ImportTextureAsset(const FFixedString& PackagePath, const FTextureCookRequest& Request)

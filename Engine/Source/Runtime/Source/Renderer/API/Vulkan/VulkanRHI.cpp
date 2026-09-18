@@ -617,6 +617,8 @@ namespace Lumina::RHI
         bool                            bDeviceAddressCommands = false;
         // Present fences retire an old swapchain without idling every queue on the device.
         bool                            bSwapchainMaintenance1 = false;
+        // The CPU can write straight into an optimally-tiled image, with no staging buffer and no copy pass.
+        bool                            bHostImageCopy = false;
 #if USING(WITH_EDITOR)
         bool                            bPipelineStats = false;
         // Capture the driver's internal representations too, which costs pipeline creation time.
@@ -627,6 +629,8 @@ namespace Lumina::RHI
 
         VkDevice                        Device;
         VkPhysicalDevice                PhysicsDevice;
+        // Recorded at selection because the heap sizes are what the minimum spec was judged against.
+        uint64                          DeviceLocalMemoryBytes = 0;
         VmaAllocator                    Allocator;
         TArray<VkQueue, 3>              Queues;
         TArray<uint32, 3>               QueueFamilies;
@@ -1029,9 +1033,42 @@ namespace Lumina::RHI
         Dialogs::ShowInternal(Dialogs::ESeverity::FatalError, Dialogs::EType::Ok, Title, Message);
     }
 
+    // Physical memory the GPU renders out of, read before a device exists and so before VMA does.
+    static uint64 QueryDeviceLocalMemoryBytes(VkPhysicalDevice Gpu, const VkPhysicalDeviceProperties& Props)
+    {
+        VkPhysicalDeviceMemoryProperties MemProps{};
+        vkGetPhysicalDeviceMemoryProperties(Gpu, &MemProps);
+
+        uint64 DeviceLocal = 0;
+        uint64 AllHeaps    = 0;
+        for (uint32 HeapIndex = 0; HeapIndex < MemProps.memoryHeapCount; ++HeapIndex)
+        {
+            const VkMemoryHeap& Heap = MemProps.memoryHeaps[HeapIndex];
+            AllHeaps += Heap.size;
+            if (Heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+            {
+                DeviceLocal += Heap.size;
+            }
+        }
+
+        // An APU allocates across every heap, so its device-local carve-out understates what it has.
+        if (Props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU)
+        {
+            return AllHeaps;
+        }
+
+        return DeviceLocal;
+    }
+
     struct FDeviceSuitability
     {
         bool    bSuitable = false;
+
+        /// Physical device-local memory, reported whether or not the device passed.
+        uint64  DeviceLocalMemoryBytes = 0;
+
+        /// Set when the only thing wrong with the device was how much memory it has.
+        bool    bRejectedForMemory = false;
 
         /// Why the device was turned down, phrased to be read in a dialog. Empty when suitable.
         FString Reason;
@@ -1049,10 +1086,14 @@ namespace Lumina::RHI
         uint32  MaxMeshWorkGroupCount = 0;
     };
     
-    static FDeviceSuitability EvaluateDeviceSuitability(VkPhysicalDevice Gpu, bool bHeadless,
-        EDeviceFeature RequiredFeatures, bool bLog)
+    static FDeviceSuitability EvaluateDeviceSuitability(VkPhysicalDevice Gpu, const FDeviceDesc& DeviceDesc,
+        const VkPhysicalDeviceProperties& Props, bool bLog)
     {
+        const bool           bHeadless        = DeviceDesc.bHeadless;
+        const EDeviceFeature RequiredFeatures = DeviceDesc.RequiredFeatures;
+
         FDeviceSuitability Result;
+        Result.DeviceLocalMemoryBytes = QueryDeviceLocalMemoryBytes(Gpu, Props);
 
         uint32 ExtCount = 0;
         vkEnumerateDeviceExtensionProperties(Gpu, nullptr, &ExtCount, nullptr);
@@ -1098,6 +1139,18 @@ namespace Lumina::RHI
                 Result.Reason = "exposes no graphics queue family";
                 return Result;
             }
+        }
+
+        if (DeviceDesc.MinDeviceLocalMemoryMiB != 0
+            && (Result.DeviceLocalMemoryBytes >> 20) < DeviceDesc.MinDeviceLocalMemoryMiB)
+        {
+            Result.bRejectedForMemory = true;
+            Result.Reason = FString("reports ")
+                + Lumina::Format("{}", Result.DeviceLocalMemoryBytes >> 20).c_str()
+                + " MiB of graphics memory, below the "
+                + Lumina::Format("{}", DeviceDesc.MinDeviceLocalMemoryMiB).c_str()
+                + " MiB minimum";
+            return Result;
         }
 
         // Reported rather than fatal: a renderer that never dispatches a mesh shader still runs here.
@@ -1385,6 +1438,7 @@ namespace Lumina::RHI
         Info.Name      = Props.deviceName;
         Info.VendorID  = Props.vendorID;
         Info.bDiscrete = Props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+        Info.DeviceLocalMemoryBytes = GDevice->DeviceLocalMemoryBytes;
         Info.APIName   = "Vulkan ";
         Info.APIName += Lumina::Format("{}", VK_API_VERSION_MAJOR(Props.apiVersion)).c_str();
         Info.APIName += ".";
@@ -1846,9 +1900,10 @@ namespace Lumina::RHI
                 return false;
             };
 
+            // EXT first, because shipping validation layers predate the identical KHR promotion.
             const char* SurfaceMaint = nullptr;
-            if (HasInstanceExt(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME))      { SurfaceMaint = VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME; }
-            else if (HasInstanceExt(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME)) { SurfaceMaint = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME; }
+            if (HasInstanceExt(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME))      { SurfaceMaint = VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME; }
+            else if (HasInstanceExt(VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME)) { SurfaceMaint = VK_KHR_SURFACE_MAINTENANCE_1_EXTENSION_NAME; }
 
             if (SurfaceMaint != nullptr && HasInstanceExt(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME))
             {
@@ -2095,6 +2150,7 @@ namespace Lumina::RHI
         // Lets a machine where every device is unusable name each one and its reason.
         FString Rejections;
         bool bAnyModernDevice = false;
+        bool bAnyMemoryRejection = false;
 
         for (VkPhysicalDevice Gpu : Gpus)
         {
@@ -2109,13 +2165,13 @@ namespace Lumina::RHI
             bAnyModernDevice = true;
 
             // A device that cannot run the renderer must not outrank one that can on type alone.
-            const FDeviceSuitability Suitability = EvaluateDeviceSuitability(Gpu, DeviceDesc.bHeadless,
-                DeviceDesc.RequiredFeatures, false);
+            const FDeviceSuitability Suitability = EvaluateDeviceSuitability(Gpu, DeviceDesc, Props, false);
 
             if (!Suitability.bSuitable)
             {
                 LOG_WARN("Skipping GPU '{}': {}.", Props.deviceName, Suitability.Reason);
                 Rejections += FString("  ") + Props.deviceName + ": " + Suitability.Reason + "\n";
+                bAnyMemoryRejection |= Suitability.bRejectedForMemory;
                 continue;
             }
 
@@ -2136,6 +2192,13 @@ namespace Lumina::RHI
             {
                 Message += "\nMesh shaders need Turing (GTX 16-series / RTX 20-series) or newer on NVIDIA, "
                     "RDNA2 (RX 6000) or newer on AMD, or Arc on Intel.";
+            }
+            if (bAnyMemoryRejection)
+            {
+                Message += "\n\nThe renderer reserves over a gigabyte of graphics memory before any content "
+                    "loads, for its render targets, shadow atlases and streaming texture pool. A card under "
+                    "the minimum does not fail cleanly. It renders corrupt frames and eventually loses the "
+                    "device.\n\nLaunch with -ignoreminspec to run anyway, unsupported.";
             }
             ShowVulkanInitFailure("Vulkan Device Unsuitable", Message);
             std::abort();
@@ -2163,10 +2226,12 @@ namespace Lumina::RHI
         vkGetPhysicalDeviceProperties(Best, &GDevice->Properties);
 
         // The selection loop stayed quiet so a rejected candidate's limits cannot be mistaken for these.
-        const FDeviceSuitability Chosen = EvaluateDeviceSuitability(Best, DeviceDesc.bHeadless,
-            DeviceDesc.RequiredFeatures, true);
+        const FDeviceSuitability Chosen = EvaluateDeviceSuitability(Best, DeviceDesc, GDevice->Properties, true);
 
-        LOG_DISPLAY("Selected GPU '{}'.", GDevice->Properties.deviceName);
+        GDevice->DeviceLocalMemoryBytes = Chosen.DeviceLocalMemoryBytes;
+
+        LOG_DISPLAY("Selected GPU '{}' with {} MiB of graphics memory.",
+            GDevice->Properties.deviceName, Chosen.DeviceLocalMemoryBytes >> 20);
 
         GDevice->bMeshShaderSupported     = Chosen.bMeshCapable;
         GDevice->MeshRequiredSubgroupSize = Chosen.MeshRequiredSubgroupSize;
@@ -2244,7 +2309,70 @@ namespace Lumina::RHI
             HasDedicatedQueue(EQueueType::Transfer) ? "available" : "unavailable (aliased to graphics)");
     }
 
-    static void CreateAllocator(bool bMemoryPriority)
+    // Every image carries VK_IMAGE_USAGE_HOST_TRANSFER_BIT, so the bit must not cost one its VRAM.
+    static bool ProbeHostImageCopy()
+    {
+        VkPhysicalDeviceHostImageCopyProperties HostCopyProps
+            { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES };
+        VkPhysicalDeviceProperties2 HostCopyQuery
+            { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &HostCopyProps };
+        vkGetPhysicalDeviceProperties2(GDevice->PhysicsDevice, &HostCopyQuery);
+
+        if (HostCopyProps.identicalMemoryTypeRequirements)
+        {
+            LOG_DISPLAY("Host image copy enabled; the usage bit does not change image memory requirements.");
+            return true;
+        }
+
+        // NVIDIA answers false here, so the question becomes whether device-local memory is still reachable.
+        const VkImageCreateInfo Probe
+        {
+            .sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+            .imageType     = VK_IMAGE_TYPE_2D,
+            .format        = VK_FORMAT_BC7_UNORM_BLOCK,
+            .extent        = { 256, 256, 1 },
+            .mipLevels     = 4,
+            .arrayLayers   = 1,
+            .samples       = VK_SAMPLE_COUNT_1_BIT,
+            .tiling        = VK_IMAGE_TILING_OPTIMAL,
+            .usage         = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+                           | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_HOST_TRANSFER_BIT,
+            .sharingMode   = VK_SHARING_MODE_EXCLUSIVE,
+            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        };
+
+        VkImage ProbeImage = VK_NULL_HANDLE;
+        if (vkCreateImage(GDevice->Device, &Probe, nullptr, &ProbeImage) != VK_SUCCESS)
+        {
+            LOG_DISPLAY("Host image copy declined; an image carrying the usage bit could not be created.");
+            return false;
+        }
+
+        VkMemoryRequirements Requirements{};
+        vkGetImageMemoryRequirements(GDevice->Device, ProbeImage, &Requirements);
+        vkDestroyImage(GDevice->Device, ProbeImage, nullptr);
+
+        VkPhysicalDeviceMemoryProperties MemProps{};
+        vkGetPhysicalDeviceMemoryProperties(GDevice->PhysicsDevice, &MemProps);
+
+        for (uint32 TypeIndex = 0; TypeIndex < MemProps.memoryTypeCount; ++TypeIndex)
+        {
+            const bool bAllowed = (Requirements.memoryTypeBits & (1u << TypeIndex)) != 0;
+            const bool bDeviceLocal =
+                (MemProps.memoryTypes[TypeIndex].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+
+            if (bAllowed && bDeviceLocal)
+            {
+                LOG_DISPLAY("Host image copy enabled; the usage bit keeps device-local memory reachable.");
+                return true;
+            }
+        }
+
+        LOG_DISPLAY("Host image copy declined; the usage bit would push images out of device-local memory.");
+        return false;
+    }
+
+    static void CreateAllocator(bool bMemoryPriority, bool bMemoryBudget)
     {
         VmaVulkanFunctions Functions = {};
         Functions.vkGetInstanceProcAddr = vkGetInstanceProcAddr;
@@ -2256,10 +2384,15 @@ namespace Lumina::RHI
         AllocatorInfo.physicalDevice   = GDevice->PhysicsDevice;
         AllocatorInfo.device           = GDevice->Device;
         AllocatorInfo.pVulkanFunctions = &Functions;
-        AllocatorInfo.flags            = VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT | VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+        AllocatorInfo.flags            = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
         if (bMemoryPriority)
         {
             AllocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_PRIORITY_BIT;
+        }
+        // Undefined per VMA without the extension, and it falls back to a fraction of the heap size.
+        if (bMemoryBudget)
+        {
+            AllocatorInfo.flags |= VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT;
         }
 
         VK_CHECK(vmaCreateAllocator(&AllocatorInfo, &GDevice->Allocator));
@@ -2284,6 +2417,7 @@ namespace Lumina::RHI
         bool bNvDiagnostics  = false;
         bool bBufferMarker   = false;
         bool bMemoryPriority = false;
+        bool bMemoryBudget   = false;
         bool bUnifiedImageLayouts = false;
         bool bSwapchainMaintenance1 = false;
         bool bDeviceAddressCommands = false;
@@ -2326,6 +2460,8 @@ namespace Lumina::RHI
             };
 
             EnableIfPresent(VK_EXT_SAMPLER_FILTER_MINMAX_EXTENSION_NAME);
+            // Turns VMA's heap budgets into the driver's live figures rather than a share of heap size.
+            bMemoryBudget = EnableIfPresent(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
             EnableIfPresent(VK_KHR_SHADER_NON_SEMANTIC_INFO_EXTENSION_NAME);
             bNvDiagnostics  = EnableIfPresent(VK_NV_DEVICE_DIAGNOSTICS_CONFIG_EXTENSION_NAME);
             bDeviceFault    = EnableIfPresent(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
@@ -2334,8 +2470,9 @@ namespace Lumina::RHI
             bUnifiedImageLayouts = bLayerKnowsUnifiedLayouts && EnableIfPresent(VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME);
             if (GSurfaceMaintenance1Available)
             {
-                bSwapchainMaintenance1 = EnableIfPresent(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)
-                                      || EnableIfPresent(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
+                // EXT first, matching the surface extension the instance chose for the same reason.
+                bSwapchainMaintenance1 = EnableIfPresent(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME)
+                                      || EnableIfPresent(VK_KHR_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME);
             }
             bMemoryPriority = EnableIfPresent(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
             if (bMemoryPriority)
@@ -2445,6 +2582,9 @@ namespace Lumina::RHI
 
         VkPhysicalDeviceVulkan14Features Features14{ .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES };
         Features14.smoothLines = Supported14.smoothLines;
+
+        // Costs nothing unenabled, and the probe that decides whether to use it needs a device to exist.
+        Features14.hostImageCopy = Supported14.hostImageCopy;
 
         // Feature pNext chain assembled back to front.
         void* FeatureChain = nullptr;
@@ -2652,6 +2792,11 @@ namespace Lumina::RHI
             volkLoadDevice(GDevice->Device);
         }
 
+        if (Supported14.hostImageCopy)
+        {
+            GDevice->bHostImageCopy = ProbeHostImageCopy();
+        }
+
         GDevice->CrashTracker->Initialize(GDevice->Device, GDevice->PhysicsDevice);
 
         // After volkLoadDevice, since it needs vkCmdWriteBufferMarkerAMD resolved.
@@ -2674,7 +2819,7 @@ namespace Lumina::RHI
 
         BindQueues(GraphicsFamily, ComputeFamily, TransferFamily);
 
-        CreateAllocator(bMemoryPriority);
+        CreateAllocator(bMemoryPriority, bMemoryBudget);
 
         {
             const uint32 APIVer = GDevice->Properties.apiVersion;
@@ -4370,6 +4515,7 @@ namespace Lumina::RHI
         Usage |= EnumHasAnyFlags(Desc.Usage, EImageUsageFlags::DepthAttachment) ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : 0;
         Usage |= EnumHasAnyFlags(Desc.Usage, EImageUsageFlags::TransferSrc)     ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0;
         Usage |= EnumHasAnyFlags(Desc.Usage, EImageUsageFlags::TransferDst)     ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0;
+        Usage |= GDevice->bHostImageCopy                                       ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT : 0;
 
         const uint32 Depth = Desc.Type == ETextureType::Tex3D ? Math::Max(Desc.Dimension.z, 1u) : 1u;
 
@@ -6021,6 +6167,96 @@ namespace Lumina::RHI
 
         auto VkCmdBuf = GDevice->CommandLists[CL].CommandBuffer;
         vkCmdCopyBufferToImage(VkCmdBuf, SourceRange.Buffer, DestTexture.Image, VK_IMAGE_LAYOUT_GENERAL, 1, &Region);
+    }
+
+    bool SupportsHostImageCopy()
+    {
+        return GDevice != nullptr && GDevice->bHostImageCopy;
+    }
+
+    bool HostCopyToTextureUnsynchronized(FTextureH Dest, const FTextureSlice& Slice, const void* Data, uint32 RowLength)
+    {
+        if (!SupportsHostImageCopy() || Data == nullptr || !IsValid(Dest))
+        {
+            return false;
+        }
+
+        const FTexture& DestTexture = GDevice->Textures[Dest];
+
+        const uint8 BlockW = RHI::Format::Info(DestTexture.Desc.Format).BlockSize;
+        const uint32 RowLengthBlocks = (BlockW > 1) ? Math::AlignUp(RowLength, (uint32)BlockW) : RowLength;
+
+        // Clamped exactly as CmdCopyMemoryToTexture does, since the two paths take the same callers' extents.
+        VkExtent3D Extent = SliceExtent(DestTexture, Slice);
+        {
+            const FTextureDesc& Desc = DestTexture.Desc;
+            const uint32 DepthDim = (Desc.Type == ETextureType::Tex3D) ? Math::Max(Desc.Dimension.z, 1u) : 1u;
+
+            const uint32 MipW = Math::Max(Desc.Dimension.x >> Slice.Mip, 1u);
+            const uint32 MipH = Math::Max(Desc.Dimension.y >> Slice.Mip, 1u);
+            const uint32 MipD = Math::Max(DepthDim >> Slice.Mip, 1u);
+
+            if (Slice.Offset.x >= MipW || Slice.Offset.y >= MipH || Slice.Offset.z >= MipD)
+            {
+                LOG_ERROR("RHI: dropped a host texture copy whose offset ({}, {}, {}) is outside mip {} "
+                          "({}x{}x{}). The caller's mip dimensions disagree with the image's own chain.",
+                    Slice.Offset.x, Slice.Offset.y, Slice.Offset.z, Slice.Mip, MipW, MipH, MipD);
+                return false;
+            }
+
+            Extent.width  = Math::Min(Extent.width,  MipW - Slice.Offset.x);
+            Extent.height = Math::Min(Extent.height, MipH - Slice.Offset.y);
+            Extent.depth  = Math::Min(Extent.depth,  MipD - Slice.Offset.z);
+        }
+
+        if (RowLengthBlocks != 0 && RowLengthBlocks < Extent.width)
+        {
+            LOG_ERROR("RHI: dropped a host texture copy with an out-of-spec region (rowLength {} < extent width {}, "
+                      "mip {}). Pass the mip's own dimensions to Upload.", RowLengthBlocks, Extent.width, Slice.Mip);
+            return false;
+        }
+
+        const VkMemoryToImageCopy Region
+        {
+            .sType             = VK_STRUCTURE_TYPE_MEMORY_TO_IMAGE_COPY,
+            .pHostPointer      = Data,
+            .memoryRowLength   = RowLengthBlocks,
+            .memoryImageHeight = 0,
+            .imageSubresource  = SliceLayers(DestTexture, Slice),
+            .imageOffset       = { (int32)Slice.Offset.x, (int32)Slice.Offset.y, (int32)Slice.Offset.z },
+            .imageExtent       = Extent,
+        };
+
+        const VkCopyMemoryToImageInfo Info
+        {
+            .sType          = VK_STRUCTURE_TYPE_COPY_MEMORY_TO_IMAGE_INFO,
+            .dstImage       = DestTexture.Image,
+            .dstImageLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .regionCount    = 1,
+            .pRegions       = &Region,
+        };
+
+        LUMINA_PROFILE_SECTION("RHI::HostCopyToTexture");
+        const VkResult Result = vkCopyMemoryToImage(*GDevice, &Info);
+
+        static TAtomic<uint64> HostCopyCount{0};
+        const uint64 Ordinal = HostCopyCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        LUMINA_PROFILE_VALUE("RHI/HostTextureCopies", (int64)Ordinal);
+
+        // Enabled and never reached is a real outcome, so say once that it is actually carrying uploads.
+        if (Ordinal == 1)
+        {
+            LOG_DISPLAY("Host image copy is carrying texture uploads; the first wrote {}x{} into mip {}.",
+                        Extent.width, Extent.height, Slice.Mip);
+        }
+
+        if (Result != VK_SUCCESS)
+        {
+            LOG_ERROR("RHI: host texture copy failed ({}); the caller falls back to staging.",
+                      Vulkan::VkResultToString(Result));
+            return false;
+        }
+        return true;
     }
 
     // Legacy path only, for the same missing-byte-range reason as CmdCopyMemoryToTexture.

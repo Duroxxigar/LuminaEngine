@@ -28,6 +28,25 @@ namespace Lumina
     // Not exported, so exactly one place can be wrong about whether a renderer exists.
     static FRenderManager* GRenderManager = nullptr;
 
+    // Under 4 GiB so a card sold as 4 GB still passes whatever its driver reserves off the heap.
+    static constexpr uint32 kMinimumVRAMMiB     = 3840;
+    static constexpr uint32 kRecommendedVRAMMiB = 6144;
+
+    static void WarnIfBelowRecommendedVRAM()
+    {
+        const RHI::FGPUDeviceInfo Info = RHI::GetDeviceInfo();
+        const uint64 MiB = Info.DeviceLocalMemoryBytes >> 20;
+
+        if (MiB == 0 || MiB >= kRecommendedVRAMMiB)
+        {
+            return;
+        }
+
+        LOG_WARN("'{}' has {} MiB of graphics memory, under the {} MiB this renderer is tuned for. "
+                 "Lower Streaming.Texture.PoolSizeMB and the viewport resolution if frames corrupt or stall.",
+                 Info.Name, MiB, kRecommendedVRAMMiB);
+    }
+
     void Internal::SetRenderManager(FRenderManager* Manager)
     {
         GRenderManager = Manager;
@@ -127,6 +146,24 @@ namespace Lumina
             }
         }
         
+        uint32 MinVRAMMiB = kMinimumVRAMMiB;
+        if (GCommandLine != nullptr)
+        {
+            if (GCommandLine->Has("ignoreminspec"))
+            {
+                LOG_WARN("-ignoreminspec, so the {} MiB graphics memory minimum is not enforced. "
+                         "Expect corrupt rendering and device loss on a card below it.", kMinimumVRAMMiB);
+                MinVRAMMiB = 0;
+            }
+            // Exercises the rejection dialog on hardware that would otherwise pass.
+            else if (const TOptional<int> Override = GCommandLine->GetInt("minvram"))
+            {
+                MinVRAMMiB = (uint32)Math::Max(*Override, 0);
+                LOG_WARN("-minvram, so the graphics memory minimum is {} MiB rather than {} MiB.",
+                         MinVRAMMiB, kMinimumVRAMMiB);
+            }
+        }
+
         const bool bRenderBootTimings = GCommandLine != nullptr && GCommandLine->Has("boottimings");
         double RenderBootLast = PlatformTime::Seconds();
         auto RenderBootMark = [&RenderBootLast, bRenderBootTimings](const char* Name)
@@ -146,8 +183,11 @@ namespace Lumina
             .bHeadless   = false,
             // The scene renderer draws every meshlet through the mesh path; there is no fallback.
             .RequiredFeatures = RHI::EDeviceFeature::MeshShading,
+            .MinDeviceLocalMemoryMiB = MinVRAMMiB,
         });
         RenderBootMark("RHI::CreateDevice");
+
+        WarnIfBelowRecommendedVRAM();
 
         ShaderLibrary   = Memory::New<FShaderLibrary>();
         GShaderLibrary  = ShaderLibrary;

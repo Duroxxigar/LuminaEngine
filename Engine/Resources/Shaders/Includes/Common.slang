@@ -45,6 +45,8 @@ enum ELightFlags
     CastShadow  = BIT(3),
     // Light scatters through participating media; sampled by VolumetricLighting.slang.
     Volumetric  = BIT(4),
+    // Screen-space contact trace on top of this light's shadow map; local lights only.
+    ContactShadow = BIT(5),
     // Bits 24-31 are not free, see LIGHT_MIN_ROUGHNESS_SHIFT.
 }
 
@@ -1031,6 +1033,9 @@ struct FCullData
 #define DEBUG_MODE_WIREFRAME_OVERLAY    29u
 #define DEBUG_MODE_VELOCITY             30u
 
+// Shading lanes per 2x2 quad that survived to the VisBuffer; the micro-triangle cost readout.
+#define DEBUG_MODE_QUAD_EFFICIENCY      31u
+
 // Global scaling applied on top of every material's authored POM settings, so a weaker GPU can dial the
 // whole feature back without recompiling materials. Matches FParallaxSettings in SceneRenderTypes.h.
 struct FParallaxSettings
@@ -1100,6 +1105,12 @@ struct FSceneGlobalData
 
     // Subsample index 0 or 1 that decorrelates screen-space noise. Stays 0 unless T2x is resolving.
     uint              TemporalPhase;
+
+    // Opaque scene depth, for the screen-space traces that run after the depth pass.
+    uint              SceneDepthIndex;
+    uint              _DepthPad0;
+    uint              _DepthPad1;
+    uint              _DepthPad2;
 
     // The translucent passes fog themselves, since the composite runs first and sees only opaque depth.
     FExponentialHeightFogParams FogParams;

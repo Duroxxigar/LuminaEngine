@@ -889,8 +889,9 @@ namespace Lumina
 
         PackageToDestroy->ExportTable.clear();
         PackageToDestroy->ImportTable.clear();
+
+        // The root set holds the package's last strong reference, so unrooting is what destroys it.
         PackageToDestroy->RemoveFromRoot();
-        PackageToDestroy->ConditionalBeginDestroy();
 
         return true;
     }

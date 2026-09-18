@@ -103,7 +103,8 @@ namespace Lumina
         SelfShadow          = 28,
         WireframeOverlay    = 29,
         Velocity            = 30,
-        Num                 = 31,
+        QuadEfficiency      = 31,
+        Num                 = 32,
     };
 
     constexpr FStringView RenderFlagsAsString(ERenderSceneDebugFlags Flags)
@@ -141,6 +142,7 @@ namespace Lumina
             case ERenderSceneDebugFlags::SelfShadow:        return "Self Shadow";
             case ERenderSceneDebugFlags::WireframeOverlay:  return "Wireframe Overlay";
             case ERenderSceneDebugFlags::Velocity:          return "Velocity";
+            case ERenderSceneDebugFlags::QuadEfficiency:    return "Quad Efficiency";
             default:                                        return "Lit";
         }
     }
@@ -210,6 +212,8 @@ namespace Lumina
         Spot        = BIT(2),
         CastShadow  = BIT(3),
         Volumetric  = BIT(4),
+        // Screen-space contact trace on top of this light's shadow map; local lights only.
+        ContactShadow = BIT(5),
         // Bits 24-31 are not free, see kLightMinRoughnessShift.
     };
 
@@ -1244,6 +1248,12 @@ namespace Lumina
         uint32          MomentsIndex      = ~0u;
         // Subsample index 0 or 1 that decorrelates screen-space noise. Stays 0 unless T2x is resolving.
         uint32          TemporalPhase     = 0;
+
+        // Opaque scene depth, for the screen-space traces that run after the depth pass.
+        uint32          SceneDepthIndex   = ~0u;
+        uint32          _DepthPad0        = 0;
+        uint32          _DepthPad1        = 0;
+        uint32          _DepthPad2        = 0;
 
         // The translucent passes fog themselves, since the composite runs first and sees only opaque depth.
         FExponentialHeightFogParams FogParams = {};

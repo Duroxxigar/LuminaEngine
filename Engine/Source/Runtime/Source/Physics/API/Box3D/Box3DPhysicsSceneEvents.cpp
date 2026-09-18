@@ -90,6 +90,23 @@ namespace Lumina::Physics
             Record.VelocityB = b3Body_IsValid(BodyB) ? Box3DUtils::FromB3Vec3(b3Body_GetLinearVelocity(BodyB)) : FVector3(0.0f);
         };
 
+        auto CharacterStorage = Registry.GetStorage<SCharacterPhysicsComponent>();
+
+        // A resting character runs no world queries, so a body that just touched its proxy has to nudge it awake.
+        auto WakeRestingCharacter = [&](ECS::FEntity Entity)
+        {
+            if (Entity == ECS::NullEntity || !CharacterStorage.Contains(Entity))
+            {
+                return;
+            }
+
+            SCharacterPhysicsComponent& Component = CharacterStorage.Get(Entity);
+            if (Component.Character)
+            {
+                Component.Character->bResting = false;
+            }
+        };
+
         const b3ContactEvents Contacts = b3World_GetContactEvents(WorldId);
 
         for (int32 i = 0; i < Contacts.beginCount; ++i)
@@ -99,6 +116,9 @@ namespace Lumina::Physics
             FContactRecord Record{};
             Record.Type = EContactEventType::Added;
             FillPair(Record, Event.shapeIdA, Event.shapeIdB);
+
+            WakeRestingCharacter(Record.EntityA);
+            WakeRestingCharacter(Record.EntityB);
 
             const bool bOverlap = Record.bSensorA || Record.bSensorB;
             if (!WantsContactEvents(Record.EntityA, true, bOverlap) && !WantsContactEvents(Record.EntityB, true, bOverlap))
