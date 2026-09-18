@@ -243,4 +243,29 @@ public static class VisualStudioLocator
     {
         return Version.TryParse(Text, out Version? Parsed) ? Parsed : new Version(0, 0);
     }
+
+    /// <summary>Product version of the installed IDE, which is what a solution file's version fields carry.</summary>
+    public static Version? TryGetIdeVersion()
+    {
+        try
+        {
+            string DevEnv = Path.Combine(Locate().InstallationPath, "Common7", "IDE", "devenv.exe");
+
+            if (!File.Exists(DevEnv))
+            {
+                return null;
+            }
+
+            FileVersionInfo Info = FileVersionInfo.GetVersionInfo(DevEnv);
+
+            return Info.FileMajorPart > 0
+                ? new Version(Info.FileMajorPart, Info.FileMinorPart, Info.FileBuildPart, Info.FilePrivatePart)
+                : null;
+        }
+        catch (Exception Ex) when (Ex is BuildException or IOException or UnauthorizedAccessException)
+        {
+            Log.Verbose("Could not read the IDE version: {0}", Ex.Message);
+            return null;
+        }
+    }
 }

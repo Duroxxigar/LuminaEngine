@@ -10,7 +10,7 @@ namespace Lumina
     static const char* SheetWindowName      = "Sheet";
     static const char* AnimationsWindowName = "Animations";
     static const char* PreviewWindowName    = "Preview";
-    static const char* DetailsWindowName    = "Details";
+    static const char* SpriteSheetDetailsWindowName    = "Details";
 
     namespace
     {
@@ -32,7 +32,7 @@ namespace Lumina
         CreateToolWindow(SheetWindowName,      [this](bool) { DrawSheetWindow(); });
         CreateToolWindow(AnimationsWindowName, [this](bool) { DrawAnimationsWindow(); });
         CreateToolWindow(PreviewWindowName,    [this](bool) { DrawPreviewWindow(); });
-        CreateToolWindow(DetailsWindowName,    [this](bool) { PropertyTable.DrawTree(); });
+        CreateToolWindow(SpriteSheetDetailsWindowName,    [this](bool) { PropertyTable.DrawTree(); });
     }
 
     void FSpriteSheetEditorTool::MarkEdited()
@@ -393,6 +393,6 @@ namespace Lumina
         ImGui::DockBuilderDockWindow(GetToolWindowName(SheetWindowName).c_str(), LeftDockID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationsWindowName).c_str(), BottomLeftID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(PreviewWindowName).c_str(), TopRightID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(DetailsWindowName).c_str(), RightDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(SpriteSheetDetailsWindowName).c_str(), RightDockID);
     }
 }

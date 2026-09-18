@@ -47,7 +47,7 @@ namespace Lumina
             PackRGB( 59, 120, 255), PackRGB(180,   0, 158), PackRGB( 97, 214, 214), PackRGB(242, 242, 242),
         };
 
-        uint32 PaletteColor(int32 Index)
+        uint32 TerminalPaletteColor(int32 Index)
         {
             if (Index < 0 || Index > 255)
             {
@@ -136,7 +136,7 @@ namespace Lumina
     {
         for (int32 Index = 0; Index < 256; ++Index)
         {
-            Palette[static_cast<size_t>(Index)] = PaletteColor(Index);
+            Palette[static_cast<size_t>(Index)] = TerminalPaletteColor(Index);
         }
     }
 
@@ -1030,7 +1030,7 @@ namespace Lumina
                         return;
                     }
 
-                    Palette[static_cast<size_t>(Index)] = PaletteColor(Index);
+                    Palette[static_cast<size_t>(Index)] = TerminalPaletteColor(Index);
                 }
                 return;
             }

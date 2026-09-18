@@ -138,7 +138,7 @@ namespace Lumina
             { "Glow font-effect",           "font-effect: glow(1dp 0dp 0dp #4af);\n" },
         };
 
-        ImU32 ToU32(const ImVec4& C) { return ImGui::ColorConvertFloat4ToU32(C); }
+        ImU32 RmlUiToU32(const ImVec4& C) { return ImGui::ColorConvertFloat4ToU32(C); }
 
         // Hyphens are allowed after the start, so border-top-left-radius highlights as one token.
         TextEditor::Iterator GetRmlIdentifier(TextEditor::Iterator start, TextEditor::Iterator end)
@@ -1925,7 +1925,7 @@ namespace Lumina
         }
         else if (BgMode == EBgMode::Solid)
         {
-            DL->AddRectFilled(CanvasMin, CanvasMax, ToU32(BgColor));
+            DL->AddRectFilled(CanvasMin, CanvasMax, RmlUiToU32(BgColor));
         }
         // Transparent, draw nothing, the pane background shows through.
 
@@ -1977,7 +1977,7 @@ namespace Lumina
 
         if (bShowGrid && GridSize > 0.0f)
         {
-            const ImU32 GridU = ToU32(GridColor);
+            const ImU32 GridU = RmlUiToU32(GridColor);
             const float Step = GridSize * ScalePx;
             DL->PushClipRect(CanvasMin, CanvasMax, true);
             for (float x = CanvasMin.x + Step; x < CanvasMax.x; x += Step)
@@ -1993,7 +1993,7 @@ namespace Lumina
 
         if (bShowSafeZones)
         {
-            const ImU32 SafeU = ToU32(SafeZoneColor);
+            const ImU32 SafeU = RmlUiToU32(SafeZoneColor);
             auto DrawSafe = [&](float Frac)
             {
                 const ImVec2 Sz(CanvasSize.x * Frac, CanvasSize.y * Frac);

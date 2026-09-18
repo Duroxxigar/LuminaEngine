@@ -27,7 +27,7 @@ namespace Lumina
         TSharedPtr<FLaunchSession>  GSession;
         FThread                     GWorker;
 
-        FString Join(FStringView Left, FStringView Right)
+        FString StandaloneLauncherJoin(FStringView Left, FStringView Right)
         {
             FString Result(Left.data(), Left.size());
             if (!Result.empty() && Result.back() != '/' && Result.back() != '\\')
@@ -40,13 +40,13 @@ namespace Lumina
 
         FString EngineBinariesDirectory()
         {
-            return Join(Paths::GetEngineInstallDirectory(), Join("Binaries", LUMINA_PLATFORM_NAME));
+            return StandaloneLauncherJoin(Paths::GetEngineInstallDirectory(), StandaloneLauncherJoin("Binaries", LUMINA_PLATFORM_NAME));
         }
 
         FString GameExecutablePath()
         {
             const FFixedString Name = Paths::MakeGameApplicationName();
-            return Join(EngineBinariesDirectory(), FStringView(Name.c_str(), Name.size()));
+            return StandaloneLauncherJoin(EngineBinariesDirectory(), FStringView(Name.c_str(), Name.size()));
         }
 
         FString ProjectDirectory()
@@ -69,7 +69,7 @@ namespace Lumina
                 return {};
             }
 
-            FString Candidate = Join(Directory, ProjectName() + ".lproject");
+            FString Candidate = StandaloneLauncherJoin(Directory, ProjectName() + ".lproject");
             if (Filesystem::Exists(Candidate))
             {
                 return Candidate;
@@ -94,7 +94,7 @@ namespace Lumina
             {
                 return {};
             }
-            return Join(Join(Directory, Join("Binaries", LUMINA_PLATFORM_NAME)),
+            return StandaloneLauncherJoin(StandaloneLauncherJoin(Directory, StandaloneLauncherJoin("Binaries", LUMINA_PLATFORM_NAME)),
                         FStringView(FileName.c_str(), FileName.size()));
         }
 
@@ -113,9 +113,9 @@ namespace Lumina
         FString BuildToolPath()
         {
         #if defined(LE_PLATFORM_WINDOWS)
-            return Join(Paths::GetEngineInstallDirectory(), "LuminaBuild.bat");
+            return StandaloneLauncherJoin(Paths::GetEngineInstallDirectory(), "LuminaBuild.bat");
         #else
-            return Join(Paths::GetEngineInstallDirectory(), "LuminaBuild.sh");
+            return StandaloneLauncherJoin(Paths::GetEngineInstallDirectory(), "LuminaBuild.sh");
         #endif
         }
 

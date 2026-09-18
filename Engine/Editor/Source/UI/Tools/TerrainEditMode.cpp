@@ -23,7 +23,7 @@ namespace Lumina
 {
     namespace
     {
-        void BuildRayFromScreen(const SCameraComponent& Camera, ImVec2 PixelWithinViewport, ImVec2 ViewportSize, FVector3& OutOrigin, FVector3& OutDir)
+        void TerrainBuildRayFromScreen(const SCameraComponent& Camera, ImVec2 PixelWithinViewport, ImVec2 ViewportSize, FVector3& OutOrigin, FVector3& OutDir)
         {
             const float W = Math::Max(ViewportSize.x, 1.0f);
             const float H = Math::Max(ViewportSize.y, 1.0f);
@@ -618,7 +618,7 @@ namespace Lumina
         }
 
         FVector3 RayOrigin, RayDir;
-        BuildRayFromScreen(Camera, Local, ViewportSize, RayOrigin, RayDir);
+        TerrainBuildRayFromScreen(Camera, Local, ViewportSize, RayOrigin, RayDir);
 
         FVector3 Hit;
         if (!FTerrainSculptSystem::Raycast(Terrain, TerrainOrigin, RayOrigin, RayDir, Hit))

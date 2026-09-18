@@ -27,7 +27,7 @@ namespace Lumina
 {
     static const char* SkeletonTreeWindowName   = "Skeleton Tree";
     static const char* ConstraintsWindowName    = "Constraints";
-    static const char* DetailsWindowName        = "Details";
+    static const char* PhysicsAssetDetailsWindowName        = "Details";
 
     static const FVector4 BodyColor             = FVector4(0.35f, 0.70f, 1.00f, 1.0f);
     static const FVector4 BodySelectedColor     = FVector4(1.00f, 0.75f, 0.15f, 1.0f);
@@ -125,7 +125,7 @@ namespace Lumina
     }
 
     // False when the two are near-parallel, where t runs away to nothing useful.
-    static bool ClosestParamOnAxisToRay(const FVector3& Anchor, const FVector3& Axis,
+    static bool PhysicsAssetClosestParamOnAxisToRay(const FVector3& Anchor, const FVector3& Axis,
                                         const FVector3& RayOrigin, const FVector3& RayDirection, float& OutT)
     {
         const FVector3 ToAnchor = Anchor - RayOrigin;
@@ -140,7 +140,7 @@ namespace Lumina
         return true;
     }
 
-    static bool RayHitsSphere(const FVector3& Origin, const FVector3& Direction, const FVector3& Center, float Radius, float& OutT)
+    static bool PhysicsAssetRayHitsSphere(const FVector3& Origin, const FVector3& Direction, const FVector3& Center, float Radius, float& OutT)
     {
         const FVector3 ToOrigin = Origin - Center;
         const float B = Math::Dot(ToOrigin, Direction);
@@ -169,7 +169,7 @@ namespace Lumina
         const float SegmentLengthSq = Math::LengthSquared(Segment);
         if (SegmentLengthSq < 1e-8f)
         {
-            return RayHitsSphere(Origin, Direction, SegmentStart, Radius, OutT);
+            return PhysicsAssetRayHitsSphere(Origin, Direction, SegmentStart, Radius, OutT);
         }
 
         const FVector3 ToStart = Origin - SegmentStart;
@@ -203,7 +203,7 @@ namespace Lumina
         return true;
     }
 
-    static bool RayHitsBox(const FVector3& Origin, const FVector3& Direction, const FMatrix4& BodyMatrix,
+    static bool PhysicsAssetRayHitsBox(const FVector3& Origin, const FVector3& Direction, const FMatrix4& BodyMatrix,
                            const FVector3& HalfExtent, float& OutT)
     {
         const FMatrix4 InverseBody = Math::Inverse(BodyMatrix);
@@ -299,7 +299,7 @@ namespace Lumina
 
         CreateToolWindow(SkeletonTreeWindowName, [this](bool) { DrawSkeletonTreeWindow(); });
         CreateToolWindow(ConstraintsWindowName, [this](bool) { DrawConstraintsWindow(); });
-        CreateToolWindow(DetailsWindowName, [this](bool) { DrawDetailsWindow(); });
+        CreateToolWindow(PhysicsAssetDetailsWindowName, [this](bool) { DrawDetailsWindow(); });
 
         CachedSkeleton = GetSkeleton();
         RebuildBodySubtreeMask();
@@ -822,11 +822,11 @@ namespace Lumina
                 break;
 
             case ERagdollBodyShape::Sphere:
-                bHit = RayHitsSphere(RayOrigin, RayDirection, Center, Body.Radius, Distance);
+                bHit = PhysicsAssetRayHitsSphere(RayOrigin, RayDirection, Center, Body.Radius, Distance);
                 break;
 
             case ERagdollBodyShape::Box:
-                bHit = RayHitsBox(RayOrigin, RayDirection, BodyMatrix, Body.HalfExtent, Distance);
+                bHit = PhysicsAssetRayHitsBox(RayOrigin, RayDirection, BodyMatrix, Body.HalfExtent, Distance);
                 break;
             }
 
@@ -887,7 +887,7 @@ namespace Lumina
         }
 
         float AxisDistance = 0.0f;
-        if (!ClosestParamOnAxisToRay(Handle.Anchor, Handle.Axis, RayOrigin, RayDirection, AxisDistance))
+        if (!PhysicsAssetClosestParamOnAxisToRay(Handle.Anchor, Handle.Axis, RayOrigin, RayDirection, AxisDistance))
         {
             return;
         }
@@ -1968,6 +1968,6 @@ namespace Lumina
         ImGui::DockBuilderDockWindow(GetToolWindowName(ViewportWindowName).c_str(), CenterID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(SkeletonTreeWindowName).c_str(), LeftID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(ConstraintsWindowName).c_str(), LeftBottomID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(DetailsWindowName).c_str(), RightID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(PhysicsAssetDetailsWindowName).c_str(), RightID);
     }
 }

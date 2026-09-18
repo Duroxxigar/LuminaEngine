@@ -257,7 +257,11 @@ namespace Lumina::RHI::Textures
             return;
         }
 
-        const FTextureH NewTexture = CreateTexture(ImageDesc);
+        // Only the staged replacement is ever host-copied into, so only it pays for the usage bit.
+        FTextureDesc StagedDesc = ImageDesc;
+        StagedDesc.Usage |= EImageUsageFlags::HostTransfer;
+
+        const FTextureH NewTexture = CreateTexture(StagedDesc);
         SetDebugName(NewTexture, Desc.DebugName);
 
         const FTextureH Previous = Tex.Texture;

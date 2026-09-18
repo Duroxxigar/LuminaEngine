@@ -40,6 +40,8 @@ public sealed class MsvcToolchain : IToolchain
 
             return (Parsed.Major, Parsed.Minor) switch
             {
+                (14, >= 50) => "v145",
+                (14, >= 40) => "v144",
                 (14, >= 30) => "v143",
                 (14, >= 20) => "v142",
                 (14, >= 10) => "v141",

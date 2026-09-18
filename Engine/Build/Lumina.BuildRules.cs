@@ -126,8 +126,7 @@ public abstract class LuminaTargetRules : TargetRules
             CompilerWarning.TautologicalCompare,    // a comparison whose result is fixed at compile time
             CompilerWarning.Parentheses,            // assignment or precedence that reads as something else
             CompilerWarning.Format,                 // printf-family arguments that do not match the format
-            CompilerWarning.FormatTruncation,       // a formatted write the destination cannot hold
-            CompilerWarning.MaybeUninitialized);    // a local read on a path that never wrote it
+            CompilerWarning.FormatTruncation);      // a formatted write the destination cannot hold
 
         Warnings.Set(WarningSeverity.Off,
             // The reflection generator takes offsetof of reflected types, which are rarely standard
@@ -155,6 +154,7 @@ public abstract class LuminaTargetRules : TargetRules
             CompilerWarning.FreeNonheapObject,      // free or delete applied to something never allocated
             CompilerWarning.DanglingReference,      // a reference bound to a temporary that has already gone
             CompilerWarning.Uninitialized,          // union layouts trip this after inlining
+            CompilerWarning.MaybeUninitialized,     // a local the optimizer thinks is read on a path that never wrote it
             CompilerWarning.DeprecatedDeclarations); // a compiler or SDK bump must not break the build
 
         if (Target.Platform == BuildPlatform.Windows64)

@@ -46,7 +46,7 @@ namespace Lumina
             { 0.40f, 0.88f, 0.80f, 1.0f }, // teal
         };
 
-        ImU32 ToU32(const FVector4& C)
+        ImU32 AnimationToU32(const FVector4& C)
         {
             return ImGui::ColorConvertFloat4ToU32(ImVec4(C.x, C.y, C.z, C.w));
         }
@@ -563,7 +563,7 @@ namespace Lumina
 
             // A header of color chip, name and context menu.
             const FVector4 TrackColor = PaletteColor(t);
-            DrawList->AddRectFilled(ImVec2(CanvasPos.x + 6, RowY0 + 7), ImVec2(CanvasPos.x + 16, RowY0 + kTrackHeight - 7), ToU32(TrackColor), 2.0f);
+            DrawList->AddRectFilled(ImVec2(CanvasPos.x + 6, RowY0 + 7), ImVec2(CanvasPos.x + 16, RowY0 + kTrackHeight - 7), AnimationToU32(TrackColor), 2.0f);
 
             const bool bIsSyncTrack = !Resource->SyncTrackName.IsNone() && Resource->NotifyTracks[t] == Resource->SyncTrackName;
 
@@ -714,11 +714,11 @@ namespace Lumina
 
             const bool bSel = (SelectedKind == ENotifyKind::State && SelectedIndex == i);
             FVector4 C = State.Color;
-            DrawList->AddRectFilled(ImVec2(X0, BarY0), ImVec2(X1, BarY1), ToU32(FVector4(C.x, C.y, C.z, 0.35f)), 3.0f);
-            DrawList->AddRect(ImVec2(X0, BarY0), ImVec2(X1, BarY1), bSel ? IM_COL32(255, 255, 255, 230) : ToU32(C), 3.0f, bSel ? 2.0f : 1.0f, 0);
+            DrawList->AddRectFilled(ImVec2(X0, BarY0), ImVec2(X1, BarY1), AnimationToU32(FVector4(C.x, C.y, C.z, 0.35f)), 3.0f);
+            DrawList->AddRect(ImVec2(X0, BarY0), ImVec2(X1, BarY1), bSel ? IM_COL32(255, 255, 255, 230) : AnimationToU32(C), 3.0f, bSel ? 2.0f : 1.0f, 0);
             // Edge grips.
-            DrawList->AddRectFilled(ImVec2(X0, BarY0), ImVec2(X0 + 3.0f, BarY1), ToU32(C));
-            DrawList->AddRectFilled(ImVec2(X1 - 3.0f, BarY0), ImVec2(X1, BarY1), ToU32(C));
+            DrawList->AddRectFilled(ImVec2(X0, BarY0), ImVec2(X0 + 3.0f, BarY1), AnimationToU32(C));
+            DrawList->AddRectFilled(ImVec2(X1 - 3.0f, BarY0), ImVec2(X1, BarY1), AnimationToU32(C));
             DrawList->AddText(ImVec2(X0 + 6.0f, BarY0 + 1.0f), IM_COL32(255, 255, 255, 220), State.NotifyName.c_str());
 
             // Hit testing.
@@ -760,9 +760,9 @@ namespace Lumina
             if (Flash > 0.0f) { C = Math::Mix(C, FVector4(1.0f), Flash * 0.8f); }
 
             // A flag shape, stem plus pennant.
-            DrawList->AddLine(ImVec2(X, Top), ImVec2(X, Bot), ToU32(C), 2.0f);
+            DrawList->AddLine(ImVec2(X, Top), ImVec2(X, Bot), AnimationToU32(C), 2.0f);
             ImVec2 Flag[3] = { ImVec2(X, Top), ImVec2(X + 11.0f, Top + 4.0f), ImVec2(X, Top + 8.0f) };
-            DrawList->AddTriangleFilled(Flag[0], Flag[1], Flag[2], ToU32(C));
+            DrawList->AddTriangleFilled(Flag[0], Flag[1], Flag[2], AnimationToU32(C));
             if (bSel)
             {
                 DrawList->AddCircleFilled(ImVec2(X, Bot), 3.0f, IM_COL32(255, 255, 255, 255));
@@ -1054,7 +1054,7 @@ namespace Lumina
             const float RowHeight = ImGui::GetItemRectSize().y;
             ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(RowPos.x + 2, RowPos.y + 3),
                                                       ImVec2(RowPos.x + 12, RowPos.y + RowHeight - 3),
-                                                      ToU32(Curve.Color), 2.0f);
+                                                      AnimationToU32(Curve.Color), 2.0f);
 
             if (ImGui::BeginPopupContextItem("curve_ctx"))
             {
