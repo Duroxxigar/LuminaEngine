@@ -2,6 +2,7 @@
 #include "RuntimePCH.h"
 #include <limits>
 #include "TerrainMeshletBuilder.h"
+#include "Core/Math/SIMD/SIMD.h"
 #include "TaskSystem/TaskSystem.h"
 #include "World/Entity/Components/TerrainComponent.h"
 
@@ -9,20 +10,6 @@ namespace Lumina::TerrainMeshletBuilder
 {
     namespace
     {
-        // Sample (X, Y) clamped, returns world-space height (post-MaxHeight scale).
-        FORCEINLINE float SampleWorldHeight(
-            const TVector<float>& Heightmap,
-            int32                 SampleX,
-            int32                 SampleY,
-            int32                 Resolution,
-            float                 MaxHeight)
-        {
-            SampleX = Math::Clamp(SampleX, 0, Resolution - 1);
-            SampleY = Math::Clamp(SampleY, 0, Resolution - 1);
-            const size_t Index = (size_t)SampleY * (size_t)Resolution + (size_t)SampleX;
-            return Heightmap[Index] * MaxHeight;
-        }
-
         struct FLayout
         {
             int32 Resolution;
@@ -83,17 +70,43 @@ namespace Lumina::TerrainMeshletBuilder
             const int32 NVertsX  = Meshlet.QuadExtent.x + 1;
             const int32 NVertsY  = Meshlet.QuadExtent.y + 1;
 
-            float MinH =  TNumericLimits<float>::Infinity();
-            float MaxH = -TNumericLimits<float>::Infinity();
-            for (int32 vy = 0; vy < NVertsY; ++vy)
+            // Clamped samples only ever repeat an endpoint, so the extremes over the clamped span are the
+            // same ones the per-sample clamp would find, and each row becomes one contiguous read.
+            const int32 X0 = Math::Clamp(SampleX0, 0, L.Resolution - 1);
+            const int32 X1 = Math::Clamp(SampleX0 + NVertsX - 1, 0, L.Resolution - 1);
+            const int32 Y0 = Math::Clamp(SampleY0, 0, L.Resolution - 1);
+            const int32 Y1 = Math::Clamp(SampleY0 + NVertsY - 1, 0, L.Resolution - 1);
+            const int32 Span = X1 - X0 + 1;
+
+            using namespace SIMD;
+            VFloat8 WideMin = VFloat8::Broadcast(TNumericLimits<float>::Infinity());
+            VFloat8 WideMax = VFloat8::Broadcast(-TNumericLimits<float>::Infinity());
+            float TailMin =  TNumericLimits<float>::Infinity();
+            float TailMax = -TNumericLimits<float>::Infinity();
+
+            for (int32 Y = Y0; Y <= Y1; ++Y)
             {
-                for (int32 vx = 0; vx < NVertsX; ++vx)
+                const float* RESTRICT Row = Heightmap.data() + (size_t)Y * (size_t)L.Resolution + (size_t)X0;
+
+                int32 x = 0;
+                for (; x + 8 <= Span; x += 8)
                 {
-                    const float H = SampleWorldHeight(Heightmap, SampleX0 + vx, SampleY0 + vy, L.Resolution, L.MaxHeight);
-                    MinH = Math::Min(MinH, H);
-                    MaxH = Math::Max(MaxH, H);
+                    const VFloat8 H = VFloat8::Load(Row + x);
+                    WideMin = Min(WideMin, H);
+                    WideMax = Max(WideMax, H);
+                }
+                for (; x < Span; ++x)
+                {
+                    TailMin = Math::Min(TailMin, Row[x]);
+                    TailMax = Math::Max(TailMax, Row[x]);
                 }
             }
+
+            // The scale is hoisted out of the reduction, and a negative MaxHeight swaps which end is which.
+            const float LowScaled  = Math::Min(TailMin, HorizontalMin(WideMin)) * L.MaxHeight;
+            const float HighScaled = Math::Max(TailMax, HorizontalMax(WideMax)) * L.MaxHeight;
+            const float MinH = Math::Min(LowScaled, HighScaled);
+            const float MaxH = Math::Max(LowScaled, HighScaled);
 
             const float WorldXMin = L.OriginXZ.x + float(SampleX0) * L.Stride - L.DilateXZ;
             const float WorldXMax = L.OriginXZ.x + float(SampleX0 + NVertsX - 1) * L.Stride + L.DilateXZ;

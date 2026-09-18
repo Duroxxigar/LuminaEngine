@@ -468,19 +468,37 @@ namespace Lumina::RHI::Textures
         }
     }
 
-    bool Upload(const FManagedTexture& Tex, uint32 Mip, const void* Data, uint64 Size, uint32 RowPitchTexels, uint32 Width, uint32 Height)
+    // Legal only into a staged replacement, which no shader can reach until TickPendingSwaps repoints the slot.
+    static bool TryHostUpload(const FManagedTexture& Tex, uint32 Layer, uint32 Mip, const void* Data,
+                              uint32 RowPitchTexels, uint32 Width, uint32 Height, uint32 OffsetY)
     {
-        if (!UploadTexture(Tex.Texture, 0, Mip, Data, Size, RowPitchTexels, Width, Height))
+        if (!RHI::SupportsHostImageCopy() || !HasPendingSwap(Tex))
         {
             return false;
         }
-        NoteStagedProgress(Tex.SampledSlot);
-        return true;
+
+        FTextureSlice Slice;
+        Slice.Mip        = Mip;
+        Slice.Layer      = Layer;
+        Slice.LayerCount = 1;
+        Slice.Offset     = FUIntVector3(0u, OffsetY, 0u);
+        if (Width != 0)
+        {
+            Slice.Extent = FUIntVector3(Width, Math::Max(Height, 1u), 1u);
+        }
+
+        return RHI::HostCopyToTextureUnsynchronized(Tex.Texture, Slice, Data, RowPitchTexels);
+    }
+
+    bool Upload(const FManagedTexture& Tex, uint32 Mip, const void* Data, uint64 Size, uint32 RowPitchTexels, uint32 Width, uint32 Height)
+    {
+        return UploadLayer(Tex, 0, Mip, Data, Size, RowPitchTexels, Width, Height, 0);
     }
 
     bool UploadLayer(const FManagedTexture& Tex, uint32 Layer, uint32 Mip, const void* Data, uint64 Size, uint32 RowPitchTexels, uint32 Width, uint32 Height, uint32 OffsetY)
     {
-        if (!UploadTexture(Tex.Texture, Layer, Mip, Data, Size, RowPitchTexels, Width, Height, OffsetY))
+        if (!TryHostUpload(Tex, Layer, Mip, Data, RowPitchTexels, Width, Height, OffsetY)
+            && !UploadTexture(Tex.Texture, Layer, Mip, Data, Size, RowPitchTexels, Width, Height, OffsetY))
         {
             return false;
         }

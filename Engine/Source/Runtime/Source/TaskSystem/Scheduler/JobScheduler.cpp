@@ -700,14 +700,11 @@ namespace Lumina::Jobs
         FORCEINLINE void RunAdoptedJob(const FQueuedJob& Job, uint32 Slot)
         {
             LUMINA_PROFILE_SECTION_COLORED("Assist: Adopted Job", tracy::Color::Orange);
-            const char* Label = nullptr;
-#if USING(WITH_EDITOR)
-            Label = Job.Name;
+            const char* Label = Job.Name;
             if (Label != nullptr)
             {
                 LUMINA_PROFILE_TAG(Label);
             }
-#endif
             if (G->AdoptedNames != nullptr && Slot < G->NumThreadSlots)
             {
                 G->AdoptedNames[Slot].store(Label != nullptr ? Label : "<unnamed>", std::memory_order_relaxed);
@@ -1133,12 +1130,10 @@ namespace Lumina::Jobs
         void RunJobNative(const FQueuedJob& Job, uint32 Slot)
         {
             LUMINA_PROFILE_SECTION_COLORED("Job", tracy::Color::SteelBlue);
-#if USING(WITH_EDITOR)
             if (Job.Name != nullptr)
             {
-                LUMINA_PROFILE_TAG(Job.Name);
+                LUMINA_PROFILE_NAME(Job.Name);
             }
-#endif
             FWorkFiber* SavedFiber  = TLS.CurrentFiber;
             const char* SavedGuard  = GNoParkGuardName;
             const bool  bSavedNative = TLS.bNativeJob;
@@ -1353,7 +1348,15 @@ namespace Lumina::Jobs
                 FWorkFiber* Self = TLS.CurrentFiber; // set by the scheduler before switching in
                 FQueuedJob  Job  = Self->Job;
 
-                Job.Function(Job.Argument, TLS.WorkerIndex);
+                {
+                    // Scoped so it closes before the switch back, which is a different fiber's timeline.
+                    LUMINA_PROFILE_SECTION_COLORED("Fiber Job", tracy::Color::CadetBlue);
+                    if (Job.Name != nullptr)
+                    {
+                        LUMINA_PROFILE_NAME(Job.Name);
+                    }
+                    Job.Function(Job.Argument, TLS.WorkerIndex);
+                }
                 OnJobComplete(Job.GetCounter(), TLS.WorkerIndex);
 
                 // A job that returns without clearing its guard must not leak it onto the next fiber.

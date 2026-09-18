@@ -498,6 +498,9 @@ namespace Lumina::RHI
 
         // Leave empty to take any GPU that can present.
         EDeviceFeature RequiredFeatures = EDeviceFeature::None;
+
+        // MiB of device-local memory a GPU must report to be considered. Zero takes any amount.
+        uint32 MinDeviceLocalMemoryMiB = 0;
     };
 
     /** Observer for the debug-utils messenger, in addition to the log. Set BEFORE CreateDevice. Fires on
@@ -513,6 +516,9 @@ namespace Lumina::RHI
         FString APIName;    // Backend + version, e.g. "Vulkan 1.4.250".
         uint32  VendorID = 0;   // PCI vendor ID: 0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel.
         bool    bDiscrete = false;
+
+        // Physical size of the memory the GPU renders out of. Not a budget, and not what is free.
+        uint64  DeviceLocalMemoryBytes = 0;
     };
 
     struct FGPUMemoryHeapStats
@@ -709,6 +715,12 @@ namespace Lumina::RHI
     RUNTIME_API void        CmdCopyTexture(FCmdListH CL, FTextureH Source, const FTextureSlice& SourceSlice, FTextureH Dest, const FTextureSlice& DestSlice);
     RUNTIME_API void        CmdCopyMemoryToTexture(FCmdListH CL, FGPURange Source, uint32 RowLength, FTextureH Dest, const FTextureSlice& Slice = {});
     RUNTIME_API void        CmdCopyTextureToMemory(FCmdListH CL, FTextureH Source, const FTextureSlice& Slice, FGPURange Dest, uint32 RowLength = 0);
+
+    // True when the CPU can write an optimally-tiled image directly, with no staging buffer and no copy pass.
+    RUNTIME_API bool        SupportsHostImageCopy();
+
+    // Unsynchronized host write, so the GPU must not be able to read Dest. False means nothing was written.
+    RUNTIME_API bool        HostCopyToTextureUnsynchronized(FTextureH Dest, const FTextureSlice& Slice, const void* Data, uint32 RowLength = 0);
     RUNTIME_API void        CmdBlitTexture(FCmdListH CL, FTextureH Source, const FTextureSlice& SourceSlice, FTextureH Dest, const FTextureSlice& DestSlice, EFilter Filter = EFilter::Linear);
     RUNTIME_API void        CmdResolveTexture(FCmdListH CL, FTextureH Source, FTextureH Dest);
     RUNTIME_API void        CmdClearTexture(FCmdListH CL, FTextureH Texture, const float Value[4]);

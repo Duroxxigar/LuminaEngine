@@ -26,7 +26,7 @@ namespace Lumina
         constexpr float kFallbackPlacementDistance = 10.0f;
         constexpr float kMinimumTraceDistance = 0.01f;
 
-        bool BuildRayFromScreen(const SCameraComponent& Camera, ImVec2 PixelWithinViewport, ImVec2 ViewportSize,
+        bool TryBuildRayFromScreen(const SCameraComponent& Camera, ImVec2 PixelWithinViewport, ImVec2 ViewportSize,
                                 FVector3& OutOrigin, FVector3& OutDir)
         {
             if (PixelWithinViewport.x < 0.0f || PixelWithinViewport.y < 0.0f
@@ -325,7 +325,7 @@ namespace Lumina
         const ImVec2 Local    = ImVec2(MousePos.x - ViewportScreenOrigin.x, MousePos.y - ViewportScreenOrigin.y);
 
         FVector3 RayOrigin, RayDir;
-        const bool bRayValid = BuildRayFromScreen(Camera, Local, ViewportSize, RayOrigin, RayDir);
+        const bool bRayValid = TryBuildRayFromScreen(Camera, Local, ViewportSize, RayOrigin, RayDir);
 
         // Before the hover gate, or releasing off the viewport strands the drag and it finishes stale later.
         if (bDragging)

@@ -164,22 +164,6 @@ namespace Lumina
             }
         }
 
-        // Out = Base + Dir * Scale over Count floats, which is the whole translation and scale apply.
-        void MulAddArray(float* RESTRICT Out, const float* RESTRICT Base, const float* RESTRICT Dir,
-                         const float* RESTRICT Scale, int32 Count)
-        {
-            using namespace SIMD;
-
-            int32 i = 0;
-            for (; i + 8 <= Count; i += 8)
-            {
-                MulAdd(VFloat8::Load(Dir + i), VFloat8::Load(Scale + i), VFloat8::Load(Base + i)).Store(Out + i);
-            }
-            for (; i < Count; ++i)
-            {
-                Out[i] = Base[i] + Dir[i] * Scale[i];
-            }
-        }
 
         // Signed angle (rad) of quaternion Q about unit Axis.
         FORCEINLINE float QuatAngleAbout(const FQuat& Q, const FVector3& Axis)
@@ -281,12 +265,12 @@ namespace Lumina
             // A channel set shorter than the pose leaves zeroed lanes, which pass Target straight through.
             const int32 Lanes = Math::Min(In.Trans.NumLanes(), Out.GetStride());
 
-            MulAddArray(Out.Tx(), Target.Tx(), In.Trans.DirX(), In.Trans.Eval(), Lanes);
-            MulAddArray(Out.Ty(), Target.Ty(), In.Trans.DirY(), In.Trans.Eval(), Lanes);
-            MulAddArray(Out.Tz(), Target.Tz(), In.Trans.DirZ(), In.Trans.Eval(), Lanes);
-            MulAddArray(Out.Sx(), Target.Sx(), In.Scale.DirX(), In.Scale.Eval(), Lanes);
-            MulAddArray(Out.Sy(), Target.Sy(), In.Scale.DirY(), In.Scale.Eval(), Lanes);
-            MulAddArray(Out.Sz(), Target.Sz(), In.Scale.DirZ(), In.Scale.Eval(), Lanes);
+            SIMD::MulAddArray(Out.Tx(), Target.Tx(), In.Trans.DirX(), In.Trans.Eval(), Lanes);
+            SIMD::MulAddArray(Out.Ty(), Target.Ty(), In.Trans.DirY(), In.Trans.Eval(), Lanes);
+            SIMD::MulAddArray(Out.Tz(), Target.Tz(), In.Trans.DirZ(), In.Trans.Eval(), Lanes);
+            SIMD::MulAddArray(Out.Sx(), Target.Sx(), In.Scale.DirX(), In.Scale.Eval(), Lanes);
+            SIMD::MulAddArray(Out.Sy(), Target.Sy(), In.Scale.DirY(), In.Scale.Eval(), Lanes);
+            SIMD::MulAddArray(Out.Sz(), Target.Sz(), In.Scale.DirZ(), In.Scale.Eval(), Lanes);
 
             for (int32 i = Lanes; i < N; ++i)
             {
