@@ -1715,12 +1715,11 @@ namespace Lumina
                         }
                     }
                     
-                    Nodes.erase(NodeItr);
-
                     // The copy buffer holds raw pointers, so a node deleted between copy and paste would be cloned dead.
                     ForgetClipboardNode(Node);
 
-                    Node->ConditionalBeginDestroy();
+                    // Erasing releases the container's reference, which destroys the node once nothing else holds one.
+                    Nodes.erase(NodeItr);
                     Node = nullptr;
 
                     NotifyContentChanged();
