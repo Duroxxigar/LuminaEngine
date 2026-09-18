@@ -1211,25 +1211,6 @@ namespace Lumina
 
         FORCEINLINE uint64 PackTileKey(int32 TX, int32 TY) { return ((uint64)(uint32)TY << 32) | (uint32)TX; }
 
-        // Rebuilt whenever Tiles change, so the settling window can tell a covered tile from a hole.
-        void RefreshTileGeometryMask(SNavMeshComponent& Comp)
-        {
-            const size_t Count = (size_t)Math::Max(0, Comp.TilesX) * (size_t)Math::Max(0, Comp.TilesY);
-            Comp.Runtime.TileHasGeometry.assign(Count, 0);
-            if (Count == 0)
-            {
-                return;
-            }
-            for (const FNavTileData& Tile : Comp.Tiles)
-            {
-                if (Tile.Blob.empty() || Tile.X < 0 || Tile.Y < 0 || Tile.X >= Comp.TilesX || Tile.Y >= Comp.TilesY)
-                {
-                    continue;
-                }
-                Comp.Runtime.TileHasGeometry[(size_t)Tile.Y * (size_t)Comp.TilesX + (size_t)Tile.X] = 1;
-            }
-        }
-
         // Snapshot at bake completion so the next change-detector tick reports zero diff.
         void RebuildEntityAABBCache(const FSystemContext& Context, const FVector3& BakeMin, const FVector3& BakeMax, THashMap<uint64, FNavSourceEntity>& OutCache)
         {
@@ -1277,8 +1258,9 @@ namespace Lumina
                 }
             }
 
-            // Debounced so dragging a volume does not request a bake every frame.
-            if (Comp.bAutoBake)
+            // A play world hydrates the editor bake; its geometry streams in after load, so a bake there is empty.
+            const bool bAutoBakeHere = Context.GetWorldType() == EWorldType::Editor || !Comp.HasBakedData();
+            if (Comp.bAutoBake && bAutoBakeHere)
             {
                 FNavMeshRuntime& RT = Comp.Runtime;
                 const FVector3 WExt = Comp.GetWorldExtents();
@@ -1369,8 +1351,6 @@ namespace Lumina
                         NonEmptyTiles, (int32)Comp.Tiles.size(), Comp.Origin.x, Comp.Origin.y, Comp.Origin.z, Comp.TileWorldSize);
                     Comp.Runtime.bRuntimeDirty = true;
                     RebuildEntityAABBCache(Context, Comp.Center - Comp.GetWorldExtents(), Comp.Center + Comp.GetWorldExtents(), Comp.Runtime.EntityAABBs);
-                    Comp.Runtime.RestartBaseline();
-                    RefreshTileGeometryMask(Comp);
                 }
             }
 
@@ -1418,8 +1398,6 @@ namespace Lumina
                     return;
                 }
 
-                const FVector3 BakeMin = Comp.Center - Comp.GetWorldExtents();
-                const FVector3 BakeMax = Comp.Center + Comp.GetWorldExtents();
                 Comp.Runtime.LiveLayout.Origin          = Comp.Origin;
                 Comp.Runtime.LiveLayout.TileWorldSize   = Comp.TileWorldSize;
                 Comp.Runtime.LiveLayout.TilesX          = Comp.TilesX;
@@ -1468,9 +1446,7 @@ namespace Lumina
                     Job->bDone.store(true, std::memory_order_release);
                 }, ETaskPriority::Background);
 
-                RebuildEntityAABBCache(Context, BakeMin, BakeMax, Comp.Runtime.EntityAABBs);
-                Comp.Runtime.RestartBaseline();
-                RefreshTileGeometryMask(Comp);
+                // Cache left empty, so a source loaded before a serialized bake reads as new and gets its tiles.
                 Comp.Runtime.DirtyTiles.clear();
             }
 
@@ -1554,13 +1530,6 @@ namespace Lumina
                     Comp.Tiles.push_back(std::move(NewTile));
                 }
 
-                if (Job->TileX >= 0 && Job->TileY >= 0 && Job->TileX < Comp.TilesX && Job->TileY < Comp.TilesY
-                    && !Comp.Runtime.TileHasGeometry.empty())
-                {
-                    Comp.Runtime.TileHasGeometry[(size_t)Job->TileY * (size_t)Comp.TilesX + (size_t)Job->TileX] =
-                        Job->ResultBlob.empty() ? 0 : 1;
-                }
-
                 // Swapping in a tile the streamer never paged in would leave it resident and unevictable.
                 const bool bStreamerOwnsResidency = Comp.Runtime.bStreamedInit;
                 if (!bStreamerOwnsResidency || Comp.Runtime.Streamer.IsResident(Job->TileX, Job->TileY))
@@ -1602,45 +1571,11 @@ namespace Lumina
                     }
                 };
 
-                int32 NewThisScan = 0;
-                auto MarkDirtyForEmptyTiles = [&](const FVector3& Mn, const FVector3& Mx)
-                {
-                    const TVector<uint8>& Mask = Comp.Runtime.TileHasGeometry;
-                    if (Mask.empty())
-                    {
-                        MarkDirtyForAABB(Mn, Mx);
-                        return;
-                    }
-                    int32 TX0, TY0, TX1, TY1;
-                    TilesForAABB(Mn, Mx, Comp.Origin, Comp.TileWorldSize, Comp.TilesX, Comp.TilesY, TX0, TY0, TX1, TY1);
-                    for (int32 ty = TY0; ty <= TY1; ++ty)
-                    {
-                        for (int32 tx = TX0; tx <= TX1; ++tx)
-                        {
-                            if (Mask[(size_t)ty * (size_t)Comp.TilesX + (size_t)tx] == 0)
-                            {
-                                Comp.Runtime.DirtyTiles.insert(PackTileKey(tx, ty));
-                            }
-                        }
-                    }
-                };
-
                 auto VisitSource = [&](uint64 Key, const FVector3& Mn, const FVector3& Mx, uint64 ContentId)
                 {
                     CurrentAABBs[Key] = FNavSourceEntity{ Mn, Mx, ContentId };
                     auto It = Comp.Runtime.EntityAABBs.find(Key);
                     const bool bNew   = It == Comp.Runtime.EntityAABBs.end();
-                    if (bNew)
-                    {
-                        ++NewThisScan;
-                        if (Comp.Runtime.bBaselineSettling)
-                        {
-                            // A procedural mesh is skipped while it builds, so it arrives new AFTER the bake
-                            // and its tiles are the hole. Suppressing those is what left a ring unbuilt.
-                            MarkDirtyForEmptyTiles(Mn, Mx);
-                            return;
-                        }
-                    }
                     const bool bMoved = !bNew && (!Math::IsNearlyEqual(It->second.AABBMin, Mn) || !Math::IsNearlyEqual(It->second.AABBMax, Mx));
 
                     // A re-imported, swapped or sculpted mesh keeps its bounds, so the AABB test alone misses it.
@@ -1700,29 +1635,6 @@ namespace Lumina
                             Comp.Center.x, Comp.Center.y, Comp.Center.z, WExt.x, WExt.y, WExt.z,
                             Comp.Origin.x, Comp.Origin.y, Comp.Origin.z,
                             (int32)Comp.Runtime.EntityAABBs.size());
-                    }
-                }
-
-                // Two running scans with nothing new means the world finished populating. Ending early only
-                // costs the storm this avoids, so the cheap rule is the safe one.
-                if (Comp.Runtime.bBaselineSettling)
-                {
-                    constexpr int32 QuietScansToSettle = 2;
-                    constexpr float MaxBaselineSeconds = 30.0f;
-
-                    Comp.Runtime.BaselineAge += (float)Context.GetDeltaTime();
-                    Comp.Runtime.BaselineQuietScans = NewThisScan == 0 ? Comp.Runtime.BaselineQuietScans + 1 : 0;
-
-                    // Capped, or a world that never stops spawning would leave dynamic nav switched off.
-                    if (Comp.Runtime.BaselineQuietScans >= QuietScansToSettle
-                        || Comp.Runtime.BaselineAge >= MaxBaselineSeconds)
-                    {
-                        Comp.Runtime.bBaselineSettling = false;
-                        if (CVarNavTimings.GetValue())
-                        {
-                            LOG_INFO("NavTiming baseline settled at {} sources; changes from here dirty tiles.",
-                                (int32)CurrentAABBs.size());
-                        }
                     }
                 }
 
