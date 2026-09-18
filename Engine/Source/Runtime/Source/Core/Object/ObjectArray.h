@@ -18,12 +18,14 @@ namespace Lumina
     struct FCObjectEntry
     {
         FCObjectEntry() = default;
-        
+
+        // The destroy claim lives in the count as a negative sentinel, so acquiring and claiming are one CAS.
+        static constexpr int32 DestroyClaimed = INT32_MIN;
+
         CObjectBase* Object = nullptr;
         TAtomic<int32> Generation{0};
         TAtomic<int32> StrongRefCount{0};
-        TAtomic<int32> WeakRefCount{0};
-        
+
         FCObjectEntry(FCObjectEntry&&) = delete;
         FCObjectEntry(const FCObjectEntry&) = delete;
         FCObjectEntry& operator=(FCObjectEntry&&) = delete;
@@ -39,9 +41,20 @@ namespace Lumina
             Object = InObject;
         }
 
-        void AddStrongRef()
+        // Refuses an object already claimed for destruction, so no acquire can resurrect one.
+        bool AddStrongRefIfAlive()
         {
-            StrongRefCount.fetch_add(1, std::memory_order_relaxed);
+            int32 PrevCount = StrongRefCount.load(std::memory_order_acquire);
+            do
+            {
+                if (PrevCount < 0)
+                {
+                    return false;
+                }
+            }
+            while (!StrongRefCount.compare_exchange_weak(PrevCount, PrevCount + 1,
+                std::memory_order_acq_rel, std::memory_order_acquire));
+            return true;
         }
 
         // Returns false for an unbalanced release, which a zero count alone cannot be told apart from.
@@ -62,24 +75,35 @@ namespace Lumina
             return true;
         }
 
-        void AddWeakRef()
+        // Wins only from exactly zero, and only once, so this alone is the destroy decision.
+        bool TryClaimDestroyIfUnreferenced()
         {
-            WeakRefCount.fetch_add(1, std::memory_order_relaxed);
+            int32 Expected = 0;
+            return StrongRefCount.compare_exchange_strong(Expected, DestroyClaimed,
+                std::memory_order_acq_rel, std::memory_order_relaxed);
         }
 
-        void ReleaseWeakRef()
+        // The force and shutdown paths, which destroy whatever the count says, still exactly once.
+        bool TryClaimDestroyForced()
         {
-            WeakRefCount.fetch_sub(1, std::memory_order_relaxed);
+            int32 PrevCount = StrongRefCount.load(std::memory_order_relaxed);
+            do
+            {
+                if (PrevCount == DestroyClaimed)
+                {
+                    return false;
+                }
+            }
+            while (!StrongRefCount.compare_exchange_weak(PrevCount, DestroyClaimed,
+                std::memory_order_acq_rel, std::memory_order_relaxed));
+            return true;
         }
 
+        // Clamped, since the claim sentinel is an implementation detail no caller should be shown.
         int32 GetStrongRefCount() const
         {
-            return StrongRefCount.load(std::memory_order_relaxed);
-        }
-
-        int32 GetWeakRefCount() const
-        {
-            return WeakRefCount.load(std::memory_order_relaxed);
+            const int32 Count = StrongRefCount.load(std::memory_order_relaxed);
+            return Count > 0 ? Count : 0;
         }
 
         int32 GetGeneration() const
@@ -97,10 +121,10 @@ namespace Lumina
             return StrongRefCount.load(std::memory_order_relaxed) > 0;
         }
 
-        void ResetRefCounts()
+        // Also clears any destroy claim, which is what makes a recycled slot usable again.
+        void ResetRefCount()
         {
             StrongRefCount.store(0, std::memory_order_relaxed);
-            WeakRefCount.store(0, std::memory_order_relaxed);
         }
     };
 
@@ -217,6 +241,10 @@ namespace Lumina
         // False once Object's slot has been recycled to someone else, so a stale reference is dropped not applied.
         bool OwnsSlot(const CObjectBase* Object, const FCObjectEntry* Item, const char* Site) const;
 
+        void ReportUnbalancedRelease(const char* Site, const CObjectBase* Object) const;
+
+        bool DestroyClaimed(CObjectBase* Object, bool bForced, const char* Site);
+
         // Entries outlive every object, so a reference caching one refcounts without touching object memory.
         RUNTIME_API FCObjectEntry* GetEntry(const CObjectBase* Object) const;
 
@@ -233,26 +261,19 @@ namespace Lumina
          *  or nullptr if it was freed/reused. This is the only safe weak->strong upgrade. */
         RUNTIME_API CObjectBase* TryAddStrongRef(const FObjectHandle& Handle);
 
-        /** Free Object iff it currently has no strong refs. The not-referenced check and the
-         *  mark-for-destroy both run under the array lock, so a concurrent TryAddStrongRef either
-         *  resurrects the object first (and this bails) or is refused afterwards, no UAF either way.
-         *  Returns true if it freed. */
+        /** Frees Object iff nothing holds a strong ref, via one atomic claim only one caller can win. */
         RUNTIME_API bool ConditionalDestroy(CObjectBase* Object);
 
-        RUNTIME_API void AddStrongRefByIndex(int32 Index);
+        /** Frees Object whatever its strong count says, still exactly once. Shutdown and reinstancing only. */
+        RUNTIME_API bool ForceDestroy(CObjectBase* Object);
 
-        RUNTIME_API bool ReleaseStrongRefByIndex(int32 Index);
-
-        RUNTIME_API void AddWeakRefByIndex(int32 Index);
-
-        RUNTIME_API void ReleaseWeakRefByIndex(int32 Index);
+        /** Claims the destroy for the shutdown sweep, which frees the object itself rather than via above. */
+        RUNTIME_API bool TryClaimDestroyForShutdown(CObjectBase* Object);
 
         RUNTIME_API bool IsReferencedByIndex(int32 Index) const;
 
         RUNTIME_API int32 GetStrongRefCountByIndex(int32 Index) const;
-        
-        RUNTIME_API int32 GetWeakRefCountByIndex(uint32 Index) const;
-    
+
         RUNTIME_API int32 GetNumAliveObjects() const;
 
         RUNTIME_API int32 GetMaxObjects() const;
@@ -277,5 +298,16 @@ namespace Lumina
     };
     
     extern RUNTIME_API FCObjectArray GObjectArray;
-    
+
+    /** Downgrades the stale-reference assert to a log for this thread, for tests that stage one on purpose. */
+    class FScopedStaleReferenceTolerance
+    {
+    public:
+        RUNTIME_API FScopedStaleReferenceTolerance();
+        RUNTIME_API ~FScopedStaleReferenceTolerance();
+
+        LE_NO_COPYMOVE(FScopedStaleReferenceTolerance);
+
+        static RUNTIME_API bool IsTolerated();
+    };
 }

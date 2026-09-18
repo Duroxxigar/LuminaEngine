@@ -25,6 +25,8 @@ namespace Lumina
          *  its class to tear them down. Set by StaticAllocateObject only when the class actually appended
          *  storage-owning properties, which keeps every native object's destructor off the class entirely. */
         OF_ScriptProperties     = BIT(9),
+        /** OnDestroy has run. Separate from OF_MarkedDestroy, which the shutdown sweep sets a phase early. */
+        OF_DestroyStarted       = BIT(10),
     };
 
     ENUM_CLASS_FLAGS(EObjectFlags);
@@ -48,6 +50,7 @@ namespace Lumina
         if (EnumHasAnyFlags(Flags, OF_Public))          Result += "OF_Public|";
         if (EnumHasAnyFlags(Flags, OF_MarkedDestroy))   Result += "OF_MarkedDestroy|";
         if (EnumHasAnyFlags(Flags, OF_ScriptProperties))Result += "OF_ScriptProperties|";
+        if (EnumHasAnyFlags(Flags, OF_DestroyStarted))  Result += "OF_DestroyStarted|";
 
         if (!Result.empty() && Result.back() == '|') Result.pop_back();
 

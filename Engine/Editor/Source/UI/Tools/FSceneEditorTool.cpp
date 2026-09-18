@@ -2566,10 +2566,17 @@ namespace Lumina
             ImGui::PopStyleColor();
             ImGuiX::TextTooltip("Rotation (Euler Angles)");
             ImGui::SameLine();
-            FVector3 EulerRotation = CameraTransform.GetRotationAsEuler();
-            if (ImGui::DragFloat3("R", Math::ValuePtr(EulerRotation), 0.01f))
+            const FQuat CameraRotation = CameraTransform.GetRotation();
+            if (!Math::IsSameRotation(CameraRotation, CameraEulerRotationSource))
             {
-                CameraTransform.SetRotationFromEuler(EulerRotation);
+                CameraEulerDegrees = CameraTransform.GetRotationAsEuler();
+                CameraEulerRotationSource = CameraRotation;
+            }
+
+            if (ImGui::DragFloat3("R", Math::ValuePtr(CameraEulerDegrees), 0.01f))
+            {
+                CameraTransform.SetRotationFromEuler(CameraEulerDegrees);
+                CameraEulerRotationSource = CameraTransform.GetRotation();
             }
 
             ImGui::Separator();

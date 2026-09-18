@@ -417,7 +417,9 @@ TEST(FunctionReflection, AnObjectArgumentTravelsAsAHandle)
     EXPECT_EQ(InParam->GetElementSize(), sizeof(TObjectPtr<CObject>));
     EXPECT_TRUE(InParam->OwnsStorage()) << "the handle has to be released when the frame goes away";
 
-    CObject* Subject_Object = NewObject(CScriptableTest::StaticClass(), nullptr, NAME_None, FGuid::New(), OF_Transient);
+    // Held, or the frame's release takes the count back to zero and destroys it before the checks below.
+    TObjectPtr<CObject> Owner(NewObject(CScriptableTest::StaticClass(), nullptr, NAME_None, FGuid::New(), OF_Transient));
+    CObject* Subject_Object = Owner.Get();
     ASSERT_NE(Subject_Object, nullptr);
     const int32 RefsBefore = Subject_Object->GetStrongRefCount();
 
@@ -436,8 +438,6 @@ TEST(FunctionReflection, AnObjectArgumentTravelsAsAHandle)
     }
 
     EXPECT_EQ(Subject_Object->GetStrongRefCount(), RefsBefore) << "and lets go of it once torn down";
-
-    Subject_Object->ConditionalBeginDestroy();
 }
 
 // A map contributes two inners and is still one argument, and the pair order is the emitter's ABI contract.

@@ -169,8 +169,8 @@ namespace PackageLoadBench
 
         Package->ExportTable.clear();
         Package->ImportTable.clear();
+        // The root set holds the only strong reference, so unrooting is what destroys it.
         Package->RemoveFromRoot();
-        Package->ConditionalBeginDestroy();
     }
 
     struct FCorpus

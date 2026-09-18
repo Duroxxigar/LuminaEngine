@@ -163,8 +163,9 @@ TEST(PackageCodec, ASavedPackageIsZstdAndRoundTrips)
         }
         Package->ExportTable.clear();
         Package->ImportTable.clear();
+
+        // The root set holds the package's only strong reference, so unrooting is what destroys it.
         Package->RemoveFromRoot();
-        Package->ConditionalBeginDestroy();
     }
 
     TVector<uint8> Raw;

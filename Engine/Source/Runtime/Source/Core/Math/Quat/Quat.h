@@ -188,6 +188,13 @@ namespace Lumina::Math
         return TVec<T, 3>(Pitch, Yaw, Roll);
     }
 
+    // Double cover means -Q is the same orientation, so the sign of the dot carries no information.
+    template<typename T>
+    [[nodiscard]] bool IsSameRotation(const TQuat<T>& A, const TQuat<T>& B, T Epsilon = T(1e-6))
+    {
+        return Abs(Dot(A, B)) >= T(1) - Epsilon;
+    }
+
     template<typename T>
     [[nodiscard]] TQuat<T> Slerp(const TQuat<T>& A, const TQuat<T>& B, T Alpha)
     {

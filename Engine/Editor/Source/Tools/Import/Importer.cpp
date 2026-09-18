@@ -147,8 +147,8 @@ namespace Lumina
         }
 
         Importer->ReleaseSourceData();
+        // The root set holds the only strong reference, so unrooting is what destroys it.
         Importer->RemoveFromRoot();
-        Importer->ConditionalBeginDestroy();
     }
 
     bool CImporterRegistry::IsExtensionSupported(FStringView Ext) const

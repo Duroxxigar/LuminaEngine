@@ -538,6 +538,10 @@ namespace Lumina
         FTransform CachedValue{};
         FTransform DisplayValue{};
 
+        // Authored euler, kept because re-deriving it from the quaternion snaps 179 to a gimbal-equivalent triple.
+        FVector3 EulerDegrees = FVector3(0.0f);
+        FQuat EulerRotationSource = FQuat::Identity();
+
         // Clicking an axis tag resets that component to 0, a discrete edit, so we open the
         // transaction the click frame (Started) and commit it the next (Finished).
         bool bFinishPending = false;

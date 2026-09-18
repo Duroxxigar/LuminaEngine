@@ -983,6 +983,7 @@ TEST_F(FFrameMarshalTest, AWrapperToADestroyedObjectStillThrows)
     EXPECT_EQ(Probe(Wrapper, &bValid), 1) << "a live object must read through the fast path";
     EXPECT_EQ(bValid, 1);
 
+    FScopedStaleReferenceTolerance Tolerance;
     GObjectArray.ReleaseStrongRef(Doomed);
     ASSERT_EQ(Owner.Get(), nullptr) << "the object under test was not actually freed";
 

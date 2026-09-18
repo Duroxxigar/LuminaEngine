@@ -124,6 +124,13 @@ namespace Lumina
         false,
         "Re-evaluate single-clip animation recipes directly and compare against the task executor's skinning matrices; logs mismatches.");
 
+    // The one switch that answers "is budgeting what I am looking at" without editing a component.
+    static TConsoleVar<bool> CVarAnimBudget(
+        "anim.Budget",
+        true,
+        "Throttle animation by distance and visibility: update-rate skipping, low-detail bone LOD, and the "
+        "off-screen pose freeze. Off evaluates every skeleton at full rate with every bone, every frame.");
+
     // Diagnostic dump of the task recipe each graph-driven mesh records.
     static TConsoleVar<bool> CVarDumpGraphTasks(
         "anim.DumpGraphTasks",
@@ -137,7 +144,7 @@ namespace Lumina
         // Skipped time stays in PendingAnimTime, so playback speed survives the reduced update rate.
         bool ShouldEvaluateThisFrame(SSkeletalMeshComponent& Mesh, ECS::FEntity Entity, bool bForce)
         {
-            if (!Mesh.bUpdateRateOptimization || bForce)
+            if (!Mesh.bUpdateRateOptimization || bForce || !CVarAnimBudget.GetValue())
             {
                 Mesh.AnimSkipCounter = -1;
                 return true;
@@ -262,7 +269,8 @@ namespace Lumina
             OutStepTime = 0.0f;
 
             if (Mesh.VisibilityBasedAnimTick == EAnimUpdateMode::TickWhenRendered &&
-                (Now - Mesh.LastRenderedTime) > kAnimVisibilityGrace)
+                (Now - Mesh.LastRenderedTime) > kAnimVisibilityGrace &&
+                CVarAnimBudget.GetValue())
             {
                 return false;
             }
@@ -285,7 +293,8 @@ namespace Lumina
         int32 ComputeActiveBoneCount(const SSkeletalMeshComponent& Mesh, const FSkeletonResource* Skeleton)
         {
             const int32 NumBones = Skeleton->GetNumBones();
-            if (!Mesh.bUpdateRateOptimization || Mesh.LastDistanceOverRadius <= kBoneLODDistanceOverRadius)
+            if (!Mesh.bUpdateRateOptimization || Mesh.LastDistanceOverRadius <= kBoneLODDistanceOverRadius
+                || !CVarAnimBudget.GetValue())
             {
                 return 0; // all bones
             }

@@ -28,6 +28,9 @@ namespace Lumina::Physics
         // Below this the character is treated as at rest, so slope drift is cut instead of decayed toward zero.
         constexpr float kRestSpeedSq = 0.01f * 0.01f;
 
+        // Below this a floor normal is too close to horizontal for the ramp solve to stay finite.
+        constexpr float kMinRampNormalY = 0.1f;
+
         // A couple of seconds of fixed steps, long past any deferred collider build.
         constexpr uint32 kAwaitingGroundWarnSteps = 120;
 
@@ -592,7 +595,17 @@ namespace Lumina::Physics
         // Box3D's documented mover order is cast and move first, then gather at the new pose, then solve.
         // Solving before the cast would feed the depenetration push back through the cast, and on a slope
         // that push has a horizontal component, which walks the character downhill every frame.
-        const b3Vec3 Desired = b3MulSV(FixedDt, Box3DUtils::ToB3Vec3(Character.Velocity));
+        b3Vec3 Desired = b3MulSV(FixedDt, Box3DUtils::ToB3Vec3(Character.Velocity));
+
+        // On a walkable floor the move follows the surface instead of being bent onto it by the plane solver.
+        // Projection would shave the horizontal delta by the slope cosine and rotate it toward the contour,
+        // so solving only the vertical is what keeps the authored heading and speed exact on a ramp.
+        if (bWasGrounded && !bJumpedThisStep && Character.GroundNormal.y >= Character.CosMaxSlope
+            && Character.GroundNormal.y > kMinRampNormalY)
+        {
+            const FVector3& Ground = Character.GroundNormal;
+            Desired.y = -(Desired.x * Ground.x + Desired.z * Ground.z) / Ground.y;
+        }
         const float TravelFraction = b3World_CastMover(WorldId, Position, &Mover, Desired, Character.Filter, &MoverCastFilter, &Gathered);
 
         Position = b3Add(Position, b3MulSV(TravelFraction, Desired));
@@ -766,6 +779,16 @@ namespace Lumina::Physics
 
         // b3ClipVector ignores planes with a zero push, and every gather rebuilds the set with zero pushes.
         b3SolvePlanes(b3Vec3_zero, Gathered.Planes, Gathered.Count);
+
+        // Only a wall may take speed away. Clipping horizontal velocity against a walkable floor removes its
+        // into-slope component every step, so a character on a ramp settles below its authored speed.
+        for (int32 i = 0; i < Gathered.Count; ++i)
+        {
+            if (Gathered.Planes[i].plane.normal.y >= Character.CosMaxSlope)
+            {
+                Gathered.Planes[i].clipVelocity = false;
+            }
+        }
 
         // Without this, velocity accumulates every frame the mover is pressed against a surface.
         Character.Velocity = Box3DUtils::FromB3Vec3(b3ClipVector(Box3DUtils::ToB3Vec3(Character.Velocity), Gathered.Planes, Gathered.Count));

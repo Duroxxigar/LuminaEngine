@@ -25,7 +25,6 @@ namespace Lumina
             Column_Class,
             Column_Package,
             Column_StrongRefs,
-            Column_WeakRefs,
             Column_Flags,
             Column_Count,
         };
@@ -121,7 +120,6 @@ namespace Lumina
             Row.Flags      = Object->GetFlags();
             Row.FlagsText  = ObjectFlagsToString(Row.Flags).c_str();
             Row.StrongRefs = Object->GetStrongRefCount();
-            Row.WeakRefs   = Object->GetWeakRefCount();
             Row.bIsAsset   = Object->IsAsset();
 
             if (CClass* Class = Object->GetClass())
@@ -190,7 +188,6 @@ namespace Lumina
             case Column_Class:      Comparison = strcmp(RowA.ClassName.c_str(), RowB.ClassName.c_str()); break;
             case Column_Package:    Comparison = strcmp(RowA.PackageName.c_str(), RowB.PackageName.c_str()); break;
             case Column_StrongRefs: Comparison = RowA.StrongRefs - RowB.StrongRefs; break;
-            case Column_WeakRefs:   Comparison = RowA.WeakRefs - RowB.WeakRefs; break;
             case Column_Flags:      Comparison = (int32)RowA.Flags - (int32)RowB.Flags; break;
             default: break;
             }
@@ -318,7 +315,6 @@ namespace Lumina
         ImGui::TableSetupColumn("Class",   ImGuiTableColumnFlags_None,        0.22f, Column_Class);
         ImGui::TableSetupColumn("Package", ImGuiTableColumnFlags_None,        0.26f, Column_Package);
         ImGui::TableSetupColumn("Strong",  ImGuiTableColumnFlags_WidthFixed,  56.0f, Column_StrongRefs);
-        ImGui::TableSetupColumn("Weak",    ImGuiTableColumnFlags_WidthFixed,  50.0f, Column_WeakRefs);
         ImGui::TableSetupColumn("Flags",   ImGuiTableColumnFlags_None,        0.24f, Column_Flags);
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
@@ -400,8 +396,6 @@ namespace Lumina
                 ImGui::TableSetColumnIndex(Column_StrongRefs);
                 ImGui::Text("%d", Row.StrongRefs);
 
-                ImGui::TableSetColumnIndex(Column_WeakRefs);
-                ImGui::TextDisabled("%d", Row.WeakRefs);
 
                 ImGui::TableSetColumnIndex(Column_Flags);
                 ImGui::TextColored(FlagsTint(Row.Flags), "%s", Row.FlagsText.c_str());
@@ -457,8 +451,7 @@ namespace Lumina
 
         ImGui::TextColored(EditorColors::TextMuted(), "GUID: %s", Object->GetGUID().ToString().c_str());
         ImGui::TextColored(FlagsTint(Object->GetFlags()), "%s", ObjectFlagsToString(Object->GetFlags()).c_str());
-        ImGui::TextColored(EditorColors::TextMuted(), "Strong: %d   Weak: %d",
-            Object->GetStrongRefCount(), Object->GetWeakRefCount());
+        ImGui::TextColored(EditorColors::TextMuted(), "Strong: %d", Object->GetStrongRefCount());
 
         ImGui::Separator();
         ImGui::Spacing();

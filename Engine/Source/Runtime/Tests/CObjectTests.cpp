@@ -103,6 +103,8 @@ TEST(CObjectLifetime, AStrongReferenceKeepsItsObjectAlive)
 // The unbalanced release below used to reach ConditionalDestroy with a freed pointer and fault there.
 TEST(CObjectLifetime, AStaleStrongReferenceReadsAsNull)
 {
+    FScopedStaleReferenceTolerance Tolerance;
+
     CObject* Doomed = NewTransientTestObject();
     ASSERT_NE(Doomed, nullptr);
 
@@ -121,6 +123,8 @@ TEST(CObjectLifetime, AStaleStrongReferenceReadsAsNull)
 
 TEST(CObjectLifetime, ReleasingAStaleReferenceLeavesOtherObjectsAlone)
 {
+    FScopedStaleReferenceTolerance Tolerance;
+
     CObject* Doomed = NewTransientTestObject();
     ASSERT_NE(Doomed, nullptr);
 
@@ -154,6 +158,8 @@ TEST(CObjectLifetime, AFreedSlotIsNotImmediatelyReissued)
 
 TEST(CObjectLifetime, CopyingAStaleReferenceYieldsNull)
 {
+    FScopedStaleReferenceTolerance Tolerance;
+
     CObject* Doomed = NewTransientTestObject();
     ASSERT_NE(Doomed, nullptr);
 
@@ -186,4 +192,35 @@ TEST(CObjectLifetime, AWeakReferenceOutlivesItsObject)
     EXPECT_FALSE(Weak.IsValid()) << "the last strong reference going away frees the object";
     EXPECT_EQ(Weak.Get(), nullptr);
     EXPECT_FALSE(Weak.Lock().IsValid());
+}
+
+// Pins the claim's reentrancy rather than the OF_DestroyStarted guard, which it passes without.
+TEST(CObjectLifetime, OnDestroyIsNotReenteredByADestroyItTriggers)
+{
+    CDestroyCountTest::DestroyCount = 0;
+
+    auto* Object = NewObject<CDestroyCountTest>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ASSERT_NE(Object, nullptr);
+    Object->bReenterOnDestroy = true;
+
+    Object->ConditionalBeginDestroy();
+
+    EXPECT_EQ(CDestroyCountTest::DestroyCount, 1) << "OnDestroy ran more than once for a single destruction";
+}
+
+// A hand-marked object still destroys, because the claim and not the flag is what arbitrates the free.
+TEST(CObjectLifetime, MarkingForDestroyDoesNotBlockTheActualDestroy)
+{
+    CDestroyCountTest::DestroyCount = 0;
+
+    auto* Object = NewObject<CDestroyCountTest>(nullptr, NAME_None, FGuid::New(), OF_Transient);
+    ASSERT_NE(Object, nullptr);
+    const FObjectHandle Handle = GObjectArray.GetHandleByObject(Object);
+
+    // What DestroyPackage and the failed-cook path do to take an asset out of identity lookups early.
+    Object->SetFlag(OF_MarkedDestroy);
+    Object->ConditionalBeginDestroy();
+
+    EXPECT_EQ(CDestroyCountTest::DestroyCount, 1) << "a pre-marked object must still be torn down";
+    EXPECT_EQ(GObjectArray.ResolveHandle(Handle), nullptr) << "and its slot must be released";
 }

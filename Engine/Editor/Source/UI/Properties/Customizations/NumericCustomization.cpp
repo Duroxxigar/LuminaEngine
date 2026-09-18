@@ -395,12 +395,19 @@ namespace Lumina
         Merge(DrawAxisRow("T", LE_ICON_AXIS_ARROW, ImVec4(0.40f, 0.70f, 1.0f, 1.0f), "Translation (Location)", Math::ValuePtr(Translation), 0.01f * MouseAdaptiveDragScale(), bReset, 0.0f, "%.3f m"));
         DisplayValue.SetLocation(Translation);
 
-        FVector3 EulerRotation = Math::Degrees(Math::EulerAngles(DisplayValue.GetRotation()));
+        const FQuat CurrentRotation = DisplayValue.GetRotation();
+        if (!Math::IsSameRotation(CurrentRotation, EulerRotationSource))
+        {
+            EulerDegrees = Math::Degrees(Math::EulerAngles(CurrentRotation));
+            EulerRotationSource = CurrentRotation;
+        }
+
         bool bRotationReset = false;
-        const EPropertyChangeOp RotationOp = DrawAxisRow("R", LE_ICON_ROTATE_360, ImVec4(0.40f, 1.0f, 0.70f, 1.0f), "Rotation (Euler Angles)", Math::ValuePtr(EulerRotation), 0.1f * MouseAdaptiveDragScale(), bRotationReset, 0.0f, "%.3f\xc2\xb0");
+        const EPropertyChangeOp RotationOp = DrawAxisRow("R", LE_ICON_ROTATE_360, ImVec4(0.40f, 1.0f, 0.70f, 1.0f), "Rotation (Euler Angles)", Math::ValuePtr(EulerDegrees), 0.1f * MouseAdaptiveDragScale(), bRotationReset, 0.0f, "%.3f\xc2\xb0");
         if (RotationOp == EPropertyChangeOp::Updated || bRotationReset)
         {
-            DisplayValue.SetRotationFromEuler(EulerRotation);
+            DisplayValue.SetRotationFromEuler(EulerDegrees);
+            EulerRotationSource = DisplayValue.GetRotation();
         }
         Merge(RotationOp);
         bReset |= bRotationReset;

@@ -351,6 +351,7 @@ namespace
     {
         b3Vec3  Position{};
         b3Vec3  Velocity{};
+        b3Vec3  GroundNormal{ 0.0f, 1.0f, 0.0f };
         bool    bGrounded = false;
     };
 
@@ -370,7 +371,14 @@ namespace
 
         FMoverProbe Probe;
 
-        const b3Vec3 Desired = b3MulSV(Dt, State.Velocity);
+        b3Vec3 Desired = b3MulSV(Dt, State.Velocity);
+
+        // Walkable floors are followed rather than projected onto, matching Box3DCharacter.cpp.
+        if (State.bGrounded && State.GroundNormal.y >= CosMaxSlope && State.GroundNormal.y > 0.1f)
+        {
+            Desired.y = -(Desired.x * State.GroundNormal.x + Desired.z * State.GroundNormal.z) / State.GroundNormal.y;
+        }
+
         const float TravelFraction = b3World_CastMover(WorldId, State.Position, &Mover, Desired,
                                                        b3DefaultQueryFilter(), &ProbeCastFilter, &Probe);
 
@@ -409,11 +417,18 @@ namespace
         {
             if (Probe.Planes[i].plane.normal.y >= CosMaxSlope)
             {
+                if (!State.bGrounded)
+                {
+                    State.GroundNormal = Probe.Planes[i].plane.normal;
+                }
                 State.bGrounded = true;
-                break;
+
+                // A walkable floor never takes horizontal speed, matching Box3DCharacter.cpp.
+                Probe.Planes[i].clipVelocity = false;
             }
         }
 
+        b3SolvePlanes(b3Vec3_zero, Probe.Planes, Probe.Count);
         State.Velocity = b3ClipVector(State.Velocity, Probe.Planes, Probe.Count);
     }
 }
@@ -498,6 +513,77 @@ TEST(Box3DCharacter, MoverDoesNotCreepOnSlope)
 
     EXPECT_LT(DriftX, 0.02f) << "mover crept along the slope over 5 seconds";
     EXPECT_LT(DriftZ, 0.02f) << "mover crept along the slope over 5 seconds";
+
+    b3DestroyHull(RampHull);
+}
+
+// Drives a diagonal heading across the fall line, where a plane projection bends hardest.
+TEST(Box3DCharacter, MoverKeepsHeadingAndSpeedRunningUpASlope)
+{
+    FTestWorld World;
+
+    b3HullData* RampHull = MakeBoxHull(20.0f, 1.0f, 20.0f);
+    ASSERT_NE(RampHull, nullptr);
+
+    b3BodyDef BodyDef = b3DefaultBodyDef();
+    BodyDef.type = b3_staticBody;
+    BodyDef.position = b3Vec3{ 0.0f, 0.0f, 0.0f };
+
+    const float Angle = Math::Radians(20.0f);
+    BodyDef.rotation = b3Quat{ b3Vec3{ 0.0f, 0.0f, Math::Sin(Angle * 0.5f) }, Math::Cos(Angle * 0.5f) };
+
+    const b3BodyId Ramp = b3CreateBody(World.WorldId, &BodyDef);
+    b3ShapeDef ShapeDef = b3DefaultShapeDef();
+    b3CreateHullShape(Ramp, &ShapeDef, RampHull);
+
+    b3World_Step(World.WorldId, 1.0f / 60.0f, 4);
+
+    constexpr float Radius = 0.5f;
+    constexpr float HalfHeight = 0.9f;
+    const b3Capsule Mover{ b3Vec3{ 0.0f, -HalfHeight, 0.0f }, b3Vec3{ 0.0f, HalfHeight, 0.0f }, Radius };
+
+    const float CosMaxSlope = Math::Cos(Math::Radians(45.0f));
+
+    FMoverState State;
+    State.Position = b3Vec3{ 0.0f, 4.0f, 0.0f };
+
+    for (int32 i = 0; i < 180; ++i)
+    {
+        StepMover(World.WorldId, State, Mover, 1.0f / 60.0f, CosMaxSlope);
+    }
+
+    ASSERT_TRUE(State.bGrounded) << "mover never settled on the ramp";
+
+    // The ramp normal tilts toward -X, so +X is uphill and a +X/+Z heading crosses the fall line.
+    constexpr float Speed = 5.0f;
+    const float Component = Speed / Math::Sqrt(2.0f);
+    State.Velocity = b3Vec3{ Component, 0.0f, Component };
+
+    const b3Vec3 Start = State.Position;
+
+    for (int32 i = 0; i < 30; ++i)
+    {
+        StepMover(World.WorldId, State, Mover, 1.0f / 60.0f, CosMaxSlope);
+    }
+
+    const float TravelX = State.Position.x - Start.x;
+    const float TravelZ = State.Position.z - Start.z;
+    const float Travel  = Math::Sqrt(TravelX * TravelX + TravelZ * TravelZ);
+
+    ASSERT_GT(Travel, 1.0f) << "mover barely moved, so the heading check would be meaningless";
+
+    // Airborne would preserve heading and speed trivially, which is not what this is measuring.
+    ASSERT_TRUE(State.bGrounded) << "mover left the ramp, so nothing here is about slope handling";
+
+    // The authored heading is 45 degrees between +X and +Z; a projection onto the ramp rotates it.
+    const float HeadingDot = ((TravelX * Component) + (TravelZ * Component)) / (Travel * Speed);
+    EXPECT_GT(HeadingDot, 0.999f) << "running up the slope bent the move off the input direction";
+
+    const float HorizontalSpeed = Travel / (30.0f / 60.0f);
+    EXPECT_NEAR(HorizontalSpeed, Speed, 0.25f) << "the slope changed horizontal speed";
+
+    const float CarriedSpeed = Math::Sqrt(State.Velocity.x * State.Velocity.x + State.Velocity.z * State.Velocity.z);
+    EXPECT_NEAR(CarriedSpeed, Speed, 0.25f) << "the slope clipped horizontal velocity away";
 
     b3DestroyHull(RampHull);
 }
