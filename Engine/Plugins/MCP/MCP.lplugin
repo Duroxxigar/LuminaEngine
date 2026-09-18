@@ -13,11 +13,6 @@
     "Dependencies": [],
     "Modules": [
         {
-            "Name": "AgentCore",
-            "Type": "Editor",
-            "LoadingPhase": "EditorInit"
-        },
-        {
             "Name": "MCPEditor",
             "Type": "Editor",
             "LoadingPhase": "EditorInit"
