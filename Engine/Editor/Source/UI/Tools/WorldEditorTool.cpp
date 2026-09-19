@@ -4453,7 +4453,7 @@ namespace Lumina
         if (bGamePreviewRunning && Event.IsA<FKeyPressedEvent>())
         {
             FKeyPressedEvent& Key = Event.As<FKeyPressedEvent>();
-            if (Key.GetKeyCode() == EKey::Escape && !Key.IsRepeat())
+            if (Key.GetKeyCode() == EKey::Escape && Key.IsModifierDown(EKey::LeftShift) && !Key.IsRepeat())
             {
                 bStopPlayRequested = true;
                 return true;
