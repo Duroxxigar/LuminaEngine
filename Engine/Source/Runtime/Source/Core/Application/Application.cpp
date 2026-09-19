@@ -78,6 +78,12 @@ namespace Lumina
                 }
 
                 MainWindow->ProcessMessages();
+
+                FKeyInput Injected;
+                while (InjectedKeys.TryDequeue(Injected))
+                {
+                    ForwardKey(MainWindow, Injected);
+                }
             }
 
             bool bApplicationWantsExit = ShouldExit();

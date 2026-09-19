@@ -2,13 +2,14 @@
 
 #include "Core/LuminaMacros.h"
 #include "Core/Engine/Engine.h"
+#include "Containers/ConcurrentQueue.h"
+#include "Core/Windows/WindowInput.h"
 #include "Events/EventProcessor.h"
 #include "Memory/SmartPtr.h"
 
 namespace Lumina
 {
 	struct FWindowSpecs;
-	struct FKeyInput;
 	struct FMouseButtonInput;
 	struct FMouseMoveInput;
 	struct FMouseScrollInput;
@@ -52,6 +53,9 @@ namespace Lumina
 
 		FEventProcessor& GetEventProcessor()	{ return EventProcessor; }
 
+		// Thread-safe. Delivered with the next event pump, so it takes the same path as a real key.
+		void InjectKey(const FKeyInput& Input) { InjectedKeys.Enqueue(Input); }
+
 		// Null in editor builds; per-tool viewports own input there.
 		FInputViewport* GetPrimaryViewport()	{ return PrimaryViewport.get(); }
 
@@ -76,6 +80,7 @@ namespace Lumina
 		FEventProcessor				EventProcessor;
 		FWindow*					MainWindow = nullptr;
 		TUniquePtr<FInputViewport>	PrimaryViewport;
+		TConcurrentQueue<FKeyInput>	InjectedKeys;
 
 		bool bExitRequested			= false;
 	
