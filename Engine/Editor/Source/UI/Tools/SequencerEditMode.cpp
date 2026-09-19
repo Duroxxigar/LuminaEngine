@@ -1425,7 +1425,7 @@ namespace Lumina
                         DrawList->AddRectFilled(ImVec2(X - R * 0.8f, RowMidY - R * 0.8f),
                                                 ImVec2(X + R * 0.8f, RowMidY + R * 0.8f), Fill, 1.0f);
                         DrawList->AddRect(ImVec2(X - R * 0.8f, RowMidY - R * 0.8f),
-                                          ImVec2(X + R * 0.8f, RowMidY + R * 0.8f), SeqKeyOutline, 1.0f, 0, 1.5f);
+                                          ImVec2(X + R * 0.8f, RowMidY + R * 0.8f), SeqKeyOutline, 1.0f, 1.5f, 0);
                         break;
 
                     case ECurveInterpMode::Cubic:

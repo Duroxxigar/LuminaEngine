@@ -203,7 +203,7 @@ namespace Lumina
 
             ImDrawVert* VtxDst = static_cast<ImDrawVert*>(VB.Cpu);
             ImDrawIdx*  IdxDst = static_cast<ImDrawIdx*>(IB.Cpu);
-            for (int32 n = 0; n < DrawData->CmdListsCount; ++n)
+            for (int32 n = 0; n < DrawData->CmdLists.Size; ++n)
             {
                 const ImDrawList* List = DrawData->CmdLists[n];
                 Memory::Memcpy(VtxDst, List->VtxBuffer.Data, (size_t)List->VtxBuffer.Size * sizeof(ImDrawVert));
@@ -237,7 +237,7 @@ namespace Lumina
             const uint32 DefaultTex = RHI::Textures::DefaultResourceID();
 
             uint32 GlobalVtx = 0, GlobalIdx = 0;
-            for (int32 n = 0; n < DrawData->CmdListsCount; ++n)
+            for (int32 n = 0; n < DrawData->CmdLists.Size; ++n)
             {
                 const ImDrawList* List = DrawData->CmdLists[n];
                 for (int32 c = 0; c < List->CmdBuffer.Size; ++c)

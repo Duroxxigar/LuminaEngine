@@ -40,7 +40,7 @@ namespace Lumina::SlowTaskModal
                 DrawList->PathLineTo(ImVec2(Center.x + std::cos(Angle) * Radius,
                                             Center.y + std::sin(Angle) * Radius));
             }
-            DrawList->PathStroke(Color, ImDrawFlags_None, Thickness);
+            DrawList->PathStroke(Color, Thickness, ImDrawFlags_None);
 
             ImGui::Dummy(ImVec2(Radius * 2.0f, Radius * 2.0f));
         }

@@ -23,7 +23,7 @@ namespace Lumina
 {
     namespace
     {
-        void BuildRayFromScreen(const SCameraComponent& Camera, ImVec2 PixelWithinViewport, ImVec2 ViewportSize, FVector3& OutOrigin, FVector3& OutDir)
+        void TerrainBuildRayFromScreen(const SCameraComponent& Camera, ImVec2 PixelWithinViewport, ImVec2 ViewportSize, FVector3& OutOrigin, FVector3& OutDir)
         {
             const float W = Math::Max(ViewportSize.x, 1.0f);
             const float H = Math::Max(ViewportSize.y, 1.0f);
@@ -424,7 +424,7 @@ namespace Lumina
             }
             ImDrawList* Dl = ImGui::GetWindowDrawList();
             Dl->AddRectFilled(Pos, ImVec2(Pos.x + SwatchSize.x, Pos.y + SwatchSize.y), Fill, 4.0f);
-            Dl->AddRect(Pos, ImVec2(Pos.x + SwatchSize.x, Pos.y + SwatchSize.y), Border, 4.0f, 0, bSelected ? 2.5f : 1.0f);
+            Dl->AddRect(Pos, ImVec2(Pos.x + SwatchSize.x, Pos.y + SwatchSize.y), Border, 4.0f, bSelected ? 2.5f : 1.0f, 0);
 
             if (ImGui::IsItemHovered() && !Terrain.Layers[i].Name.empty())
             {
@@ -618,7 +618,7 @@ namespace Lumina
         }
 
         FVector3 RayOrigin, RayDir;
-        BuildRayFromScreen(Camera, Local, ViewportSize, RayOrigin, RayDir);
+        TerrainBuildRayFromScreen(Camera, Local, ViewportSize, RayOrigin, RayDir);
 
         FVector3 Hit;
         if (!FTerrainSculptSystem::Raycast(Terrain, TerrainOrigin, RayOrigin, RayDir, Hit))
@@ -771,7 +771,7 @@ namespace Lumina
             }
             if (Count >= 2)
             {
-                Draw->AddPolyline(Points, Count, Color, ImDrawFlags_Closed, Thickness);
+                Draw->AddPolyline(Points, Count, Color, Thickness, ImDrawFlags_Closed);
             }
         };
 

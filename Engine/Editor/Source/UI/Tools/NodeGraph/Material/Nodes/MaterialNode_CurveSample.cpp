@@ -75,6 +75,6 @@ namespace Lumina
             Points[Index] = ImVec2(Origin.x + 3.0f + Alpha * (PreviewSize.x - 6.0f), Extent.y - 3.0f - Normalized * (PreviewSize.y - 6.0f));
         }
 
-        DrawList->AddPolyline(Points, NumSamples, IM_COL32(255, 190, 60, 255), ImDrawFlags_None, 1.5f);
+        DrawList->AddPolyline(Points, NumSamples, IM_COL32(255, 190, 60, 255), 1.5f, ImDrawFlags_None);
     }
 }

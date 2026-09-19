@@ -616,7 +616,7 @@ namespace Lumina
             }
             if (Count >= 2)
             {
-                Draw->AddPolyline(Points, Count, RingColor, ImDrawFlags_Closed, Thickness);
+                Draw->AddPolyline(Points, Count, RingColor, Thickness, ImDrawFlags_Closed);
             }
         };
 

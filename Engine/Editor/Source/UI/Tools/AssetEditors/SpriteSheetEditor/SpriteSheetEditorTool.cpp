@@ -10,7 +10,7 @@ namespace Lumina
     static const char* SheetWindowName      = "Sheet";
     static const char* AnimationsWindowName = "Animations";
     static const char* PreviewWindowName    = "Preview";
-    static const char* DetailsWindowName    = "Details";
+    static const char* SpriteSheetDetailsWindowName    = "Details";
 
     namespace
     {
@@ -32,7 +32,7 @@ namespace Lumina
         CreateToolWindow(SheetWindowName,      [this](bool) { DrawSheetWindow(); });
         CreateToolWindow(AnimationsWindowName, [this](bool) { DrawAnimationsWindow(); });
         CreateToolWindow(PreviewWindowName,    [this](bool) { DrawPreviewWindow(); });
-        CreateToolWindow(DetailsWindowName,    [this](bool) { PropertyTable.DrawTree(); });
+        CreateToolWindow(SpriteSheetDetailsWindowName,    [this](bool) { PropertyTable.DrawTree(); });
     }
 
     void FSpriteSheetEditorTool::MarkEdited()
@@ -156,7 +156,7 @@ namespace Lumina
             const int32 Slot = Math::Clamp(Preview.Frame, 0, (int32)Clip->Frames.size() - 1);
             const int32 Cell = Math::Clamp(Clip->Frames[Slot], 0, HF * VF - 1);
             const ImVec2 Min(Origin.x + (Cell % HF) * CellW, Origin.y + (Cell / HF) * CellH);
-            DrawList->AddRect(Min, ImVec2(Min.x + CellW, Min.y + CellH), kCurrentColor, 0.0f, 0, 2.0f);
+            DrawList->AddRect(Min, ImVec2(Min.x + CellW, Min.y + CellH), kCurrentColor, 0.0f, 2.0f, 0);
         }
 
         ImGui::InvisibleButton("##SheetCanvas", Size);
@@ -393,6 +393,6 @@ namespace Lumina
         ImGui::DockBuilderDockWindow(GetToolWindowName(SheetWindowName).c_str(), LeftDockID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(AnimationsWindowName).c_str(), BottomLeftID);
         ImGui::DockBuilderDockWindow(GetToolWindowName(PreviewWindowName).c_str(), TopRightID);
-        ImGui::DockBuilderDockWindow(GetToolWindowName(DetailsWindowName).c_str(), RightDockID);
+        ImGui::DockBuilderDockWindow(GetToolWindowName(SpriteSheetDetailsWindowName).c_str(), RightDockID);
     }
 }

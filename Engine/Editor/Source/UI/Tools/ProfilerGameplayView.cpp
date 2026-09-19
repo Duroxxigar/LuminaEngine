@@ -487,7 +487,7 @@ namespace Lumina
             const ImVec2 BandMax(Origin.x + (float)Last * (NodeW + ColGap) + NodeW + ColGap * 0.35f, Origin.y + TotalH + Pad * 0.75f);
 
             DL->AddRectFilled(BandMin, BandMax, EditorColors::U32(EditorColors::WithAlpha(StageTint, 0.09f)), 8.0f * Scale);
-            DL->AddRect(BandMin, BandMax, EditorColors::U32(EditorColors::WithAlpha(StageTint, 0.32f)), 8.0f * Scale, 0, 1.0f * Scale);
+            DL->AddRect(BandMin, BandMax, EditorColors::U32(EditorColors::WithAlpha(StageTint, 0.32f)), 8.0f * Scale, 1.0f * Scale, 0);
 
             int32 StageSystems = 0;
             for (int32 C = L; C <= Last; ++C)
@@ -601,7 +601,7 @@ namespace Lumina
             }
 
             DL->AddRectFilled(Min, Max, EditorColors::U32(EditorColors::WithAlpha(EditorColors::FrameBg(), Alpha)), Rounding);
-            DL->AddRect(Min, Max, EditorColors::U32(EditorColors::WithAlpha(BorderColor, Alpha)), Rounding, 0, BorderWidth * Scale);
+            DL->AddRect(Min, Max, EditorColors::U32(EditorColors::WithAlpha(BorderColor, Alpha)), Rounding, BorderWidth * Scale, 0);
 
             // Clip is a safety net only; every string below is measured and ellipsized to fit.
             DL->PushClipRect(Min, Max, true);

@@ -1395,7 +1395,7 @@ namespace Lumina
             const ImU32 Accent = IM_COL32(255, 176, 64, 200);
             // Drawn 1px inside the edge so the full 2px stroke stays within the image.
             DL->AddRect(ImVec2(Min.x + 1.0f, Min.y + 1.0f), ImVec2(Max.x - 1.0f, Max.y - 1.0f),
-                Accent, 0.0f, 0, 2.0f);
+                Accent, 0.0f, 2.0f, 0);
         }
 
         // Faint, translucent hint in the top-right (clear of the toolbar at top-left).

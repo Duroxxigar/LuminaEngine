@@ -4,6 +4,7 @@ using LuminaBuildTool.Configuration;
 using LuminaBuildTool.Core;
 using LuminaBuildTool.Graph;
 using LuminaBuildTool.Toolchain;
+using LuminaBuildTool.Toolchain.Windows;
 
 namespace LuminaBuildTool.ProjectFiles.VisualStudio;
 
@@ -587,10 +588,15 @@ public sealed class VisualStudioGenerator : IProjectFileGenerator
             }
         }
 
+        // The shell picks which IDE opens the solution from these, so a stale version opens one that cannot build it.
+        Version IdeVersion = VisualStudioLocator.TryGetIdeVersion() ?? new Version(18, 0, 0, 0);
+
         StringBuilder Solution = new();
         Solution.AppendLine();
         Solution.AppendLine("Microsoft Visual Studio Solution File, Format Version 12.00");
-        Solution.AppendLine("# Visual Studio Version 17");
+        Solution.AppendLine($"# Visual Studio Version {IdeVersion.Major}");
+        Solution.AppendLine($"VisualStudioVersion = {IdeVersion}");
+        Solution.AppendLine("MinimumVisualStudioVersion = 10.0.40219.1");
 
         foreach ((string FolderPath, Guid FolderGuid) in FolderGuids.OrderBy(P => P.Key, StringComparer.OrdinalIgnoreCase))
         {

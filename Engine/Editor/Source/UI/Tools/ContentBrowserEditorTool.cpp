@@ -347,7 +347,7 @@ namespace Lumina
             };
 
             DrawList.AddConvexPolyFilled(Outline, IM_ARRAYSIZE(Outline), IM_COL32(28, 30, 36, 235));
-            DrawList.AddPolyline(Outline, IM_ARRAYSIZE(Outline), Style.Accent, ImDrawFlags_Closed, Thick);
+            DrawList.AddPolyline(Outline, IM_ARRAYSIZE(Outline), Style.Accent, Thick, ImDrawFlags_Closed);
 
             DrawList.AddLine(ImVec2(PageMax.x - Fold, PageMin.y), ImVec2(PageMax.x - Fold, PageMin.y + Fold), Style.Accent, Thick);
             DrawList.AddLine(ImVec2(PageMax.x - Fold, PageMin.y + Fold), ImVec2(PageMax.x, PageMin.y + Fold), Style.Accent, Thick);
@@ -1166,9 +1166,8 @@ namespace Lumina
                     ImVec2(Pos.x + Size.x + 8, Pos.y + Size.y + 8), 
                     ImGui::ColorConvertFloat4ToU32(ImVec4(0.4f, 0.6f, 0.9f, 0.7f)), 
                     8.0f, 
-                    0, 
-                    2.0f
-                );
+                    2.0f, 
+                    0);
             }
             
             if (Item->IsSelected())
@@ -1178,9 +1177,8 @@ namespace Lumina
                     ImVec2(Pos.x + Size.x + 8, Pos.y + Size.y + 8), 
                     ImGui::ColorConvertFloat4ToU32(ImVec4(0.6f, 0.6f, 0.1f, 0.9f)), 
                     8.0f, 
-                    0, 
-                    2.5f
-                ); 
+                    2.5f, 
+                    0); 
             }
         
             ImGui::PopStyleVar(2);

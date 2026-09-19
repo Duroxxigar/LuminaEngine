@@ -55,6 +55,7 @@ public static class Program
                 "query" => QueryMode.Run(Arguments, Directories),
                 "includes" => AnalyzeMode.RunIncludes(Arguments, Directories),
                 "deps" => AnalyzeMode.RunDependencies(Arguments, Directories),
+                "unityconflicts" => AnalyzeMode.RunUnityConflicts(Arguments, Directories),
                 "setup" => await SetupMode.RunAsync(Arguments, Directories, Cancellation.Token).ConfigureAwait(false),
                 "generateprojectfiles" or "genprojects" => ProjectFilesMode.Run(Arguments, Directories),
                 _ => UnknownMode(Mode),
@@ -104,6 +105,7 @@ public static class Program
               Query [Target]            List targets, modules and plugins, or describe one target
               Includes <Target>         Rank headers by how many translation units include them
               Deps <Target>             Compare declared module dependencies against reached ones
+              UnityConflicts <Target>   Find file-scope names that collide when unity merges two sources
               GenerateProjectFiles      Write IDE project and solution files
 
             Profile options:

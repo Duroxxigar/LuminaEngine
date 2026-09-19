@@ -215,7 +215,7 @@ namespace Lumina
             const ImU32 BorderColor = (FillColor & 0x00FFFFFFu) | 0xFF000000u;
 
             DL->AddRectFilled(TileMin, TileMax, FillColor);
-            DL->AddRect(TileMin, TileMax, BorderColor, 0.0f, 0, 1.0f);
+            DL->AddRect(TileMin, TileMax, BorderColor, 0.0f, 1.0f, 0);
 
             if (bShowLabels && (TileMax.x - TileMin.x) > 28.0f)
             {

@@ -13,7 +13,7 @@ namespace Lumina
         // Shared with whatever step captured it, so the managed handle frees when the tween is destroyed.
         using FTweenCallback = TSharedPtr<FScriptCallbackOwner>;
 
-        FTweenCallback MakeCallback(FScriptCallback Callback)
+        FTweenCallback TweenLibraryMakeCallback(FScriptCallback Callback)
         {
             return MakeShared<FScriptCallbackOwner>(Callback);
         }
@@ -81,7 +81,7 @@ namespace Lumina
             return;
         }
 
-        FTweenCallback Owner = MakeCallback(OnValue);
+        FTweenCallback Owner = TweenLibraryMakeCallback(OnValue);
         Builder.To(From, To, Duration, [Owner](const float& Value)
         {
             Owner->Invoke(Scripting::PackFloatPayload(Value));
@@ -106,7 +106,7 @@ namespace Lumina
             return;
         }
 
-        FTweenCallback Owner = MakeCallback(OnCall);
+        FTweenCallback Owner = TweenLibraryMakeCallback(OnCall);
         Builder.Call([Owner] { Owner->Invoke(0); });
     }
 
@@ -119,7 +119,7 @@ namespace Lumina
             return;
         }
 
-        FTweenCallback Owner = MakeCallback(OnFinished);
+        FTweenCallback Owner = TweenLibraryMakeCallback(OnFinished);
         Builder.OnFinished([Owner] { Owner->Invoke(0); });
     }
 

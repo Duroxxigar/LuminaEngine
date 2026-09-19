@@ -2309,9 +2309,16 @@ namespace Lumina::RHI
             HasDedicatedQueue(EQueueType::Transfer) ? "available" : "unavailable (aliased to graphics)");
     }
 
-    // Every image carries VK_IMAGE_USAGE_HOST_TRANSFER_BIT, so the bit must not cost one its VRAM.
+    // A streaming image carries VK_IMAGE_USAGE_HOST_TRANSFER_BIT, so the bit must not cost one its VRAM.
     static bool ProbeHostImageCopy()
     {
+        // The bit alone hangs some drivers, so there has to be a way out without a rebuild.
+        if (GCommandLine != nullptr && GCommandLine->Has("nohostimagecopy"))
+        {
+            LOG_DISPLAY("Host image copy declined; -nohostimagecopy was passed.");
+            return false;
+        }
+
         VkPhysicalDeviceHostImageCopyProperties HostCopyProps
             { .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_HOST_IMAGE_COPY_PROPERTIES };
         VkPhysicalDeviceProperties2 HostCopyQuery
@@ -4515,7 +4522,8 @@ namespace Lumina::RHI
         Usage |= EnumHasAnyFlags(Desc.Usage, EImageUsageFlags::DepthAttachment) ? VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT : 0;
         Usage |= EnumHasAnyFlags(Desc.Usage, EImageUsageFlags::TransferSrc)     ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0;
         Usage |= EnumHasAnyFlags(Desc.Usage, EImageUsageFlags::TransferDst)     ? VK_IMAGE_USAGE_TRANSFER_DST_BIT : 0;
-        Usage |= GDevice->bHostImageCopy                                       ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT : 0;
+        Usage |= EnumHasAnyFlags(Desc.Usage, EImageUsageFlags::HostTransfer)
+              && GDevice->bHostImageCopy                                       ? VK_IMAGE_USAGE_HOST_TRANSFER_BIT : 0;
 
         const uint32 Depth = Desc.Type == ETextureType::Tex3D ? Math::Max(Desc.Dimension.z, 1u) : 1u;
 
@@ -6182,6 +6190,13 @@ namespace Lumina::RHI
         }
 
         const FTexture& DestTexture = GDevice->Textures[Dest];
+
+        // Copying into an image that never asked for the usage bit is undefined, so refuse rather than risk it.
+        if (!EnumHasAnyFlags(DestTexture.Desc.Usage, EImageUsageFlags::HostTransfer))
+        {
+            LOG_ERROR("RHI: dropped a host texture copy into an image created without EImageUsageFlags::HostTransfer.");
+            return false;
+        }
 
         const uint8 BlockW = RHI::Format::Info(DestTexture.Desc.Format).BlockSize;
         const uint32 RowLengthBlocks = (BlockW > 1) ? Math::AlignUp(RowLength, (uint32)BlockW) : RowLength;

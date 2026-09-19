@@ -17,7 +17,7 @@ namespace Lumina::Scripting
 {
     namespace
     {
-        void WriteValue(FProperty* Property, void* ValuePtr, const FScriptPropertyValue& Value);
+        void ScriptValueBridgeWriteValue(FProperty* Property, void* ValuePtr, const FScriptPropertyValue& Value);
 
         bool NameEqualsIgnoreCase(const FName& A, const FName& B)
         {
@@ -79,12 +79,12 @@ namespace Lumina::Scripting
             {
                 if (const FScriptPropertyEntry* Entry = FindEntry(Values, Property->GetPropertyName()))
                 {
-                    WriteValue(Property, static_cast<uint8*>(Buffer) + Property->Offset, Entry->Value);
+                    ScriptValueBridgeWriteValue(Property, static_cast<uint8*>(Buffer) + Property->Offset, Entry->Value);
                 }
             }
         }
 
-        void WriteValue(FProperty* Property, void* ValuePtr, const FScriptPropertyValue& Value)
+        void ScriptValueBridgeWriteValue(FProperty* Property, void* ValuePtr, const FScriptPropertyValue& Value)
         {
             switch (Property->GetType())
             {
@@ -151,7 +151,7 @@ namespace Lumina::Scripting
                 for (SIZE_T Index = 0; Index < Value.Items.size(); ++Index)
                 {
                     Array->PushBack(ValuePtr, nullptr);
-                    WriteValue(Inner, Array->GetAt(ValuePtr, Index), Value.Items[Index]);
+                    ScriptValueBridgeWriteValue(Inner, Array->GetAt(ValuePtr, Index), Value.Items[Index]);
                 }
                 break;
             }
@@ -169,11 +169,11 @@ namespace Lumina::Scripting
                 for (SIZE_T Index = 0; Index + 1 < Value.Items.size(); Index += 2)
                 {
                     Map->ConstructKey(ValuePtr, KeyScratch);
-                    WriteValue(KeyProp, KeyScratch, Value.Items[Index]);
+                    ScriptValueBridgeWriteValue(KeyProp, KeyScratch, Value.Items[Index]);
                     void* Slot = Map->Insert(ValuePtr, KeyScratch, nullptr);
                     if (Slot != nullptr)
                     {
-                        WriteValue(ValueProp, Slot, Value.Items[Index + 1]);
+                        ScriptValueBridgeWriteValue(ValueProp, Slot, Value.Items[Index + 1]);
                     }
                     Map->DestructKey(ValuePtr, KeyScratch);
                 }

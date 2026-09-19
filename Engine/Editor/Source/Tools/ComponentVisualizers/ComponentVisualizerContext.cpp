@@ -259,7 +259,7 @@ namespace Lumina
 
         if (Outline.w > 0.0f)
         {
-            DrawList->AddPolyline(Screen, Count, ToU32(Outline), ImDrawFlags_Closed, OutlineThickness);
+            DrawList->AddPolyline(Screen, Count, ToU32(Outline), OutlineThickness, ImDrawFlags_Closed);
         }
     }
 
@@ -532,7 +532,7 @@ namespace Lumina
                 const ImVec2 Min(Screen.x - Radius, Screen.y - Radius);
                 const ImVec2 Max(Screen.x + Radius, Screen.y + Radius);
                 DrawList->AddRectFilled(Min, Max, Fill, 1.5f);
-                DrawList->AddRect(Min, Max, Outline, 1.5f, 0, 1.5f);
+                DrawList->AddRect(Min, Max, Outline, 1.5f, 1.5f, 0);
             }
             break;
 
@@ -546,7 +546,7 @@ namespace Lumina
                     ImVec2(Screen.x - Radius, Screen.y),
                 };
                 DrawList->AddConvexPolyFilled(Points, 4, Fill);
-                DrawList->AddPolyline(Points, 4, Outline, ImDrawFlags_Closed, 1.5f);
+                DrawList->AddPolyline(Points, 4, Outline, 1.5f, ImDrawFlags_Closed);
             }
             break;
 

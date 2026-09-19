@@ -178,7 +178,7 @@ namespace Lumina
             {
                 Points[i] = ToScreen(Samples.X[i], Samples.Y[i]);
             }
-            DrawList.AddPolyline(Points, Samples.Count, CurveColor, ImDrawFlags_None, 2.0f);
+            DrawList.AddPolyline(Points, Samples.Count, CurveColor, 2.0f, ImDrawFlags_None);
 
             // Key dots, but only on a tile big enough that they read as points rather than noise.
             if ((PlotR - PlotL) >= 56.0f)

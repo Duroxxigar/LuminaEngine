@@ -205,7 +205,7 @@ namespace Lumina
 
             if (Index == SelectedScope)
             {
-                DL->AddRect(Min, Max, IM_COL32(255, 255, 255, 220), 2.0f, 0, 1.5f);
+                DL->AddRect(Min, Max, IM_COL32(255, 255, 255, 220), 2.0f, 1.5f, 0);
             }
 
             if (Max.x - Min.x > 26.0f)

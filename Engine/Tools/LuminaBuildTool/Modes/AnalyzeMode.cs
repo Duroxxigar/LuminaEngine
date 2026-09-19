@@ -178,6 +178,74 @@ public static class AnalyzeMode
         }
     }
 
+    public static int RunUnityConflicts(CommandLine Arguments, BuildDirectories Directories)
+    {
+        // The scan reads sources directly, so it works before anything has been compiled.
+        AnalysisContext? Context = Prepare(Arguments, Directories, bRequireIncludeGraph: false);
+
+        if (Context is null)
+        {
+            return 1;
+        }
+
+        string? ModuleFilter = Arguments.GetString("Module");
+
+        StringBuilder Report = new();
+        Report.AppendLine($"Unity symbol conflicts for {Context.Target.Name} ({Context.Target.Info.Type}-{Context.Target.Info.Configuration})");
+        Report.AppendLine();
+
+        int Total = 0;
+
+        foreach (BuildModule Module in Context.Target.Modules)
+        {
+            if (!string.IsNullOrEmpty(ModuleFilter)
+                && !string.Equals(Module.Name, ModuleFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Third-party trees are vendored rather than written here, so a rename is not the fix available.
+            if (Module.Rules.bIsThirdParty || !(Module.Rules.bUseUnityBuild ?? Context.Target.Rules.bUseUnityBuild))
+            {
+                continue;
+            }
+
+            List<string> Sources = Module.Sources.CppFiles
+                .Where(Source => !Module.Rules.ExcludeFromUnity.Contains(Source.Name, StringComparer.OrdinalIgnoreCase))
+                .Select(Source => Source.Location)
+                .ToList();
+
+            List<UnitySymbolConflict> Conflicts = UnitySymbolScanner.FindConflicts(Sources);
+
+            if (Conflicts.Count == 0)
+            {
+                continue;
+            }
+
+            Report.AppendLine($"[{Module.Name}] {Conflicts.Count} name(s) defined in more than one source");
+
+            foreach (UnitySymbolConflict Conflict in Conflicts)
+            {
+                Report.AppendLine($"  {Conflict.Name}");
+
+                foreach (string Source in Conflict.Sources)
+                {
+                    Report.AppendLine($"      {PathUtils.MakeRelativeTo(Source, Directories.EngineRoot)}");
+                }
+            }
+
+            Report.AppendLine();
+            Total += Conflicts.Count;
+        }
+
+        Report.AppendLine(Total == 0
+            ? "No conflicts. Every file-scope name is unique within its module."
+            : $"{Total} conflict(s). A blob holding two of these fails to compile, so rename one side or list it in ExcludeFromUnity.");
+
+        Log.Raw(Report.ToString());
+        return 0;
+    }
+
     public static int RunDependencies(CommandLine Arguments, BuildDirectories Directories)
     {
         AnalysisContext? Context = Prepare(Arguments, Directories);
@@ -280,7 +348,7 @@ public static class AnalyzeMode
     }
 
     /// <summary>Resolves the target, loads the include graph and attributes it back to modules.</summary>
-    private static AnalysisContext? Prepare(CommandLine Arguments, BuildDirectories Directories)
+    private static AnalysisContext? Prepare(CommandLine Arguments, BuildDirectories Directories, bool bRequireIncludeGraph = true)
     {
         string? TargetName = Arguments.GetPositional(1);
 
@@ -371,7 +439,7 @@ public static class AnalyzeMode
             }
         }
 
-        if (Recorded == 0)
+        if (Recorded == 0 && bRequireIncludeGraph)
         {
             Log.Error(
                 "No include graph has been recorded for {0} {1}-{2}. Build it once first; the graph is a by-product of compiling.",

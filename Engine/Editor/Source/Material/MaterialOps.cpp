@@ -251,8 +251,8 @@ namespace Lumina::MaterialOps
             DisconnectEverything(Pin);
         }
 
+        // Erasing releases the container's reference, which destroys the node once nothing else holds one.
         Graph->Nodes.erase(Found);
-        Node->ConditionalBeginDestroy();
 
         Graph->ValidateGraph();
 

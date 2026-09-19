@@ -220,9 +220,8 @@ namespace Lumina
                 ImVec2(CenterPos.x + ScaledSize.x + 1, CenterPos.y + ScaledSize.y + 1),
                 IM_COL32(100, 100, 120, 255),
                 0.0f,
-                0,
-                2.0f
-            );
+                2.0f,
+                0);
 
             // Float formats hold LINEAR radiance, so they need the scene display transform to read correctly.
             const bool bIsArrayPreview = (PreviewArray != nullptr);

@@ -276,6 +276,9 @@ namespace Lumina::RHI
         DepthAttachment     = BIT(4),
         TransferSrc         = BIT(5),
         TransferDst         = BIT(6),
+
+        // Costs an image its optimal layout on some drivers, so only a host-copy target asks for it.
+        HostTransfer        = BIT(7),
     };
     
     ENUM_CLASS_FLAGS(EImageUsageFlags);
