@@ -10,6 +10,7 @@
 #include "World/Entity/Components/StaticMeshComponent.h"
 #include "World/Entity/Components/TransformComponent.h"
 #include "World/Entity/Systems/EntitySystem.h"
+#include "World/Entity/Systems/SystemContext.h"
 
 using namespace Lumina;
 
@@ -198,4 +199,42 @@ TEST(EntitySystem, DropScriptedLeavesNativeSystemsAlone)
     EXPECT_NE(FindTestSystem(Systems), nullptr);
 
     EntitySystems::DestroyAll(Systems);
+}
+
+namespace
+{
+    struct FSinkProbeEvent { int Value = 0; };
+
+    struct FSinkProbeListener
+    {
+        int Seen = 0;
+        void OnEvent(const FSinkProbeEvent& Event) { Seen += Event.Value; }
+    };
+}
+
+// Returning the sink by value swallowed the connect, which left the auto-activate camera unbound.
+static_assert(std::is_reference_v<decltype(std::declval<const FSystemContext&>().EventSink<FSinkProbeEvent>())>,
+    "FSystemContext::EventSink must hand back the dispatcher's sink, not a copy of it.");
+
+TEST(EventDispatcher, ConnectingThroughTheSinkReachesTrigger)
+{
+    ECS::FEventDispatcher Dispatcher;
+    FSinkProbeListener Listener;
+
+    Dispatcher.Sink<FSinkProbeEvent>().Connect<&FSinkProbeListener::OnEvent>(&Listener);
+    Dispatcher.Trigger<FSinkProbeEvent>(FSinkProbeEvent{3});
+
+    EXPECT_EQ(Listener.Seen, 3) << "a listener connected to the dispatcher's sink never ran";
+}
+
+TEST(EventDispatcher, ConnectingThroughACopyOfTheSinkIsLost)
+{
+    ECS::FEventDispatcher Dispatcher;
+    FSinkProbeListener Listener;
+
+    ECS::TEventSink<FSinkProbeEvent> Copy = Dispatcher.Sink<FSinkProbeEvent>();
+    Copy.Connect<&FSinkProbeListener::OnEvent>(&Listener);
+    Dispatcher.Trigger<FSinkProbeEvent>(FSinkProbeEvent{3});
+
+    EXPECT_EQ(Listener.Seen, 0) << "the copy must not share the dispatcher's listener list";
 }
