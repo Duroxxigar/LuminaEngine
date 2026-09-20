@@ -2,6 +2,7 @@
 #include "Application.h"
 #include "Assets/AssetManager/AssetManager.h"
 #include "Core/CommandLine/CommandLine.h"
+#include "Core/Delegates/CoreDelegates.h"
 #include "Core/Engine/Engine.h"
 #include "Core/Module/ModuleManager.h"
 #include "Core/Windows/Window.h"
@@ -78,12 +79,7 @@ namespace Lumina
                 }
 
                 MainWindow->ProcessMessages();
-
-                FKeyInput Injected;
-                while (InjectedKeys.TryDequeue(Injected))
-                {
-                    ForwardKey(MainWindow, Injected);
-                }
+                FCoreDelegates::OnInputPumped.Broadcast();
             }
 
             bool bApplicationWantsExit = ShouldExit();

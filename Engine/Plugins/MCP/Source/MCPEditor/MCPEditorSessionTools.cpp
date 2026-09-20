@@ -2,7 +2,9 @@
 
 #include "Agent/AgentGameThread.h"
 #include "Agent/AgentToolRegistry.h"
-#include "Core/Application/Application.h"
+#include "Containers/ConcurrentQueue.h"
+#include "Core/Delegates/CoreDelegates.h"
+#include "Core/Windows/Window.h"
 #include "Core/Windows/WindowInput.h"
 #include "Core/Threading/Thread.h"
 #include "Input/InputViewport.h"
@@ -451,9 +453,24 @@ namespace Lumina::MCP
                 });
         }
 
+        // Drained at the event pump so a key takes a real key's path and frame; anything later is already Held.
+        TConcurrentQueue<FKeyInput> InjectedKeys;
+
+        void ForwardInjectedKeys()
+        {
+            FWindow* Window = Windowing::GetPrimaryWindowHandle();
+            FKeyInput Input;
+            while (InjectedKeys.TryDequeue(Input))
+            {
+                Window->OnKey.Broadcast(Window, Input);
+            }
+        }
+
         // Runs on the transport thread on purpose: a tap needs the release to land a frame after the press.
         void RegisterSendKey(FStringView Owner)
         {
+            (void)FCoreDelegates::OnInputPumped.AddStatic(&ForwardInjectedKeys);
+
             Agent::FToolRegistry::Get().Register<SSendKeyParams, SSendKeyResult>(
                 Owner, "editor.send_key",
                 "Send a key to the editor as if typed, giving the game viewport input focus first. "
@@ -507,7 +524,7 @@ namespace Lumina::MCP
                         Input.bCtrl    = In.bCtrl;
                         Input.bShift   = In.bShift;
                         Input.bAlt     = In.bAlt;
-                        GApp->InjectKey(Input);
+                        InjectedKeys.Enqueue(Input);
                     };
 
                     if (bPress)
