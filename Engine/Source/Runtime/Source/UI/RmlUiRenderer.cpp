@@ -916,7 +916,7 @@ namespace Lumina
                     : FVector4(0.0f, 0.0f, FullW, FullH);
                 DD.TextureID    = ResourceID;
                 DD.SamplerIndex = GRmlUiSamplerIndex;
-                DD.ShaderType   = bStraightAlpha ? UI_SHADER_TEXTURED_STRAIGHT : UI_SHADER_TEXTURED;
+                DD.ShaderType   = bStraightAlpha ? kUIShaderTexturedStraight : kUIShaderTextured;
                 DD.StopOffset   = 0;
                 DD.ShaderParams = FVector4(0.0f);
                 DD.StopCount    = 0;

@@ -150,8 +150,8 @@ namespace Lumina
 
         // Matches RmlUiCommon.slang::FUiDraw, read in-shader through a device address with std430 layout.
         // Matches RmlUiCommon.slang UI_SHADER_*.
-        static constexpr uint32 UI_SHADER_TEXTURED          = 0;
-        static constexpr uint32 UI_SHADER_TEXTURED_STRAIGHT = 4;
+        static constexpr uint32 kUIShaderTextured          = 0;
+        static constexpr uint32 kUIShaderTexturedStraight = 4;
 
         struct FUiDraw
         {

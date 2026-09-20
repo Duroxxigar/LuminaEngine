@@ -129,13 +129,13 @@ float4 FragmentMain(PSInput Input) : SV_Target0
         discard;
     }
 
-    if (Draw.ShaderType != UI_SHADER_TEXTURED && Draw.ShaderType != UI_SHADER_TEXTURED_STRAIGHT)
+    if (Draw.ShaderType != kUIShaderTextured && Draw.ShaderType != kUIShaderTexturedStraight)
     {
         return Input.Colour * SampleColorStops(Draw, GradientCoordinate(Draw, Input.UV)) * Coverage;
     }
 
     float4 Texel = SampleTexture2D(Draw.TextureID, Draw.SamplerIndex, Input.UV);
-    if (Draw.ShaderType == UI_SHADER_TEXTURED_STRAIGHT)
+    if (Draw.ShaderType == kUIShaderTexturedStraight)
     {
         Texel.rgb *= Texel.a;
     }
