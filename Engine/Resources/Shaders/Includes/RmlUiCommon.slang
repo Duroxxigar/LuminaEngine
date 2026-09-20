@@ -12,6 +12,7 @@
 #define UI_SHADER_LINEAR   1u
 #define UI_SHADER_RADIAL   2u
 #define UI_SHADER_CONIC    3u
+#define UI_SHADER_TEXTURED_STRAIGHT 4u // asset texture with straight alpha; premultiplied at sample time
 
 struct FUiDraw
 {
