@@ -1572,8 +1572,7 @@ namespace Lumina
         }
 
         // It needs only the world's net state, so it draws before the editor-only gizmo gate below.
-
-        if (World->IsGameWorld() || bGameViewMode)
+        if (!HasEditorCameraControl() || bGameViewMode)
         {
             return;
         }
