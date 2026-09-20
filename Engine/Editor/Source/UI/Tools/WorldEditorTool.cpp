@@ -1,4 +1,4 @@
-#include <string>
+﻿#include <string>
 #include "Animation/SkeletalMeshLibrary.h"
 #include "World/ECS/Registry.h"
 #include "WorldEditorTool.h"
@@ -1571,7 +1571,7 @@ namespace Lumina
             }
         }
 
-        // Ejected play keeps the overlay: the editor camera owns the view, so a click is a selection.
+        // It needs only the world's net state, so it draws before the editor-only gizmo gate below.
         if (!HasEditorCameraControl() || bGameViewMode)
         {
             return;
