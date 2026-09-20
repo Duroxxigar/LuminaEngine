@@ -305,5 +305,6 @@ namespace Lumina
     {
         // Undo, play control, tabs and observability: what an agent needs to see and steer the editor session.
         void RegisterEditorSessionTools(FStringView Owner);
+        void UnregisterEditorSessionTools();
     }
 }
